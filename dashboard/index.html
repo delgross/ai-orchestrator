@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AI Gateway Dashboard</title>
+</head>
+<body>
+<h1>AI Gateway Dashboard</h1>
+
+<p>Router running at: http://127.0.0.1:5455</p>
+
+<pre>
+curl -X POST http://127.0.0.1:5455/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"llama2","messages":[{"role":"user","content":"Hello"}]}'
+</pre>
+
+</body>
+</html>

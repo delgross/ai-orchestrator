@@ -1,0 +1,4 @@
+router:
+  host: "127.0.0.1"
+  port: 5455
+  uvicorn_reload: true
