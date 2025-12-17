@@ -1,0 +1,25 @@
+version: 1.2.8
+
+# Custom endpoint for your AI orchestrator
+endpoints:
+  custom:
+    - name: "AI Orchestrator"
+      apiKey: "dummy"  # Change if you set ROUTER_AUTH_TOKEN
+      baseURL: "http://host.docker.internal:5455/v1"
+      models:
+        default:
+          - "agent:mcp"           # Your agent with tools/MCP/RAG
+          - "ollama:llama3"       # Direct Ollama models
+          - "ollama:llama3.1"     # Add more as needed
+        fetch: true               # Fetch models from /v1/models endpoint
+      modelDisplayLabel: "Orchestrator"
+      titleConvo: false
+      # Optional: Add other providers if you want
+      # - name: "OpenAI"
+      #   apiKey: "${OPENAI_API_KEY}"
+      #   baseURL: "https://api.openai.com/v1"
+      #   models:
+      #     default:
+      #       - "gpt-4"
+      #       - "gpt-3.5-turbo"
+

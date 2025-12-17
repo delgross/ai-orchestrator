@@ -1,17 +1,25 @@
 # ~/ai/agent_runner/agent_runner.py
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import shlex
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import logging
+from logging.handlers import RotatingFileHandler
 
 import httpx
+try:
+    import websockets  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    websockets = None  # type: ignore
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 
 # ============================================================================
@@ -35,6 +43,10 @@ AGENT_FS_ROOT = os.getenv(
     "AGENT_FS_ROOT",
     os.path.expanduser("~/ai/agent_fs_root"),
 )
+
+# Optional MCP server list: comma-separated entries name=url (e.g., "local=ws://127.0.0.1:7000,remote=wss://mcp.example.com").
+# We treat these as generic HTTP/WS endpoints and use a simple proxy tool.
+MCP_SERVERS_RAW = os.getenv("MCP_SERVERS", "")
 
 # Limits for file and tool behavior.
 MAX_READ_BYTES = int(os.getenv("AGENT_MAX_READ_BYTES", "200_000"))
@@ -76,20 +88,51 @@ Conversation style:
 # LOGGING SETUP
 # ============================================================================
 
+# Configure logging to write to logs directory
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
 # Dedicated logger for the agent-runner.
 logger = logging.getLogger("agent_runner")
 
 if not logger.handlers:
     # Only configure once to avoid duplicate handlers on reload.
-    handler = logging.StreamHandler()
-    handler.setFormatter(
+    # File handler with rotation (10MB max, keep 5 backups)
+    log_file = os.path.join(LOG_DIR, "agent_runner.log")
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding="utf-8"
+    )
+    file_handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s agent_runner %(message)s")
     )
-    logger.addHandler(handler)
+    logger.addHandler(file_handler)
+    
+    # Also log to console (stdout) for development
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s agent_runner %(message)s")
+    )
+    logger.addHandler(console_handler)
 
 # Default log level. You can change this with an env var or here directly.
 logger.setLevel(logging.INFO)
 logger.propagate = False
+
+
+def _log_json_event(event: str, **fields: Any) -> None:
+    """
+    Emit a single-line JSON event for machine parsing, prefixed so it's easy to grep.
+    Payload is minimal and redacted/truncated where appropriate.
+    """
+    try:
+        payload = {"event": event, **fields}
+        logger.info("JSON_EVENT: %s", json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        # Never let logging break the app.
+        logger.debug("failed to log JSON_EVENT for %s", event)
 
 
 # ============================================================================
@@ -97,6 +140,28 @@ logger.propagate = False
 # ============================================================================
 
 app = FastAPI(title="Agent Runner", version="0.3.0")
+
+# Add CORS middleware to allow dashboard to fetch from agent-runner
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (dashboard can be on any host/port)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Shared HTTP client for gateway calls (keeps connections alive).
+_http_client: Optional[httpx.AsyncClient] = None
+
+# MCP server registry: name -> config
+# config keys:
+#   - raw: original URL string from MCP_SERVERS
+#   - scheme: "http" | "ws" | "unix" | "stdio"
+#   - url: base URL (for http/ws)
+#   - token: optional bearer token
+#   - uds_path, http_path: for unix sockets
+#   - cmd: list[str] for stdio commands
+MCP_SERVERS: Dict[str, Dict[str, Any]] = {}
 
 
 @app.on_event("startup")
@@ -115,7 +180,70 @@ async def _on_startup() -> None:
             "agent_model": AGENT_MODEL,
             "fs_root": str(root),
             "max_tool_steps": MAX_TOOL_STEPS,
+            "mcp_servers": list(MCP_SERVERS.keys()) if MCP_SERVERS else [],
         },
+    )
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_S, trust_env=False)
+    _load_mcp_servers()
+
+
+@app.on_event("shutdown")
+async def _on_shutdown() -> None:
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
+
+def _load_mcp_servers() -> None:
+    """
+    Parse MCP_SERVERS env like "local=http://127.0.0.1:7000,remote=https://mcp.example.com".
+    Tokens can be provided via env MCP_TOKEN_<NAME> (uppercased name).
+    """
+    MCP_SERVERS.clear()
+    raw = MCP_SERVERS_RAW.strip()
+    if not raw:
+        return
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry or "=" not in entry:
+            continue
+        name, url = entry.split("=", 1)
+        name = name.strip()
+        url = url.strip()
+        if not name or not url:
+            continue
+        token_env = f"MCP_TOKEN_{name.upper()}"
+        token = os.getenv(token_env)
+        # Determine transport scheme and extras.
+        scheme = "http"
+        cfg: Dict[str, Any] = {"raw": url, "token": token}
+        if url.startswith("ws://") or url.startswith("wss://"):
+            scheme = "ws"
+            cfg["url"] = url
+        elif url.startswith("unix:"):
+            # Format: unix:/path/to/socket|/http-path (path defaults to /mcp)
+            scheme = "unix"
+            payload = url[len("unix:") :]
+            uds_path, http_path = (payload.split("|", 1) + ["/mcp"])[:2] if "|" in payload else (payload, "/mcp")
+            cfg["uds_path"] = uds_path
+            cfg["http_path"] = http_path or "/mcp"
+        elif url.startswith("stdio:"):
+            # Format: stdio:/path/to/cmd --arg
+            scheme = "stdio"
+            cmd_str = url[len("stdio:") :].strip()
+            cfg["cmd"] = shlex.split(cmd_str) if cmd_str else []
+        else:
+            # Default: plain HTTP(S) base URL
+            scheme = "http"
+            cfg["url"] = url.rstrip("/")
+        cfg["scheme"] = scheme
+        MCP_SERVERS[name] = cfg
+    logger.info(
+        "loaded MCP servers",
+        extra={"servers": list(MCP_SERVERS.keys()), "schemes": {k: v.get("scheme") for k, v in MCP_SERVERS.items()}},
     )
 
 
@@ -441,6 +569,167 @@ def tool_move_path(src: str, dest: str, overwrite: bool = False) -> Dict[str, An
     }
 
 
+async def tool_mcp_proxy(server: str, tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Proxy a tool call to a configured MCP server over HTTP using JSON-RPC 2.0.
+    Assumes:
+      - POST {base} with body:
+          {"jsonrpc":"2.0","method":"tools/call",
+           "params":{"name": <tool>,"arguments": {...}},
+           "id": <int>}
+      - Response is standard JSON-RPC with either "result" or "error".
+    """
+    if not MCP_SERVERS:
+        return {"ok": False, "error": "No MCP servers configured"}
+    cfg = MCP_SERVERS.get(server)
+    if not cfg:
+        return {"ok": False, "error": f"Unknown MCP server '{server}'"}
+    scheme = cfg.get("scheme", "http")
+    headers = {"Content-Type": "application/json"}
+    if cfg.get("token"):
+        headers["Authorization"] = f"Bearer {cfg['token']}"
+    # Build JSON-RPC request
+    rpc_body = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": tool,
+            "arguments": arguments,
+        },
+        "id": int(time.time() * 1000),
+    }
+    # HTTP / HTTPS transport
+    if scheme == "http":
+        if _http_client is None:
+            return {"ok": False, "error": "HTTP client not initialized"}
+        url = cfg.get("url")
+        if not url:
+            return {"ok": False, "error": "MCP server missing URL"}
+        try:
+            resp = await _http_client.post(url, json=rpc_body, headers=headers)
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to reach MCP server: {e}"}
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            _log_json_event(
+                "mcp_http_error",
+                server=server,
+                scheme=scheme,
+                status_code=resp.status_code,
+            )
+            return {"ok": False, "status": resp.status_code, "error": detail}
+        try:
+            data = resp.json()
+        except Exception:
+            return {"ok": False, "error": "MCP server returned non-JSON response"}
+
+    # Unix domain socket over HTTP
+    elif scheme == "unix":
+        uds_path = cfg.get("uds_path")
+        http_path = cfg.get("http_path", "/mcp")
+        if not uds_path:
+            return {"ok": False, "error": "MCP unix server missing uds_path"}
+        transport = httpx.AsyncHTTPTransport(uds=uds_path)
+        async with httpx.AsyncClient(transport=transport, timeout=HTTP_TIMEOUT_S) as client:
+            try:
+                resp = await client.post(f"http://mcp{http_path}", json=rpc_body, headers=headers)
+            except Exception as e:
+                _log_json_event("mcp_unix_error", server=server, scheme=scheme, error=str(e))
+                return {"ok": False, "error": f"Failed to reach MCP unix server: {e}"}
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            _log_json_event(
+                "mcp_unix_http_error",
+                server=server,
+                scheme=scheme,
+                status_code=resp.status_code,
+            )
+            return {"ok": False, "status": resp.status_code, "error": detail}
+        try:
+            data = resp.json()
+        except Exception:
+            return {"ok": False, "error": "MCP unix server returned non-JSON response"}
+
+    # WebSocket transport
+    elif scheme == "ws":
+        if websockets is None:
+            return {"ok": False, "error": "websockets library not available for ws transport"}
+        url = cfg.get("url")
+        if not url:
+            return {"ok": False, "error": "MCP ws server missing URL"}
+        # Convert headers dict to list of (name, value) for websockets
+        extra_headers = [(k, v) for k, v in headers.items()]
+        try:
+            async with websockets.connect(url, extra_headers=extra_headers) as ws:  # type: ignore
+                await ws.send(json.dumps(rpc_body))
+                resp_text = await ws.recv()
+        except Exception as e:
+            _log_json_event("mcp_ws_error", server=server, scheme=scheme, error=str(e))
+            return {"ok": False, "error": f"Failed to reach MCP ws server: {e}"}
+        try:
+            data = json.loads(resp_text)
+        except Exception:
+            _log_json_event("mcp_ws_bad_json", server=server, scheme=scheme)
+            return {"ok": False, "error": "MCP ws server returned non-JSON response"}
+
+    # Stdio transport (spawn a process and speak JSON-RPC over stdin/stdout)
+    elif scheme == "stdio":
+        cmd = cfg.get("cmd") or []
+        if not cmd:
+            return {"ok": False, "error": "MCP stdio server missing command"}
+        # Pass token via environment if present.
+        env = os.environ.copy()
+        if cfg.get("token"):
+            env[f"MCP_TOKEN_{server.upper()}"] = cfg["token"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+        except Exception as e:
+            _log_json_event("mcp_stdio_start_error", server=server, scheme=scheme, error=str(e))
+            return {"ok": False, "error": f"Failed to start MCP stdio server: {e}"}
+        try:
+            assert proc.stdin is not None and proc.stdout is not None
+            line = json.dumps(rpc_body) + "\n"
+            proc.stdin.write(line.encode("utf-8"))
+            await proc.stdin.drain()
+            resp_line = await proc.stdout.readline()
+            if not resp_line:
+                stderr = await proc.stderr.read() if proc.stderr else b""
+                _log_json_event("mcp_stdio_no_data", server=server, scheme=scheme)
+                return {"ok": False, "error": f"MCP stdio server returned no data", "stderr": stderr.decode("utf-8", errors="replace")}
+            data = json.loads(resp_line.decode("utf-8", errors="replace"))
+        except Exception as e:
+            _log_json_event("mcp_stdio_io_error", server=server, scheme=scheme, error=str(e))
+            return {"ok": False, "error": f"MCP stdio interaction failed: {e}"}
+        finally:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    else:
+        _log_json_event("mcp_unsupported_scheme", server=server, scheme=scheme)
+        return {"ok": False, "error": f"Unsupported MCP scheme '{scheme}'"}
+
+    # JSON-RPC success or error handling (shared)
+    if isinstance(data, dict) and "error" in data:
+        _log_json_event("mcp_rpc_error", server=server, scheme=scheme)
+        return {"ok": False, "rpc_error": data["error"]}
+    result = data.get("result") if isinstance(data, dict) else None
+    return {"ok": True, "result": result if result is not None else data}
+
+
 # Map tool name -> Python implementation.
 TOOL_IMPLS = {
     "list_dir": tool_list_dir,
@@ -452,6 +741,8 @@ TOOL_IMPLS = {
     "remove_file": tool_remove_file,
     "move_path": tool_move_path,
 }
+if MCP_SERVERS_RAW.strip():
+    TOOL_IMPLS["mcp_proxy"] = tool_mcp_proxy
 
 
 # ============================================================================
@@ -653,6 +944,35 @@ FILE_TOOLS: List[Dict[str, Any]] = [
 # Placeholder for future MCP-based tools. Stays empty for now but is reflected
 # in the root() route so you can see what's wired.
 MCP_TOOLS: List[Dict[str, Any]] = []
+# Add a generic MCP proxy tool if servers are configured.
+if MCP_SERVERS_RAW.strip():
+    MCP_TOOLS.append(
+        {
+            "type": "function",
+            "function": {
+                "name": "mcp_proxy",
+                "description": "Call a remote MCP server tool by name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "server": {
+                            "type": "string",
+                            "description": "MCP server name (from MCP_SERVERS env).",
+                        },
+                        "tool": {
+                            "type": "string",
+                            "description": "Tool name on the MCP server.",
+                        },
+                        "arguments": {
+                            "type": "object",
+                            "description": "Arguments object to pass to the MCP tool.",
+                        },
+                    },
+                    "required": ["server", "tool", "arguments"],
+                },
+            },
+        }
+    )
 
 
 # ============================================================================
@@ -688,39 +1008,48 @@ async def _call_gateway_with_tools(messages: List[Dict[str, Any]]) -> Dict[str, 
         },
     )
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as client:
-        resp = await client.post(url, json=payload)
+    if _http_client is None:
+        # Should not happen after startup, but guard just in case.
+        raise HTTPException(status_code=500, detail="HTTP client not initialized")
+
+    resp = await _http_client.post(url, json=payload)
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
         try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            try:
-                detail = resp.json()
-            except Exception:
-                detail = resp.text
-            logger.error(
-                "gateway error",
-                extra={"status_code": resp.status_code, "error": str(e), "detail": detail},
-            )
-            raise HTTPException(
-                status_code=resp.status_code,
-                detail={"upstream_error": str(e), "body": detail},
-            )
-        data = resp.json()
-        logger.info(
-            "gateway response ok",
-            extra={
-                "model": data.get("model"),
-                "choices": len(data.get("choices", [])),
-            },
+            detail = resp.json()
+        except Exception:
+            detail = resp.text
+        logger.error(
+            "gateway error",
+            extra={"status_code": resp.status_code, "error": str(e)},
         )
-        return data
+        _log_json_event(
+            "gateway_error",
+            status_code=resp.status_code,
+            error=str(e),
+            model=AGENT_MODEL,
+        )
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail={"upstream_error": str(e), "body": detail},
+        )
+    data = resp.json()
+    logger.info(
+        "gateway response ok",
+        extra={
+            "model": data.get("model"),
+            "choices": len(data.get("choices", [])),
+        },
+    )
+    return data
 
 
 # ============================================================================
 # EXECUTE A SINGLE TOOL CALL
 # ============================================================================
 
-def _execute_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+async def _execute_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute a single tool_call from the LLM.
 
@@ -743,13 +1072,7 @@ def _execute_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     name = fn.get("name")
     args_str = fn.get("arguments") or "{}"
 
-    logger.info(
-        "execute tool_call",
-        extra={
-            "tool_name": name,
-            "raw_arguments": args_str,
-        },
-    )
+    logger.info("execute tool_call", extra={"tool_name": name})
 
     if not name or name not in TOOL_IMPLS:
         return {"ok": False, "error": f"Unknown tool '{name}'"}
@@ -763,14 +1086,16 @@ def _execute_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
 
     impl = TOOL_IMPLS[name]
     try:
-        result = impl(**args)
-        logger.info(
-            "tool execution ok",
-            extra={"tool_name": name},
-        )
+        if asyncio.iscoroutinefunction(impl):
+            result = await impl(**args)
+        else:
+            result = impl(**args)
+        logger.info("tool execution ok", extra={"tool_name": name})
+        _log_json_event("tool_ok", tool_name=name)
         return {"ok": True, "result": result}
     except Exception as e:
         logger.exception("tool execution failed", extra={"tool_name": name})
+        _log_json_event("tool_error", tool_name=name, error=str(e))
         return {"ok": False, "error": f"Exception in tool '{name}': {e}"}
 
 
@@ -847,7 +1172,7 @@ async def _agent_loop(user_messages: List[Dict[str, Any]]) -> Dict[str, Any]:
             fn = tc.get("function") or {}
             name = fn.get("name") or "unknown"
 
-            result = _execute_tool_call(tc)
+            result = await _execute_tool_call(tc)
 
             messages.append(
                 {
@@ -886,6 +1211,7 @@ async def root():
         "tools": [t["function"]["name"] for t in FILE_TOOLS],
         "mcp_tools": [t.get("function", {}).get("name") for t in MCP_TOOLS],
         "max_tool_steps": MAX_TOOL_STEPS,
+        "mcp_servers": list(MCP_SERVERS.keys()) if MCP_SERVERS else [],
     }
 
 

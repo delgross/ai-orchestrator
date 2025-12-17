@@ -167,3 +167,148 @@ INFO:     127.0.0.1:50295 - "GET /status HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:50295 - "GET /favicon.ico HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:50463 - "POST /v1/chat/completions HTTP/1.1" 200 OK
 INFO:     127.0.0.1:50477 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50784 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50786 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50797 - "GET /status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58004 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58117 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58117 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58853 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54894 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54897 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54928 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54926 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55115 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55145 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55148 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55143 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55150 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55153 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55143 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55155 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55160 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55143 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55166 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55169 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55164 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55198 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55195 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55211 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55214 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55208 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55216 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55218 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55208 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55221 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55224 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55208 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55232 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55234 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55230 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55243 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55245 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55241 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55262 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55266 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55274 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55272 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55304 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55308 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:55301 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:55372 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55374 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55370 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55628 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55960 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55961 - "POST /v1/chat/completions HTTP/1.1" 502 Bad Gateway
+INFO:     127.0.0.1:55963 - "POST /v1/chat/completions HTTP/1.1" 502 Bad Gateway
+INFO:     127.0.0.1:56042 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56045 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56048 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:56043 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:56102 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56105 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:56100 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:56695 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56699 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:56693 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:57057 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57058 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57148 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57149 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57212 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57406 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57409 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57477 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57479 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57628 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57630 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57713 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57717 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57715 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57789 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57787 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60111 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60114 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60118 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60116 - "POST /v1/chat/completions HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60195 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60199 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60202 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60197 - "POST /v1/chat/completions HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:61505 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61508 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61511 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61506 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61671 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61674 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61676 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61672 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61696 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61699 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61701 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61697 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61722 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61725 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61728 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61723 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61755 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61758 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61761 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61756 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61783 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61786 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61788 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61784 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61852 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61853 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61859 - "POST /admin/reload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61860 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61914 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61915 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61921 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62333 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62395 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62397 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62400 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62754 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62757 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62762 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63067 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63088 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63088 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63184 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63233 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63257 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63267 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63815 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63817 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63813 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63896 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63906 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63893 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64005 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64156 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64222 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64305 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64520 - "GET / HTTP/1.1" 200 OK

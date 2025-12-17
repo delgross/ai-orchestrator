@@ -1,4 +1,10 @@
 providers:
+  # Local Ollama instance (no API key required)
+  ollama:
+    type: ollama
+    base_url: http://127.0.0.1:11434
+    # Note: Ollama doesn't require an API key for local instances
+
   openai:
     type: openai_compat
     base_url: https://api.openai.com/v1

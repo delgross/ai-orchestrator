@@ -4746,3 +4746,177 @@ INFO:     Waiting for application startup.
 2025-12-12 08:05:52,403 INFO gateway startup
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [34888]
+INFO:     Started server process [47008]
+INFO:     Waiting for application startup.
+2025-12-12 08:39:05,042 INFO gateway startup
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [47008]
+INFO:     Started server process [3645]
+INFO:     Waiting for application startup.
+2025-12-12 15:08:37,321 INFO gateway startup
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+2025-12-13 15:53:26,958 INFO gateway agent:mcp dispatch
+2025-12-13 15:55:35,243 INFO gateway agent:mcp dispatch
+2025-12-13 15:55:37,309 ERROR gateway agent-runner non-200
+2025-12-13 15:55:38,826 INFO gateway agent:mcp dispatch
+2025-12-13 15:55:40,825 ERROR gateway agent-runner non-200
+2025-12-13 15:55:44,074 INFO gateway agent:mcp dispatch
+2025-12-13 15:55:45,695 ERROR gateway agent-runner non-200
+2025-12-13 15:55:50,721 INFO gateway agent:mcp dispatch
+2025-12-13 15:55:52,424 ERROR gateway agent-runner non-200
+2025-12-13 15:56:07,849 INFO gateway agent:mcp dispatch
+2025-12-13 15:56:19,191 INFO gateway agent:mcp dispatch
+2025-12-13 15:56:19,905 ERROR gateway agent-runner non-200
+2025-12-13 15:56:21,679 INFO gateway agent:mcp dispatch
+2025-12-13 15:56:22,511 ERROR gateway agent-runner non-200
+2025-12-13 15:56:24,803 INFO gateway agent:mcp dispatch
+2025-12-13 15:56:25,736 ERROR gateway agent-runner non-200
+2025-12-13 15:56:31,182 INFO gateway agent:mcp dispatch
+2025-12-13 15:56:32,018 ERROR gateway agent-runner non-200
+2025-12-13 15:56:45,305 INFO gateway agent:mcp dispatch
+2025-12-13 15:56:46,659 ERROR gateway agent-runner non-200
+2025-12-13 15:57:08,952 INFO gateway agent:mcp dispatch
+2025-12-13 15:57:10,906 ERROR gateway agent-runner non-200
+2025-12-13 15:57:18,175 INFO gateway agent:mcp dispatch
+2025-12-13 15:57:57,287 INFO gateway agent:mcp dispatch
+2025-12-13 15:58:00,747 ERROR gateway agent-runner non-200
+2025-12-13 15:59:34,792 INFO gateway agent:mcp dispatch
+2025-12-13 15:59:36,048 ERROR gateway agent-runner non-200
+2025-12-13 16:14:54,489 INFO gateway agent:mcp dispatch
+2025-12-13 16:14:54,526 ERROR gateway agent-runner HTTP error
+2025-12-13 16:14:54,541 INFO gateway agent:mcp dispatch
+2025-12-13 16:14:54,560 ERROR gateway agent-runner HTTP error
+2025-12-13 16:17:16,658 INFO gateway agent:mcp dispatch
+2025-12-13 16:17:18,309 ERROR gateway agent-runner non-200
+2025-12-13 16:18:44,485 INFO gateway agent:mcp dispatch
+2025-12-13 16:18:45,528 ERROR gateway agent-runner non-200
+2025-12-13 16:35:29,982 INFO gateway agent:mcp dispatch
+2025-12-13 16:35:31,794 ERROR gateway agent-runner non-200
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [3645]
+INFO:     Started server process [70155]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [70155]
+INFO:     Started server process [70367]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [70367]
+INFO:     Started server process [70935]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [71115]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [71477]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [71668]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [71881]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [75822]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [76052]
+INFO:     Waiting for application startup.
+2025-12-13 17:55:15,947 INFO gateway startup
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+2025-12-13 17:55:30,889 INFO gateway agent:mcp dispatch
+2025-12-13 17:55:32,305 ERROR gateway agent-runner non-200
+INFO:     Started server process [80041]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [80490]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [81047]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [81565]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [82096]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [82608]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [82861]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [83339]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [89362]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [90926]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [91557]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [92225]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [92923]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [94011]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [94753]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Started server process [95885]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5455 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [95885]

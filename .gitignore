@@ -19,7 +19,26 @@ agent_runner/agent_runner.env
 # Agent sandbox
 agent_fs_root/
 
+# Logs
+logs/
+*.log
+
 # MacOS noise
 .DS_Store
+
 # Do not track embedded LibreChat repo
 librechat/
+
+# Temporary/backup files
+*.bak
+*.bak.*
+*.ed1
+*.ed2
+
+# IDE/Editor files
+*.code-workspace
+.vscode/
+.idea/
+
+# Lock files (optional - uncomment if you don't want to track)
+# uv.lock

@@ -1,997 +1,908 @@
-# ~/ai/router/router.py
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
-
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from contextlib import asynccontextmanager
 import logging
+from logging.handlers import RotatingFileHandler
 
 import httpx
+import yaml
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from dotenv import load_dotenv
 
-# -----------------------------------------------------------------------------
-# Config
-# -----------------------------------------------------------------------------
+load_dotenv()  # Load environment variables from .env file
+
+VERSION = "0.7.2"
+
+PROVIDERS_YAML = os.getenv("PROVIDERS_YAML", os.path.expanduser("~/ai/providers.yaml"))
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://127.0.0.1:11434").rstrip("/")
-DEFAULT_FALLBACK_MODEL = os.getenv("DEFAULT_FALLBACK_MODEL", "mistral:latest")
 
-PROVIDERS_YAML = os.getenv("PROVIDERS_YAML", "/Users/bee/ai/providers.yaml")
+# Optional RAG backend (treated as a dedicated provider prefix "rag").
+RAG_BASE = os.getenv("RAG_BASE", "http://127.0.0.1:5555").rstrip("/")
+RAG_QUERY_PATH = os.getenv("RAG_QUERY_PATH", "/query")
 
-TAGS_TIMEOUT_S = float(os.getenv("OLLAMA_TAGS_TIMEOUT", "3.0"))
-CHAT_TIMEOUT_S = float(os.getenv("OLLAMA_CHAT_TIMEOUT", "180.0"))
-REMOTE_TIMEOUT_S = float(os.getenv("REMOTE_TIMEOUT", "180.0"))
-REMOTE_MODELS_TIMEOUT_S = float(os.getenv("REMOTE_MODELS_TIMEOUT", "10.0"))
+AGENT_RUNNER_URL = os.getenv("AGENT_RUNNER_URL", "http://127.0.0.1:5460").rstrip("/")
+if AGENT_RUNNER_URL.endswith("/v1/chat/completions"):
+    AGENT_RUNNER_URL = AGENT_RUNNER_URL[: -len("/v1/chat/completions")].rstrip("/")
+elif AGENT_RUNNER_URL.endswith("/v1"):
+    AGENT_RUNNER_URL = AGENT_RUNNER_URL[: -len("/v1")].rstrip("/")
+AGENT_RUNNER_CHAT_PATH = os.getenv("AGENT_RUNNER_CHAT_PATH", "/v1/chat/completions")
 
-MODELS_CACHE_TTL_S = float(os.getenv("MODELS_CACHE_TTL_S", "600.0"))
+MODELS_CACHE_TTL_S = float(os.getenv("MODELS_CACHE_TTL_S", "600"))
+HTTP_TIMEOUT_S = float(os.getenv("HTTP_TIMEOUT_S", "120"))
+MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", "5_000_000"))
+DEFAULT_UPSTREAM_HEADERS = os.getenv("DEFAULT_UPSTREAM_HEADERS", "")
 
-CB_FAIL_THRESHOLD = int(os.getenv("CB_FAIL_THRESHOLD", "3"))
-CB_OPEN_SECS = float(os.getenv("CB_OPEN_SECS", "30.0"))
-
-# Agent-related config
-AGENT_WEB_PROVIDER = os.getenv("AGENT_WEB_PROVIDER", "perplexity")
-AGENT_WEB_MODEL = os.getenv("AGENT_WEB_MODEL", "sonar")
-
-# External agent-runner entrypoint (your agent_runner FastAPI)
-# Note: we actually POST to this URL directly (no extra /v1/chat/completions).
-AGENT_RUNNER_URL = os.getenv(
-    "AGENT_RUNNER_URL",
-    "http://127.0.0.1:5460/v1/chat/completions",
-).rstrip("/")
-
-AGENT_MODEL_IDS = [
-    "agent:web",
-    "agent:mcp",
-]
-
-app = FastAPI(title="AI Gateway", version="0.4.2")
-
-# -----------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------
-logger = logging.getLogger("gateway")
-if not logger.handlers:
-    h = logging.StreamHandler()
-    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s gateway %(message)s"))
-    logger.addHandler(h)
-logger.setLevel(logging.INFO)
-logger.propagate = False
+# Simple LAN protection: optional bearer token and concurrency limit.
+ROUTER_AUTH_TOKEN = os.getenv("ROUTER_AUTH_TOKEN") or ""
+ROUTER_MAX_CONCURRENCY = int(os.getenv("ROUTER_MAX_CONCURRENCY", "0"))
 
 
-@app.on_event("startup")
-async def _on_startup() -> None:
-    logger.info(
-        "startup",
-        extra={
-            "ollama_base": OLLAMA_BASE,
-            "providers_yaml": PROVIDERS_YAML,
-        },
-    )
-
-
-# -----------------------------------------------------------------------------
-# OpenAI-ish request models
-# -----------------------------------------------------------------------------
-class Message(BaseModel):
-    role: str
-    content: str
-
-
-class ChatRequest(BaseModel):
-    model: str
-    messages: List[Message]
-    stream: bool = False
-
-    # optional OpenAI-ish fields (passed through to OpenAI-compat providers)
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    max_tokens: Optional[int] = None
-
-    # extra fields some clients may send (ignored unless provider supports them)
-    stop: Optional[Any] = None
-    presence_penalty: Optional[float] = None
-    frequency_penalty: Optional[float] = None
-
-    # OpenAI tool calling (for remote providers + agent_runner)
-    tools: Optional[List[Dict[str, Any]]] = None
-    tool_choice: Optional[Any] = None
-
-
-# -----------------------------------------------------------------------------
-# Providers
-# -----------------------------------------------------------------------------
 @dataclass
 class Provider:
     name: str
-    type: str
+    ptype: str
     base_url: str
     api_key_env: Optional[str] = None
-    default_headers: Dict[str, str] = field(default_factory=dict)
-    models: List[str] = field(default_factory=list)
+    default_headers: Optional[Dict[str, str]] = None
+    chat_path: str = "/chat/completions"
+    models_path: str = "/models"
 
     def api_key(self) -> Optional[str]:
         if not self.api_key_env:
             return None
-        return os.getenv(self.api_key_env)
+        v = os.getenv(self.api_key_env)
+        return v if v else None
 
 
-def _load_providers() -> Dict[str, Provider]:
-    providers: Dict[str, Provider] = {}
-
-    # Always include local ollama (even if not in YAML)
-    providers["ollama"] = Provider(
-        name="ollama",
-        type="ollama",
-        base_url=OLLAMA_BASE,
-        api_key_env=None,
-    )
-
-    if not PROVIDERS_YAML or not os.path.exists(PROVIDERS_YAML):
-        return providers
-
-    try:
-        import yaml  # type: ignore
-    except Exception as e:
-        raise RuntimeError(
-            f"PROVIDERS_YAML is set to {PROVIDERS_YAML}, but PyYAML is not installed. "
-            f"Install it in your venv: pip install pyyaml. Underlying error: {e}"
+class State:
+    def __init__(self) -> None:
+        self.started_at = time.time()
+        # trust_env=False avoids proxy env vars hijacking localhost calls
+        # Configure connection pooling for better performance
+        # Connection reuse significantly improves performance for multiple requests
+        self.client = httpx.AsyncClient(
+            timeout=HTTP_TIMEOUT_S,
+            trust_env=False,
+            limits=httpx.Limits(
+                max_keepalive_connections=20,  # Reuse connections (faster subsequent requests)
+                max_connections=100,           # Max concurrent connections
+                keepalive_expiry=30.0          # Keep connections alive for 30s
+            )
+            # Note: http2=True can be enabled if providers support it
+            # Some providers may not support HTTP/2, so leaving it disabled for compatibility
         )
-
-    with open(PROVIDERS_YAML, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    root = data.get("providers", {}) if isinstance(data, dict) else {}
-    if not isinstance(root, dict):
-        return providers
-
-    for name, cfg in root.items():
-        if not isinstance(name, str) or not isinstance(cfg, dict):
-            continue
-
-        name = name.strip()
-        if not name:
-            continue
-
-        ptype = str(cfg.get("type", "")).strip()
-        base_url = str(cfg.get("base_url", "")).strip().rstrip("/")
-        if not ptype or not base_url:
-            continue
-
-        api_key_env = cfg.get("api_key_env")
-        if api_key_env is not None:
-            api_key_env = str(api_key_env).strip()
-
-        default_headers = cfg.get("default_headers") or cfg.get("headers") or {}
-        if not isinstance(default_headers, dict):
-            default_headers = {}
-
-        models_cfg = cfg.get("models") or {}
-        models: List[str] = []
-        if isinstance(models_cfg, dict):
-            if isinstance(models_cfg.get("list"), list):
-                models = [str(m) for m in models_cfg["list"] if isinstance(m, (str, int, float))]
-        elif isinstance(models_cfg, list):
-            models = [str(m) for m in models_cfg if isinstance(m, (str, int, float))]
-
-        providers[name] = Provider(
-            name=name,
-            type=ptype,
-            base_url=base_url,
-            api_key_env=api_key_env,
-            default_headers={str(k): str(v) for k, v in default_headers.items()},
-            models=models,
-        )
-
-    return providers
+        self.providers: Dict[str, Provider] = {}
+        self.models_cache: Tuple[float, Dict[str, Any]] = (0.0, {})
+        self.semaphore = asyncio.Semaphore(ROUTER_MAX_CONCURRENCY) if ROUTER_MAX_CONCURRENCY > 0 else None
+        
+        # Statistics tracking
+        self.request_count = 0
+        self.error_count = 0
+        self.total_response_time_ms = 0.0
+        self.request_by_method: Dict[str, int] = {}
+        self.request_by_path: Dict[str, int] = {}
+        self.request_by_status: Dict[int, int] = {}
+        self.provider_requests: Dict[str, int] = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
 
 
-PROVIDERS: Dict[str, Provider] = _load_providers()
+state = State()
+app = FastAPI(title="router", version=VERSION)
 
-# provider -> (expires_at, [models...])
-REMOTE_MODELS_CACHE: Dict[str, Tuple[float, List[str]]] = {}
+# Configure logging to write to logs directory
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
 
-
-def _clear_models_cache() -> None:
-    REMOTE_MODELS_CACHE.clear()
-
-
-def _reload_providers_inplace() -> Dict[str, Provider]:
-    global PROVIDERS
-    PROVIDERS = _load_providers()
-    _clear_models_cache()
-    return PROVIDERS
-
-
-# -----------------------------------------------------------------------------
-# Ollama helpers
-# -----------------------------------------------------------------------------
-async def _get_tags() -> Dict[str, Any]:
-    url = f"{OLLAMA_BASE}/api/tags"
-    async with httpx.AsyncClient(timeout=TAGS_TIMEOUT_S) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        return r.json()
-
-
-async def ollama_running() -> bool:
-    try:
-        await _get_tags()
-        return True
-    except Exception:
-        return False
-
-
-async def list_ollama_models() -> List[str]:
-    payload = await _get_tags()
-    models = payload.get("models", [])
-    if not isinstance(models, list):
-        return []
-    names: List[str] = []
-    for m in models:
-        if isinstance(m, dict) and isinstance(m.get("name"), str):
-            names.append(m["name"])
-    return names
-
-
-def _normalize_ollama_model(requested: str, available: List[str]) -> Tuple[bool, str]:
-    if requested in available:
-        return True, requested
-    if ":" not in requested:
-        cand = f"{requested}:latest"
-        if cand in available:
-            return True, cand
-    return False, requested
-
-
-async def choose_ollama_model(requested: str) -> str:
-    try:
-        available = await list_ollama_models()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to reach Ollama at {OLLAMA_BASE}: {e}")
-
-    ok, actual = _normalize_ollama_model(requested, available)
-    if ok:
-        return actual
-
-    if DEFAULT_FALLBACK_MODEL:
-        ok2, actual2 = _normalize_ollama_model(DEFAULT_FALLBACK_MODEL, available)
-        if ok2:
-            return actual2
-
-    raise HTTPException(
-        status_code=400,
-        detail={
-            "error": f"Model '{requested}' not found, and fallback '{DEFAULT_FALLBACK_MODEL}' is not available.",
-            "suggestion": "Run `ollama list` to view installed models.",
-        },
+logger = logging.getLogger("router")
+if not logger.handlers:
+    # File handler with rotation (10MB max, keep 5 backups)
+    log_file = os.path.join(LOG_DIR, "router.log")
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding="utf-8"
     )
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s router %(message)s")
+    )
+    logger.addHandler(file_handler)
+    
+    # Also log to console (stdout) for development
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s router %(message)s")
+    )
+    logger.addHandler(console_handler)
+
+logger.setLevel(logging.INFO)
+logger.propagate = False
 
 
-async def ollama_chat_nonstream(model: str, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    url = f"{OLLAMA_BASE}/api/chat"
-    payload = {"model": model, "messages": messages, "stream": False}
-    async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_S) as client:
-        r = await client.post(url, json=payload)
-        r.raise_for_status()
-        return r.json()
-
-
-async def ollama_chat_stream_ndjson(model: str, messages: List[Dict[str, str]]):
-    url = f"{OLLAMA_BASE}/api/chat"
-    payload = {"model": model, "messages": messages, "stream": True}
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", url, json=payload, timeout=CHAT_TIMEOUT_S) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                try:
-                    yield json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-
-# -----------------------------------------------------------------------------
-# OpenAI-ish helpers (for Ollama conversion)
-# -----------------------------------------------------------------------------
-def _openai_completion_id() -> str:
-    return f"chatcmpl-{uuid.uuid4().hex}"
-
-
-def _openai_nonstream_response(model: str, content: str, created: int) -> Dict[str, Any]:
-    return {
-        "id": _openai_completion_id(),
-        "object": "chat.completion",
-        "created": created,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+# Request ID middleware - adds unique ID to each request for tracking
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = str(uuid.uuid4())[:8]
+        request.state.request_id = request_id
+        start_time = time.time()
+        
+        # Log incoming request
+        logger.info(
+            f"[{request_id}] {request.method} {request.url.path}",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "client": request.client.host if request.client else "unknown",
             }
-        ],
-    }
+        )
+        
+        try:
+            response = await call_next(request)
+            duration_ms = round((time.time() - start_time) * 1000, 2)
+            
+            # Update statistics
+            state.request_count += 1
+            state.total_response_time_ms += duration_ms
+            state.request_by_method[request.method] = state.request_by_method.get(request.method, 0) + 1
+            state.request_by_path[request.url.path] = state.request_by_path.get(request.url.path, 0) + 1
+            state.request_by_status[response.status_code] = state.request_by_status.get(response.status_code, 0) + 1
+            if response.status_code >= 400:
+                state.error_count += 1
+            
+            # Log response
+            logger.info(
+                f"[{request_id}] {request.method} {request.url.path} -> {response.status_code} ({duration_ms}ms)",
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": response.status_code,
+                    "duration_ms": duration_ms,
+                }
+            )
+            
+            response.headers["X-Request-ID"] = request_id
+            response.headers["X-Response-Time"] = f"{duration_ms}ms"
+            return response
+        except Exception as e:
+            duration_ms = round((time.time() - start_time) * 1000, 2)
+            state.request_count += 1
+            state.error_count += 1
+            state.total_response_time_ms += duration_ms
+            state.request_by_method[request.method] = state.request_by_method.get(request.method, 0) + 1
+            state.request_by_path[request.url.path] = state.request_by_path.get(request.url.path, 0) + 1
+            
+            logger.error(
+                f"[{request_id}] {request.method} {request.url.path} -> ERROR ({duration_ms}ms): {str(e)}",
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error": str(e),
+                    "duration_ms": duration_ms,
+                },
+                exc_info=True
+            )
+            raise
 
 
-def _sse(data_obj: Any) -> str:
-    return f"data: {json.dumps(data_obj, ensure_ascii=False)}\n\n"
+app.add_middleware(RequestIDMiddleware)
 
 
-# -----------------------------------------------------------------------------
-# OpenAI-compat remote provider helpers
-# -----------------------------------------------------------------------------
-def _split_model(model: str) -> Tuple[str, str]:
-    """
-    Returns (provider_name, model_name).
-
-    Rules:
-      - "openrouter:meta-llama/llama-3.1-8b-instruct" -> ("openrouter", "meta-llama/llama-3.1-8b-instruct")
-      - "llama3:8b" -> ("ollama", "llama3:8b")   (default)
-      - "agent:web" / "agent:mcp" -> handled before calling this
-    """
-    if ":" in model:
-        pfx, rest = model.split(":", 1)
-        if pfx in PROVIDERS and pfx != "ollama":
-            return pfx, rest
-    return "ollama", model
+def _log_json_event(event: str, request_id: Optional[str] = None, **fields: Any) -> None:
+    """Emit a JSON_EVENT line for machine parsing."""
+    try:
+        payload = {"event": event, **fields}
+        if request_id:
+            payload["request_id"] = request_id
+        logger.info("JSON_EVENT: %s", json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        logger.debug("failed to log JSON_EVENT for %s", event)
 
 
-def _auth_headers(p: Provider) -> Dict[str, str]:
-    headers = {"Content-Type": "application/json"}
-    headers.update(p.default_headers or {})
-    key = p.api_key()
+def _parse_default_headers(env: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    env = env.strip()
+    if not env:
+        return out
+    for part in env.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        k, v = part.split(":", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def _merge_headers(*dicts: Optional[Dict[str, str]]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for d in dicts:
+        if d:
+            out.update(d)
+    return out
+
+
+def _provider_headers(prov: Provider) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    key = prov.api_key()
     if key:
         headers["Authorization"] = f"Bearer {key}"
+    headers = _merge_headers(_parse_default_headers(DEFAULT_UPSTREAM_HEADERS), prov.default_headers, headers)
     return headers
 
 
-async def _remote_list_models_openai_compat(p: Provider) -> List[str]:
-    now = time.time()
-    cached = REMOTE_MODELS_CACHE.get(p.name)
-    if cached:
-        expires_at, items = cached
-        if now < expires_at:
-            return list(items)
+def _join_url(base: str, path: str) -> str:
+    return base.rstrip("/") + "/" + path.lstrip("/")
 
-    fallback = list(p.models or [])
 
-    if p.api_key_env and not p.api_key():
-        REMOTE_MODELS_CACHE[p.name] = (now + MODELS_CACHE_TTL_S, fallback)
-        return fallback
+def _ensure_messages_list(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    msgs = body.get("messages", [])
+    if not isinstance(msgs, list):
+        raise HTTPException(status_code=400, detail="messages must be a list")
+    out: List[Dict[str, Any]] = []
+    for i, m in enumerate(msgs):
+        if not isinstance(m, dict):
+            raise HTTPException(status_code=400, detail=f"messages[{i}] must be an object")
+        out.append(m)
+    return out
 
-    url = f"{p.base_url}/models"
+
+def _sanitize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # Preserve tool fields, but avoid null content triggering strict validators.
+    out: List[Dict[str, Any]] = []
+    for m in messages:
+        mm = dict(m)
+        if "content" in mm and mm["content"] is None:
+            mm["content"] = ""
+        out.append(mm)
+    return out
+
+
+def _require_auth(request: Request) -> None:
+    """
+    Lightweight bearer-token check. If ROUTER_AUTH_TOKEN is unset, auth is bypassed.
+    """
+    if not ROUTER_AUTH_TOKEN:
+        return
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    token = auth.split(" ", 1)[1].strip()
+    if token != ROUTER_AUTH_TOKEN:
+        raise HTTPException(status_code=403, detail="invalid token")
+
+
+@asynccontextmanager
+async def _noop_async_context():
+    yield
+
+
+def _parse_model(model: Any) -> Tuple[str, str]:
+    if not isinstance(model, str) or not model.strip():
+        raise HTTPException(status_code=400, detail="model must be a non-empty string")
+    s = model.strip()
+    if ":" in s:
+        prefix, rest = s.split(":", 1)
+        return prefix.strip(), rest.strip()
+    return "ollama", s
+
+
+async def _read_json_body(request: Request) -> Dict[str, Any]:
+    b = await request.body()
+    if len(b) > MAX_REQUEST_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="request too large")
     try:
-        async with httpx.AsyncClient(timeout=REMOTE_MODELS_TIMEOUT_S) as client:
-            r = await client.get(url, headers=_auth_headers(p))
-            if r.status_code >= 400:
-                REMOTE_MODELS_CACHE[p.name] = (now + MODELS_CACHE_TTL_S, fallback)
-                return fallback
-            data = r.json()
-            out: List[str] = []
-            items = data.get("data", [])
-            if isinstance(items, list):
-                for it in items:
-                    if isinstance(it, dict) and isinstance(it.get("id"), str):
-                        out.append(it["id"])
-            if not out:
-                out = fallback
-            REMOTE_MODELS_CACHE[p.name] = (now + MODELS_CACHE_TTL_S, out)
-            return out
+        return json.loads(b.decode("utf-8"))
     except Exception:
-        REMOTE_MODELS_CACHE[p.name] = (now + MODELS_CACHE_TTL_S, fallback)
-        return fallback
+        raise HTTPException(status_code=400, detail="invalid JSON")
 
 
-async def _remote_chat_openai_compat_nonstream(p: Provider, model: str, req: ChatRequest) -> Dict[str, Any]:
-    url = f"{p.base_url}/chat/completions"
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
-        "stream": False,
-    }
-    for k in ("temperature", "top_p", "max_tokens", "stop", "presence_penalty", "frequency_penalty"):
-        v = getattr(req, k, None)
-        if v is not None:
-            payload[k] = v
-
-    # forward tools/tool_choice for providers that support OpenAI tools
-    if getattr(req, "tools", None) is not None:
-        payload["tools"] = req.tools
-    if getattr(req, "tool_choice", None) is not None:
-        payload["tool_choice"] = req.tool_choice
-
-    async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_S) as client:
-        r = await client.post(url, headers=_auth_headers(p), json=payload)
+async def _stream_passthrough(method: str, url: str, headers: Dict[str, str], payload: Dict[str, Any]) -> AsyncIterator[bytes]:
+    async with state.client.stream(method, url, headers=headers, json=payload) as r:
         if r.status_code >= 400:
-            try:
-                raise HTTPException(status_code=r.status_code, detail=r.json())
-            except HTTPException:
-                raise
-            except Exception:
-                raise HTTPException(status_code=r.status_code, detail=r.text)
-        return r.json()
+            content = await r.aread()
+            raise HTTPException(status_code=r.status_code, detail=content.decode("utf-8", errors="replace"))
+        async for chunk in r.aiter_bytes():
+            if chunk:
+                yield chunk
 
 
-async def _remote_chat_openai_compat_stream_passthrough(p: Provider, model: str, req: ChatRequest):
-    url = f"{p.base_url}/chat/completions"
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
-        "stream": True,
+def _sse_line(obj: Any) -> bytes:
+    return (f"data: {json.dumps(obj, ensure_ascii=False)}\n\n").encode("utf-8")
+
+
+def _handle_json_response(r: httpx.Response, default_status: int = 200) -> JSONResponse:
+    """Helper to handle JSON or text responses from HTTP requests."""
+    ct = r.headers.get("content-type", "")
+    if ct.startswith("application/json"):
+        return JSONResponse(status_code=r.status_code if r.status_code != 200 else default_status, content=r.json())
+    return JSONResponse(status_code=r.status_code if r.status_code != 200 else default_status, content={"detail": r.text})
+
+
+async def _call_ollama_chat(
+    base_url: str,
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    request_id: str,
+    provider_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """Make a chat request to Ollama and return the parsed response."""
+    url = _join_url(base_url, "/api/chat")
+    ollama_body = {
+        "model": model_id,
+        "messages": [{"role": m.get("role"), "content": m.get("content", "")} for m in messages],
+        "stream": False,  # we wrap streaming ourselves for LibreChat compatibility
     }
-    for k in ("temperature", "top_p", "max_tokens", "stop", "presence_penalty", "frequency_penalty"):
-        v = getattr(req, k, None)
-        if v is not None:
-            payload[k] = v
-
-    # forward tools/tool_choice here as well (for streaming tool-calls)
-    if getattr(req, "tools", None) is not None:
-        payload["tools"] = req.tools
-    if getattr(req, "tool_choice", None) is not None:
-        payload["tool_choice"] = req.tool_choice
-
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", url, headers=_auth_headers(p), json=payload, timeout=REMOTE_TIMEOUT_S) as resp:
-            if resp.status_code >= 400:
-                try:
-                    body = await resp.aread()
-                    raise HTTPException(status_code=resp.status_code, detail=body.decode("utf-8", "ignore"))
-                except HTTPException:
-                    raise
-                except Exception:
-                    raise HTTPException(status_code=resp.status_code, detail="Remote provider error")
-
-            async for chunk in resp.aiter_bytes():
-                if chunk:
-                    yield chunk
-
-
-# -----------------------------------------------------------------------------
-# agent:web wrapper (non-stream for now)
-# -----------------------------------------------------------------------------
-async def _run_agent_web(req: ChatRequest) -> Dict[str, Any]:
-    """
-    Thin wrapper around a remote OpenAI-compatible provider (e.g. Perplexity)
-    that already does web browsing/search.
-    """
-    provider_name = AGENT_WEB_PROVIDER
-    model_name = AGENT_WEB_MODEL
-
-    p = PROVIDERS.get(provider_name)
-    if not p:
-        raise HTTPException(
-            status_code=500,
-            detail=f"agent:web: provider '{provider_name}' not found in PROVIDERS. "
-                   f"Set AGENT_WEB_PROVIDER env or fix providers.yaml."
-        )
-
-    if p.type != "openai_compat":
-        raise HTTPException(
-            status_code=500,
-            detail=f"agent:web: provider '{provider_name}' is not openai_compat."
-        )
-
-    if p.api_key_env and not p.api_key():
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": f"agent:web: missing API key for provider '{provider_name}'.",
-                "suggestion": f"Set {p.api_key_env} in providers.env and restart the gateway.",
-            },
-        )
-
-    if req.stream:
-        raise HTTPException(
-            status_code=400,
-            detail="agent:web does not support stream yet (set stream=false).",
-        )
-
-    logger.info("agent:web dispatch", extra={"provider": provider_name, "model": model_name})
-    return await _remote_chat_openai_compat_nonstream(p, model_name, req)
-
-
-# -----------------------------------------------------------------------------
-# Agent runner (MCP / orchestration entrypoint)
-# -----------------------------------------------------------------------------
-async def _call_agent_runner(req: ChatRequest) -> Dict[str, Any]:
-    """
-    Delegate the whole request to the external agent-runner service.
-
-    The agent-runner is expected to expose a POST /v1/chat/completions endpoint
-    that accepts an OpenAI-style chat payload (including tools) and returns
-    an OpenAI-style response.
-    """
-    # Build a standard OpenAI-ish payload for the agent-runner
-    payload: Dict[str, Any] = {
-        "model": req.model,
-        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
-        "stream": False,
-    }
-
-    for k in ("temperature", "top_p", "max_tokens", "stop", "presence_penalty", "frequency_penalty"):
-        v = getattr(req, k, None)
-        if v is not None:
-            payload[k] = v
-
-    # If a client sends tools/tool_choice directly to agent:mcp,
-    # pass them through to agent-runner.
-    if getattr(req, "tools", None) is not None:
-        payload["tools"] = req.tools
-    if getattr(req, "tool_choice", None) is not None:
-        payload["tool_choice"] = req.tool_choice
-
-    logger.info("agent:mcp dispatch", extra={"agent_runner_url": AGENT_RUNNER_URL})
-
+    r = await state.client.post(url, json=ollama_body, headers={"Content-Type": "application/json"})
+    
+    if r.status_code >= 400:
+        _log_json_event("ollama_error", request_id=request_id, status_code=r.status_code, model=model_id)
+        error_detail = r.text
+        if r.status_code == 404:
+            error_detail = f"Model '{model_id}' not found. Use /v1/models to list available models."
+        elif r.status_code == 503:
+            error_detail = "Ollama service is unavailable. Please check if Ollama is running."
+        
+        error_detail_dict = {
+            "error": "Ollama request failed",
+            "message": error_detail,
+            "model": model_id,
+            "suggestion": "Check that Ollama is running and the model is available."
+        }
+        if provider_name:
+            error_detail_dict["provider"] = provider_name
+        
+        raise HTTPException(status_code=r.status_code, detail=error_detail_dict)
+    
+    # Parse Ollama response
     try:
-        async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_S) as client:
-            resp = await client.post(AGENT_RUNNER_URL, json=payload)
-    except httpx.TimeoutException:
-        logger.error("agent-runner timeout", extra={"url": AGENT_RUNNER_URL})
-        raise HTTPException(status_code=504, detail="Timed out calling agent-runner.")
-    except httpx.HTTPError as e:
-        logger.error("agent-runner HTTP error", extra={"url": AGENT_RUNNER_URL, "error": str(e)})
-        raise HTTPException(status_code=502, detail=f"Error calling agent-runner: {e}")
-
-    if resp.status_code >= 400:
-        try:
-            detail = resp.json()
-        except Exception:
-            detail = resp.text
-        logger.error("agent-runner non-200", extra={"status": resp.status_code, "detail": detail})
-        raise HTTPException(status_code=resp.status_code, detail=detail)
-
-    try:
-        data = resp.json()
+        j = r.json()
     except Exception as e:
-        logger.error("agent-runner invalid JSON", extra={"error": str(e)})
-        raise HTTPException(status_code=502, detail=f"Invalid JSON from agent-runner: {e}")
-
-    return data
-
-
-async def _handle_agent(req: ChatRequest) -> Dict[str, Any]:
-    """
-    Dispatch agent:* models.
-
-    - agent:web -> _run_agent_web
-    - agent:mcp -> _call_agent_runner
-    """
-    try:
-        _, mode = req.model.split(":", 1)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid agent model name")
-
-    mode = mode.strip().lower() or "web"
-
-    if mode == "web":
-        return await _run_agent_web(req)
-
-    if mode == "mcp":
-        return await _call_agent_runner(req)
-
-    raise HTTPException(status_code=400, detail=f"Unknown agent mode '{mode}'")
-
-
-# -----------------------------------------------------------------------------
-# Routes
-# -----------------------------------------------------------------------------
-@app.get("/")
-async def root():
+        _log_json_event("ollama_json_error", request_id=request_id, error=str(e), model=model_id)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "Invalid JSON response from Ollama",
+                "message": str(e),
+                "model": model_id,
+                "suggestion": "Ollama may be returning an error. Check Ollama logs."
+            }
+        )
+    
+    content = ""
+    if isinstance(j, dict) and isinstance(j.get("message"), dict):
+        c = j["message"].get("content")
+        if isinstance(c, str):
+            content = c
+    
+    # Build OpenAI-style response
+    now = int(time.time())
     return {
-        "name": "ai-gateway",
+        "id": f"ollama-{now}",
+        "object": "chat.completion",
+        "created": now,
+        "model": f"{provider_name or 'ollama'}:{model_id}",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+    }
+
+
+async def _sse_from_full_completion(full: Dict[str, Any], model: str) -> AsyncIterator[bytes]:
+    """
+    Convert a full OpenAI-style completion into a minimal OpenAI SSE stream:
+      data: {chat.completion.chunk ...}
+      data: [DONE]
+    This is what LibreChat expects when stream=true.
+    """
+    now = int(time.time())
+    cid = full.get("id") if isinstance(full.get("id"), str) else f"chatcmpl-{now}"
+    content = ""
+
+    try:
+        choices = full.get("choices")
+        if isinstance(choices, list) and choices:
+            msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+            if isinstance(msg, dict):
+                c = msg.get("content")
+                if isinstance(c, str):
+                    content = c
+    except Exception:
+        content = ""
+
+    chunk = {
+        "id": cid,
+        "object": "chat.completion.chunk",
+        "created": now,
+        "model": model,
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+        ],
+    }
+    yield _sse_line(chunk)
+    yield b"data: [DONE]\n\n"
+
+
+async def _call_rag(model: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Minimal RAG stub: POST to RAG_BASE/RAG_QUERY_PATH with {model, messages}.
+    Expects JSON {answer: str, context?: any}. Returns OpenAI-style completion.
+    """
+    url = _join_url(RAG_BASE, RAG_QUERY_PATH)
+    payload = {
+        "model": model,
+        "messages": body.get("messages", []),
+    }
+    r = await state.client.post(url, json=payload, headers={"Content-Type": "application/json"})
+    if r.status_code >= 400:
+        _log_json_event("rag_error", status_code=r.status_code)
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"answer": r.text}
+    content = data.get("answer") if isinstance(data, dict) else ""
+    return {
+        "id": f"rag-{int(time.time())}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": f"rag:{model}",
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+        ],
+        "rag_context": data.get("context") if isinstance(data, dict) else None,
+    }
+
+
+def _load_providers() -> Dict[str, Provider]:
+    """Load providers from YAML with validation."""
+    path = os.path.expanduser(PROVIDERS_YAML)
+    try:
+        raw = yaml.safe_load(open(path, "r", encoding="utf-8")) or {}
+    except FileNotFoundError:
+        logger.warning(f"Providers YAML not found: {path}")
+        return {}
+    except Exception as e:
+        logger.error(f"Failed to parse providers yaml: {e}")
+        raise RuntimeError(f"Failed to parse providers yaml: {e}") from e
+
+    data = raw.get("providers") if isinstance(raw, dict) and "providers" in raw else raw
+    if not isinstance(data, dict):
+        logger.warning("No providers section found in YAML")
+        return {}
+
+    out: Dict[str, Provider] = {}
+    errors: List[str] = []
+    
+    for name, cfg in data.items():
+        if not isinstance(cfg, dict):
+            errors.append(f"Provider '{name}': config must be a dictionary")
+            continue
+            
+        ptype = str(cfg.get("type", "openai_compat"))
+        base_url = str(cfg.get("base_url", "")).rstrip("/")
+        
+        if not base_url:
+            errors.append(f"Provider '{name}': missing or empty base_url")
+            continue
+            
+        # Validate provider type
+        valid_types = ["openai_compat", "ollama"]
+        if ptype not in valid_types:
+            errors.append(f"Provider '{name}': invalid type '{ptype}', must be one of {valid_types}")
+            continue
+        
+        # Validate API key for non-ollama providers
+        if ptype == "openai_compat" and not cfg.get("api_key_env"):
+            logger.warning(f"Provider '{name}': no api_key_env specified (may fail if API key required)")
+        
+        try:
+            out[str(name)] = Provider(
+                name=str(name),
+                ptype=ptype,
+                base_url=base_url,
+                api_key_env=cfg.get("api_key_env"),
+                default_headers=cfg.get("default_headers") if isinstance(cfg.get("default_headers"), dict) else None,
+                chat_path=str(cfg.get("chat_path", "/chat/completions")),
+                models_path=str(cfg.get("models_path", "/models")),
+            )
+            logger.info(f"Loaded provider: {name} ({ptype})")
+        except Exception as e:
+            errors.append(f"Provider '{name}': failed to create - {e}")
+    
+    if errors:
+        logger.warning(f"Provider validation errors: {'; '.join(errors)}")
+    
+    return out
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    state.providers = _load_providers()
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    await state.client.aclose()
+
+
+@app.get("/dashboard")
+async def dashboard() -> FileResponse:
+    """Serve the dashboard HTML page."""
+    dashboard_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard", "index.html")
+    return FileResponse(dashboard_path, media_type="text/html")
+
+
+@app.get("/")
+async def root(request: Request):
+    """Root endpoint: redirect to dashboard for browsers, return JSON for API clients."""
+    accept = request.headers.get("Accept", "")
+    user_agent = request.headers.get("User-Agent", "")
+    # Redirect if HTML is explicitly requested, or if it looks like a browser (has User-Agent but no JSON in Accept)
+    is_browser = "text/html" in accept or (user_agent and "application/json" not in accept and not user_agent.startswith("curl") and not user_agent.startswith("httpie"))
+    if is_browser:
+        return RedirectResponse(url="/dashboard")
+    # API client - return JSON
+    return {
+        "name": "router",
         "ok": True,
+        "version": VERSION,
+        "uptime_s": round(time.time() - state.started_at, 3),
         "ollama_base": OLLAMA_BASE,
-        "providers_loaded": sorted(list(PROVIDERS.keys())),
-        "models_cache_ttl_s": MODELS_CACHE_TTL_S,
         "agent_runner_url": AGENT_RUNNER_URL,
-        "circuit_breaker": {
-            "fail_threshold": CB_FAIL_THRESHOLD,
-            "open_seconds": CB_OPEN_SECS,
-        },
+        "providers_loaded": sorted(list(state.providers.keys())),
+        "providers_yaml": os.path.expanduser(PROVIDERS_YAML),
+        "models_cache_ttl_s": MODELS_CACHE_TTL_S,
+        "auth_enabled": bool(ROUTER_AUTH_TOKEN),
+        "max_concurrency": ROUTER_MAX_CONCURRENCY if ROUTER_MAX_CONCURRENCY > 0 else None,
     }
 
 
 @app.get("/health")
-async def health():
-    ok = await ollama_running()
+async def health(request: Request) -> Dict[str, Any]:
+    """Enhanced health check endpoint with provider status."""
+    # Check Ollama
+    ollama_ok = False
+    ollama_response_time = None
+    try:
+        start = time.time()
+        r = await state.client.get(f"{OLLAMA_BASE}/api/tags", timeout=3.0)
+        ollama_response_time = round((time.time() - start) * 1000, 2)
+        ollama_ok = r.status_code < 400
+    except Exception:
+        ollama_ok = False
+    
+    # Check agent runner
+    agent_ok = False
+    agent_response_time = None
+    try:
+        start = time.time()
+        r = await state.client.get(f"{AGENT_RUNNER_URL}/", timeout=3.0)
+        agent_response_time = round((time.time() - start) * 1000, 2)
+        if r.status_code < 400:
+            data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            agent_ok = data.get("ok", False)
+    except Exception:
+        agent_ok = False
+    
+    # Quick provider connectivity check (non-blocking, timeout quickly)
+    provider_status = {}
+    for name, prov in state.providers.items():
+        if prov.ptype == "ollama":
+            # Ollama already checked above
+            provider_status[name] = {
+                "reachable": ollama_ok, 
+                "type": "ollama",
+                "response_time_ms": ollama_response_time
+            }
+        elif prov.ptype == "openai_compat":
+            # For OpenAI-compat, we can't easily test without making a real request
+            # Just check if base_url is valid format
+            provider_status[name] = {
+                "reachable": None, 
+                "type": "openai_compat", 
+                "base_url": prov.base_url,
+                "has_api_key": bool(prov.api_key())
+            }
+        else:
+            provider_status[name] = {"reachable": None, "type": prov.ptype}
+    
+    # Health is based on router functionality, not provider count
+    # Router can be healthy even with no providers configured
+    overall_ok = ollama_ok and agent_ok
+    
     return {
-        "status": "ok",
-        "ollama_reachable": ok,
-        "ollama_base": OLLAMA_BASE,
-        "time": int(time.time()),
+        "status": "healthy" if overall_ok else "degraded",
+        "ok": overall_ok,
+        "timestamp": int(time.time()),
+        "uptime_s": round(time.time() - state.started_at, 3),
+        "services": {
+            "router": {"ok": True, "version": VERSION},
+            "ollama": {"ok": ollama_ok, "base_url": OLLAMA_BASE, "response_time_ms": ollama_response_time},
+            "agent_runner": {"ok": agent_ok, "url": AGENT_RUNNER_URL, "response_time_ms": agent_response_time},
+        },
+        "providers": {
+            "count": len(state.providers),
+            "loaded": sorted(list(state.providers.keys())),
+            "status": provider_status,
+        },
     }
 
-@app.get("/status", response_class=HTMLResponse)
-async def status_page():
-    """
-    Simple human-readable status page for the gateway.
-    You can open http://127.0.0.1:5455/status in a browser.
-    """
-    ollama_ok = await ollama_running()
-    providers = sorted(list(PROVIDERS.keys()))
-    now_ts = int(time.time())
 
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>AI Gateway Status</title>
-  <style>
-    body {{
-      font-family: -apple-system, system-ui, sans-serif;
-      margin: 2rem;
-      background: #111;
-      color: #eee;
-    }}
-    h1 {{
-      margin-bottom: 0.5rem;
-    }}
-    .section {{
-      margin-top: 1.5rem;
-      padding: 1rem;
-      border-radius: 0.5rem;
-      background: #1d1d1d;
-    }}
-    .ok {{ color: #5fbf5f; }}
-    .bad {{ color: #ff6b6b; }}
-    code {{
-      font-family: Menlo, Monaco, monospace;
-      font-size: 0.9rem;
-    }}
-  </style>
-</head>
-<body>
-  <h1>AI Gateway Status</h1>
-  <div class="section">
-    <p><strong>Version:</strong> 0.4.2</p>
-    <p><strong>Time (epoch):</strong> {now_ts}</p>
-  </div>
-
-  <div class="section">
-    <h2>Ollama</h2>
-    <p><strong>Base URL:</strong> <code>{OLLAMA_BASE}</code></p>
-    <p>Status:
-      <span class="{ 'ok' if ollama_ok else 'bad' }">
-        {"reachable" if ollama_ok else "unreachable"}
-      </span>
-    </p>
-  </div>
-
-  <div class="section">
-    <h2>Providers</h2>
-    <p><strong>providers.yaml:</strong> <code>{PROVIDERS_YAML}</code></p>
-    <p><strong>Loaded providers:</strong></p>
-    <ul>
-      {''.join(f"<li><code>{p}</code></li>" for p in providers)}
-    </ul>
-  </div>
-
-  <div class="section">
-    <h2>Agent Runner</h2>
-    <p><strong>AGENT_RUNNER_URL:</strong> <code>{AGENT_RUNNER_URL}</code></p>
-    <p>Note: this does not probe the agent-runner; it just shows the configured URL.</p>
-  </div>
-
-  <div class="section">
-    <h2>Settings</h2>
-    <p><strong>MODELS_CACHE_TTL_S:</strong> {MODELS_CACHE_TTL_S}</p>
-    <p><strong>Circuit breaker:</strong>
-      fail_threshold={CB_FAIL_THRESHOLD},
-      open_seconds={CB_OPEN_SECS}
-    </p>
-  </div>
-</body>
-</html>"""
-
-    return HTMLResponse(content=html)
+@app.get("/stats")
+async def stats(request: Request) -> Dict[str, Any]:
+    """Get router statistics and metrics."""
+    _require_auth(request)
     
+    uptime_s = time.time() - state.started_at
+    avg_response_time = state.total_response_time_ms / state.request_count if state.request_count > 0 else 0
+    error_rate = (state.error_count / state.request_count * 100) if state.request_count > 0 else 0
+    cache_hit_rate = (state.cache_hits / (state.cache_hits + state.cache_misses) * 100) if (state.cache_hits + state.cache_misses) > 0 else 0
+    
+    # Get connection pool stats
+    pool_stats = {}
+    try:
+        # httpx doesn't expose pool stats directly, but we can infer from limits
+        pool_stats = {
+            "max_connections": state.client._limits.max_connections if hasattr(state.client, "_limits") else 100,
+            "max_keepalive": state.client._limits.max_keepalive_connections if hasattr(state.client, "_limits") else 20,
+        }
+    except Exception:
+        pass
+    
+    # Get cache info
+    ts, cached = state.models_cache
+    cache_age_s = time.time() - ts if ts > 0 else 0
+    cache_valid = cached and cache_age_s < MODELS_CACHE_TTL_S
+    
+    return {
+        "uptime_s": round(uptime_s, 2),
+        "requests": {
+            "total": state.request_count,
+            "errors": state.error_count,
+            "success": state.request_count - state.error_count,
+            "error_rate_percent": round(error_rate, 2),
+            "avg_response_time_ms": round(avg_response_time, 2),
+            "total_response_time_ms": round(state.total_response_time_ms, 2),
+        },
+        "by_method": dict(sorted(state.request_by_method.items())),
+        "by_path": dict(sorted(state.request_by_path.items(), key=lambda x: x[1], reverse=True)[:10]),  # Top 10
+        "by_status": dict(sorted(state.request_by_status.items())),
+        "providers": {
+            "requests": dict(sorted(state.provider_requests.items(), key=lambda x: x[1], reverse=True)),
+            "total_providers": len(state.providers),
+        },
+        "cache": {
+            "hits": state.cache_hits,
+            "misses": state.cache_misses,
+            "hit_rate_percent": round(cache_hit_rate, 2),
+            "models_cache": {
+                "valid": cache_valid,
+                "age_s": round(cache_age_s, 2),
+                "ttl_s": MODELS_CACHE_TTL_S,
+                "model_count": len(cached.get("data", [])) if cached else 0,
+            },
+        },
+        "connection_pool": pool_stats,
+        "concurrency": {
+            "max": ROUTER_MAX_CONCURRENCY if ROUTER_MAX_CONCURRENCY > 0 else None,
+            "current_available": state.semaphore._value if state.semaphore else None,
+        },
+    }
+
+
 @app.post("/admin/reload")
-async def admin_reload():
-    providers = _reload_providers_inplace()
-    return {"ok": True, "providers_loaded": sorted(list(providers.keys()))}
+async def admin_reload(request: Request) -> Dict[str, Any]:
+    _require_auth(request)
+    state.providers = _load_providers()
+    state.models_cache = (0.0, {})
+    return {"ok": True, "providers_loaded": sorted(list(state.providers.keys()))}
+
+
+async def _fetch_openai_models(prov: Provider) -> List[Dict[str, Any]]:
+    url = _join_url(prov.base_url, prov.models_path)
+    r = await state.client.get(url, headers=_provider_headers(prov))
+    if r.status_code >= 400:
+        return []
+    try:
+        j = r.json()
+    except Exception:
+        return []
+    data = j.get("data")
+    if not isinstance(data, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for m in data:
+        if isinstance(m, dict) and isinstance(m.get("id"), str):
+            out.append({"id": f"{prov.name}:{m['id']}", "object": "model", "owned_by": prov.name})
+    return out
+
+
+async def _fetch_ollama_models(base_url: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch models from an Ollama instance. If base_url is None, uses OLLAMA_BASE."""
+    url = _join_url(base_url or OLLAMA_BASE, "/api/tags")
+    try:
+        r = await state.client.get(url, timeout=5.0)
+        if r.status_code >= 400:
+            return []
+        j = r.json()
+        models = j.get("models")
+        if not isinstance(models, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for m in models:
+            if isinstance(m, dict) and isinstance(m.get("name"), str):
+                out.append({"id": f"ollama:{m['name']}", "object": "model", "owned_by": "ollama"})
+        return out
+    except Exception:
+        return []
 
 
 @app.get("/v1/models")
-async def v1_models():
-    data: List[Dict[str, Any]] = []
+async def v1_models(request: Request) -> Dict[str, Any]:
+    _require_auth(request)
+    
+    # Check cache first (outside lock for performance)
+    ts, cached = state.models_cache
+    now = time.time()
+    if cached and (now - ts) < MODELS_CACHE_TTL_S:
+        return cached
 
-    # Ollama models (no prefix)
-    try:
-        ollama_names = await list_ollama_models()
-        data.extend(
-            [
-                {"id": n, "object": "model", "created": 0, "owned_by": "ollama"}
-                for n in ollama_names
-            ]
-        )
-    except Exception:
-        pass
+    # Use semaphore to prevent concurrent cache updates (if concurrency limit is set)
+    # Otherwise, use a simple lock to prevent race conditions
+    sem = state.semaphore
+    lock_ctx = sem if sem else _noop_async_context()
+    
+    async with lock_ctx:
+        # Check cache again after acquiring lock (another request may have updated it)
+        ts, cached = state.models_cache
+        if cached and (now - ts) < MODELS_CACHE_TTL_S:
+            return cached
+        
+        # Track fetched URLs to avoid duplicates
+        fetched_urls = set()
+        tasks = []
+        
+        # Fetch Ollama models (from hardcoded OLLAMA_BASE for backward compatibility)
+        if OLLAMA_BASE not in fetched_urls:
+            fetched_urls.add(OLLAMA_BASE)
+            tasks.append(_fetch_ollama_models())
+        
+        # Also fetch from any Ollama providers in providers.yaml (avoid duplicates)
+        for prov in state.providers.values():
+            if prov.ptype == "ollama":
+                if prov.base_url not in fetched_urls:
+                    fetched_urls.add(prov.base_url)
+                    tasks.append(_fetch_ollama_models(prov.base_url))
+            elif prov.ptype == "openai_compat":
+                tasks.append(_fetch_openai_models(prov))
 
-    # Remote providers (prefixed: provider:model_id)
-    for name, p in PROVIDERS.items():
-        if name == "ollama":
-            continue
-        if p.type != "openai_compat":
-            continue
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        data: List[Dict[str, Any]] = []
+        for r in results:
+            if isinstance(r, list):
+                data.extend(r)
 
-        models = await _remote_list_models_openai_compat(p)
-        for mid in models:
-            data.append(
-                {
-                    "id": f"{name}:{mid}",
-                    "object": "model",
-                    "created": 0,
-                    "owned_by": name,
-                }
-            )
+        # Add agent models
+        data.append({"id": "agent:mcp", "object": "model", "owned_by": "agent_runner"})
 
-    # Agent pseudo-models
-    data.append({"id": "agent:web", "object": "model", "created": 0, "owned_by": "agent"})
-    data.append({"id": "agent:mcp", "object": "model", "created": 0, "owned_by": "agent"})
-
-    return {"object": "list", "data": data}
+        payload = {"object": "list", "data": data}
+        state.models_cache = (now, payload)
+        return payload
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatRequest, request: Request):
-    created = int(time.time())
-
-    # -------------------------------------------------------------------------
-    # Agent models (agent:web, agent:mcp)
-    # -------------------------------------------------------------------------
-    if req.model.startswith("agent:"):
-        # Non-streaming: just delegate and return JSON
-        if not req.stream:
-            result = await _handle_agent(req)
-            return JSONResponse(result)
-
-        # Streaming: run agent non-stream under the hood, then wrap its
-        # final answer in a tiny SSE stream so LibreChat is happy.
-        tmp_req = ChatRequest(
-            model=req.model,
-            messages=req.messages,
-            stream=False,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            max_tokens=req.max_tokens,
-            stop=req.stop,
-            presence_penalty=req.presence_penalty,
-            frequency_penalty=req.frequency_penalty,
+async def chat_completions(request: Request):
+    request_id = getattr(request.state, "request_id", "unknown")
+    _require_auth(request)
+    body = await _read_json_body(request)
+    prefix, model_id = _parse_model(body.get("model"))
+    
+    # Validate model_id is not empty
+    if not model_id or not model_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Model ID cannot be empty",
+                "model": f"{prefix}:{model_id}",
+                "suggestion": "Provide a valid model name after the provider prefix (e.g., 'ollama:llama2')"
+            }
         )
-        result = await _handle_agent(tmp_req)
+    
+    # Request logging is handled by RequestIDMiddleware
 
-        # Extract content from the OpenAI-style response
-        model = result.get("model", req.model)
-        created2 = result.get("created", created)
-        choices = result.get("choices") or []
-        content = ""
-        if choices and isinstance(choices[0], dict):
-            msg = choices[0].get("message") or {}
-            content = (msg or {}).get("content") or ""
+    msgs = _ensure_messages_list(body)
+    body["messages"] = _sanitize_messages(msgs)
 
-        completion_id = result.get("id") or _openai_completion_id()
+    stream = bool(body.get("stream", False))
 
-        async def event_gen():
-            # initial role chunk
-            yield _sse(
-                {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created2,
-                    "model": model,
-                    "choices": [
-                        {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
-                    ],
-                }
-            )
+    # Optional concurrency guard - protects ALL request types
+    sem = state.semaphore
+    lock_ctx = sem if sem else _noop_async_context()
 
-            # full content chunk
-            if content:
-                yield _sse(
-                    {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created2,
-                        "model": model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": content},
-                                "finish_reason": "stop",
-                            }
-                        ],
-                    }
-                )
+    async with lock_ctx:
+        # --- agent routing ---
+        if prefix == "agent":
+            url = _join_url(AGENT_RUNNER_URL, AGENT_RUNNER_CHAT_PATH)
+            if stream:
+                # agent-runner streaming is not guaranteed; wrap into OpenAI SSE
+                b2 = dict(body)
+                b2["stream"] = False
+                r = await state.client.post(url, json=b2, headers={"Content-Type": "application/json"})
+                if r.status_code >= 400:
+                    _log_json_event("agent_runner_error", request_id=request_id, status_code=r.status_code)
+                    return _handle_json_response(r)
+                full = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"choices": [{"message": {"content": r.text}}]}
+                return StreamingResponse(_sse_from_full_completion(full, f"agent:{model_id}"), media_type="text/event-stream")
 
-            # [DONE]
-            yield "data: [DONE]\n\n"
+            r = await state.client.post(url, json=body, headers={"Content-Type": "application/json"})
+            return _handle_json_response(r)
 
-        return StreamingResponse(
-            event_gen(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        # --- RAG routing ---
+        if prefix == "rag":
+            completion = await _call_rag(model_id, body)
+            if stream:
+                return StreamingResponse(_sse_from_full_completion(completion, f"rag:{model_id}"), media_type="text/event-stream")
+            return JSONResponse(content=completion)
 
-    # -------------------------------------------------------------------------
-    # Normal routing: remote providers vs ollama
-    # -------------------------------------------------------------------------
-    provider_name, model_name = _split_model(req.model)
-
-    # Remote OpenAI-compatible providers
-    if provider_name != "ollama":
-        p = PROVIDERS.get(provider_name)
-        if not p:
-            raise HTTPException(status_code=400, detail=f"Unknown provider '{provider_name}'")
-
-        if p.type != "openai_compat":
-            raise HTTPException(status_code=400, detail=f"Provider '{provider_name}' is not openai_compat")
-
-        if p.api_key_env and not p.api_key():
+        # --- provider routing ---
+        prov = state.providers.get(prefix)
+        if not prov:
+            # Fallback: check if it's hardcoded ollama (for backward compatibility)
+            if prefix == "ollama":
+                # Use hardcoded OLLAMA_BASE for backward compatibility
+                full = await _call_ollama_chat(OLLAMA_BASE, model_id, body["messages"], request_id)
+                if stream:
+                    return StreamingResponse(_sse_from_full_completion(full, f"ollama:{model_id}"), media_type="text/event-stream")
+                return JSONResponse(content=full)
+            available = sorted(list(state.providers.keys()))
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Missing API key for provider '{provider_name}'.",
-                    "suggestion": f"Set {p.api_key_env} in providers.env and restart the gateway.",
-                },
-            )
-
-        if not req.stream:
-            return JSONResponse(await _remote_chat_openai_compat_nonstream(p, model_name, req))
-
-        async def passthrough():
-            async for b in _remote_chat_openai_compat_stream_passthrough(p, model_name, req):
-                if await request.is_disconnected():
-                    return
-                yield b
-
-        return StreamingResponse(
-            passthrough(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
-    # -------------------------------------------------------------------------
-    # Ollama path (convert to OpenAI-ish)
-    # -------------------------------------------------------------------------
-    messages = [{"role": m.role, "content": m.content} for m in req.messages]
-    model = await choose_ollama_model(model_name)
-
-    if not req.stream:
-        try:
-            out = await ollama_chat_nonstream(model, messages)
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Timed out waiting for Ollama.")
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
-
-        msg = out.get("message") if isinstance(out, dict) else None
-        content = msg.get("content", "") if isinstance(msg, dict) else ""
-        if not isinstance(content, str):
-            content = ""
-
-        return JSONResponse(_openai_nonstream_response(model=model, content=content, created=created))
-
-    async def event_gen():
-        completion_id = _openai_completion_id()
-
-        # initial role chunk
-        yield _sse(
-            {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-            }
-        )
-
-        try:
-            async for obj in ollama_chat_stream_ndjson(model, messages):
-                if await request.is_disconnected():
-                    return
-
-                if not isinstance(obj, dict):
-                    continue
-
-                done = bool(obj.get("done", False))
-                msg = obj.get("message")
-                delta_text = ""
-                if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-                    delta_text = msg["content"]
-
-                if delta_text:
-                    yield _sse(
-                        {
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {"content": delta_text},
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                    )
-
-                if done:
-                    yield _sse(
-                        {
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {},
-                                    "finish_reason": "stop",
-                                }
-                            ],
-                        }
-                    )
-                    yield "data: [DONE]\n\n"
-                    return
-
-        except httpx.TimeoutException:
-            yield _sse(
-                {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "timeout",
-                        }
-                    ],
+                    "error": f"Unknown provider prefix: '{prefix}'",
+                    "model": f"{prefix}:{model_id}",
+                    "available_providers": available,
+                    "suggestion": f"Use one of: {', '.join(available)}. Format: provider:model-name"
                 }
             )
-            yield "data: [DONE]\n\n"
-            return
-        except Exception as e:
-            yield _sse(
-                {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": f"\n[Gateway error] {e}"},
-                            "finish_reason": "error",
-                        }
-                    ],
+        
+        # Handle Ollama provider type
+        if prov.ptype == "ollama":
+            state.provider_requests[prefix] = state.provider_requests.get(prefix, 0) + 1
+            full = await _call_ollama_chat(prov.base_url, model_id, body["messages"], request_id, prefix)
+            if stream:
+                return StreamingResponse(_sse_from_full_completion(full, f"{prefix}:{model_id}"), media_type="text/event-stream")
+            return JSONResponse(content=full)
+        
+        # Handle OpenAI-compatible providers
+        if prov.ptype != "openai_compat":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Unsupported provider type: '{prov.ptype}'",
+                    "provider": prov.name,
+                    "model": f"{prefix}:{model_id}",
+                    "supported_types": ["openai_compat", "ollama"],
+                    "suggestion": f"Provider '{prov.name}' has unsupported type. Check providers.yaml configuration."
                 }
             )
-            yield "data: [DONE]\n\n"
-            return
 
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+        state.provider_requests[prefix] = state.provider_requests.get(prefix, 0) + 1
+        body["model"] = model_id
+        url = _join_url(prov.base_url, prov.chat_path)
+
+        headers = _provider_headers(prov)
+        headers["Content-Type"] = "application/json"
+
+        if stream:
+            # pass through OpenAI-compatible SSE
+            return StreamingResponse(_stream_passthrough("POST", url, headers, body), media_type="text/event-stream")
+
+        r = await state.client.post(url, headers=headers, json=body)
+        return _handle_json_response(r)
