@@ -18,6 +18,9 @@ AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
 SURREAL_PLIST="$HOME/Library/LaunchAgents/${SURREAL_LABEL}.plist"
 SURREAL_BIN="$HOME/.surrealdb/surreal"
 SURREAL_DATA_DIR="$HOME/ai/agent_data/surreal_db"
+RAG_PORT=5555
+RAG_LABEL="local.ai.rag_server"
+RAG_PLIST="$HOME/Library/LaunchAgents/${RAG_LABEL}.plist"
 
 # Detect launchd domain
 USER_UID="$(id -u)"
