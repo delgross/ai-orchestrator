@@ -9,10 +9,19 @@ logger = logging.getLogger("agent_runner.rag_ingestor")
 
 # Directory to watch for new files to ingest
 INGEST_DIR = Path(os.getenv("RAG_INGEST_DIR", "/Users/bee/Sync/Antigravity/ai/agent_fs_root/ingest")).resolve()
-INGEST_DIR.mkdir(parents=True, exist_ok=True)
+DEFERRED_DIR = INGEST_DIR / "deferred"
+PROCESSED_BASE_DIR = INGEST_DIR / "processed"
+REVIEW_DIR = INGEST_DIR / "review"
+
+for d in [INGEST_DIR, DEFERRED_DIR, PROCESSED_BASE_DIR, REVIEW_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
 
 # Extension whitelist
-SUPPORTED_EXTENSIONS = ('.txt', '.md', '.pdf', '.docx', '.csv', '.png', '.jpg', '.jpeg')
+SUPPORTED_EXTENSIONS = ('.txt', '.md', '.pdf', '.docx', '.csv', '.png', '.jpg', '.jpeg', '.mp3', '.m4a', '.mp4')
+
+# Night Shift Configuration
+NIGHT_SHIFT_START = 1 # 1 AM
+NIGHT_SHIFT_END = 6   # 6 AM
 
 from agent_runner.state import AgentState
 from common.notifications import notify_info, notify_error, notify_health
@@ -35,17 +44,57 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
         logger.warning(f"RAG Ingestor: Circuit Breaker TRIPPED (Connection failed: {e}). Skipping batch.")
         notify_health("RAG Ingestor Offline", f"RAG server connection failed: {e}", source="RAG Ingestor")
         return
+        
     if not INGEST_DIR.exists():
         return
 
-    # Find files to ingest
-    files = [p for p in INGEST_DIR.glob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
-    if not files:
+    # --- NIGHT SHIFT LOGIC ---
+    import datetime
+    current_hour = datetime.datetime.now().hour
+    is_night_shift = NIGHT_SHIFT_START <= current_hour < NIGHT_SHIFT_END
+    
+    # Files to process in this run
+    batch_files = []
+
+    # 1. Check Inbox (Automatic Assessment)
+    inbox_files = [p for p in INGEST_DIR.glob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
+    
+    for f in inbox_files:
+        # Determine strict "Heaviness"
+        is_heavy = False
+        ext = f.suffix.lower()
+        size_mb = f.stat().st_size / (1024 * 1024)
+        
+        if ext in ['.mp3', '.m4a', '.mp4']:
+            is_heavy = True # Audio/Video is always heavy
+        elif size_mb > 10: 
+            is_heavy = True # Large files > 10MB
+        elif ext == '.pdf' and size_mb > 2:
+            # Quick check for large PDFs (proxy for page count without opening)
+            is_heavy = True
+            
+        if is_heavy and not is_night_shift:
+            logger.info(f"NIGHT SHIFT: Deferring heavy file {f.name} ({size_mb:.1f}MB) to off-hours.")
+            try:
+                f.rename(DEFERRED_DIR / f.name)
+            except Exception as e:
+                logger.error(f"Failed to defer file {f.name}: {e}")
+        else:
+            batch_files.append(f)
+
+    # 2. If Night Shift, also pull from Deferred
+    if is_night_shift:
+        deferred_files = [p for p in DEFERRED_DIR.glob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
+        if deferred_files:
+            logger.info(f"NIGHT SHIFT: Processing {len(deferred_files)} deferred items.")
+            batch_files.extend(deferred_files)
+
+    if not batch_files:
         return
 
-    logger.info(f"Found {len(files)} files for RAG ingestion")
+    logger.info(f"Found {len(batch_files)} files for RAG ingestion")
 
-    for file_path in files:
+    for file_path in batch_files:
         try:
             logger.info(f"Ingesting file: {file_path.name}")
             
@@ -113,8 +162,17 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 except Exception as e:
                     logger.error(f"Vision analysis failed for {file_path.name}: {e}")
                     notify_error(f"Ingestion Error: {file_path.name}", f"Image analysis failed: {e}. Moved to review folder.")
-                    file_path.rename(review_dir / file_path.name)
+                    file_path.rename(REVIEW_DIR / file_path.name)
                     continue
+            elif ext in ('.mp3', '.m4a', '.mp4'):
+                # AUDIO TRANSCRIPTION (Whisper via API or Local if tool available)
+                # For now, we'll strip this since we haven't implemented Whisper tool yet
+                # But we can placeholder it or use the Vision API if it supported audio (it doesn't directly here)
+                # Actually, let's treat it as "unsupported" for this specific step but don't crash.
+                # TODO: Implement Whisper
+                logger.warning(f"Audio ingestion not yet fully wired. Moving {file_path.name} to DEFERRED.")
+                file_path.rename(DEFERRED_DIR / file_path.name)
+                continue
             elif ext == '.pdf':
                 try:
                     import pypdf
@@ -185,7 +243,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     if not full_text.strip():
                         logger.warning(f"PDF {file_path.name} is empty after processing. Moving to REVIEW.")
                         notify_error(f"Ingestion Failed: {file_path.name}", "File was empty or unreadable after OCR attempt. Moved to review folder.")
-                        file_path.rename(review_dir / file_path.name)
+                        file_path.rename(REVIEW_DIR / file_path.name)
                         continue
                         
                     content = full_text
@@ -193,12 +251,13 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 except Exception as e:
                     logger.error(f"PDF parse failed for {file_path.name}: {e}")
                     notify_error(f"Ingestion Error: {file_path.name}", f"PDF parsing failed: {e}. Moved to review folder.")
-                    file_path.rename(review_dir / file_path.name)
+                    file_path.rename(REVIEW_DIR / file_path.name)
                     continue
             else: # Handle unsupported extensions
                 logger.warning(f"Unknown file extension: {ext}. Moving to REVIEW.")
+                logger.warning(f"Unknown file extension: {ext}. Moving to REVIEW.")
                 notify_info(f"Unknown File Type: {file_path.name}", f"Extension {ext} not supported. Moved to review folder.")
-                file_path.rename(review_dir / file_path.name)
+                file_path.rename(REVIEW_DIR / file_path.name)
                 continue
 
             # SANITIZATION: Remove surrogates and non-printable chars that crash JSON/UTF-8
@@ -351,9 +410,11 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             except Exception as e:
                 logger.warning(f"Fact extraction failed for {file_path.name}: {e}")
 
-            # 3. Mark as processed (move to processed folder)
-            processed_dir = INGEST_DIR / "processed"
-            processed_dir.mkdir(exist_ok=True)
+            # 4. SMART FILING (The Digital Librarian's Shelf)
+            # Create a specific folder for this domain
+            domain_slug = kb_id.lower().replace(" ", "_")
+            processed_dir = PROCESSED_BASE_DIR / domain_slug
+            processed_dir.mkdir(parents=True, exist_ok=True)
             
             # 3b. CREATE SIDECAR TRANSCRIPTION (The Archive Strategy)
             # We save the text content to a .md file so the user has the 'Truth' on disk
@@ -381,15 +442,18 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 )
                 
                 sidecar_path.write_text(sidecar_content, encoding="utf-8")
-                logger.info(f"SIDECAR: Created transcript at {sidecar_name}")
+                logger.info(f"SIDECAR: Created transcript at {sidecar_path.name}")
                 
             except Exception as e:
                 logger.error(f"Failed to create sidecar for {file_path.name}: {e}")
 
-            # Move original file
-            file_path.rename(processed_dir / file_path.name)
+            # Move original file to the smart folder
+            try:
+                 file_path.rename(processed_dir / file_path.name)
+            except Exception as e:
+                logger.error(f"Failed to move {file_path.name} to processed dir: {e}")
             
-            logger.info(f"Successfully ingested {file_path.name}")
+            logger.info(f"Successfully ingested {file_path.name} into {domain_slug}")
             
             # Be nice to the system - small pause between files even if idle
             import asyncio
@@ -398,9 +462,13 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
         except Exception as e:
             logger.error(f"Error ingesting {file_path.name}: {e}")
             notify_error("Ingestion Failure", f"Failed to ingest {file_path.name}: {e}", source="RAG Ingestor")
+            # If catastrophic failure, move to review so we don't loop forever
+            try:
+                file_path.rename(REVIEW_DIR / file_path.name)
+            except: pass
 
-    if len(files) > 1:
-        notify_info("Knowledge Ingestion Complete", f"Successfully filed {len(files)} new entries into the library.", source="RAG Ingestor")
+    if len(batch_files) > 1:
+        notify_info("Knowledge Ingestion Complete", f"Successfully filed {len(batch_files)} new entries into the library.", source="RAG Ingestor")
 
 
 
