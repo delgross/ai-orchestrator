@@ -159,6 +159,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                             # Merge strict metadata
                             if "objects" in data: filename_meta["objects"] = data["objects"]
                             if "animals" in data: filename_meta["animals"] = data["animals"]
+                            if "plants" in data: filename_meta["plants"] = data["plants"]
                             if "people" in data: filename_meta["people"] = data["people"]
                             if "camera_data" in data: filename_meta["camera_data"] = data["camera_data"]
                             
