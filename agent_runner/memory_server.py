@@ -149,33 +149,39 @@ class MemoryServer:
             fact_text = f"{entity} {relation} {target} {context}"
             embedding = await self.get_embedding(fact_text)
             
-            # Check if fact exists
-            check_res = await self._execute_query(
-                "SELECT id, confidence FROM fact WHERE entity = $e AND relation = $r AND target = $t",
-                {"e": str(entity), "r": str(relation), "t": str(target)}
-            )
+            # Atomic UPSERT with Confidence Logic using SurrealQL logic
+            # If we hear it again, confidence increases (math::max of old and new).
+            sql = """
+            BEGIN TRANSACTION;
+            LET $existing = (SELECT id, confidence FROM fact WHERE entity = $e AND relation = $r AND target = $t LIMIT 1);
+            IF count($existing) > 0 THEN
+                UPDATE fact SET 
+                    context = $c, 
+                    embedding = $emb, 
+                    confidence = math::min(1.0, math::max($existing[0].confidence, $conf)),
+                    timestamp = time::now() 
+                WHERE entity = $e AND relation = $r AND target = $t;
+            ELSE
+                CREATE fact SET 
+                    entity = $e, 
+                    relation = $r, 
+                    target = $t, 
+                    context = $c, 
+                    embedding = $emb, 
+                    confidence = $conf;
+            END;
+            COMMIT TRANSACTION;
+            """
             
-            update_res = None
-            if check_res and len(check_res) > 0:
-                # Update existing: We use a 'Bayesian' update principle. 
-                # If we hear it again, confidence increases slightly, but stays capped at 1.0
-                old_conf = check_res[0].get("confidence", 0.5)
-                # If current input has higher confidence, we adopt it. If lower, we average.
-                new_conf = max(old_conf, confidence) if confidence >= 0.9 else (old_conf + confidence) / 2.0
-                new_conf = min(1.0, new_conf)
-
-                update_res = await self._execute_query(
-                    "UPDATE fact SET context = $c, embedding = $emb, confidence = $conf, timestamp = time::now() WHERE entity = $e AND relation = $r AND target = $t",
-                    {"e": str(entity), "r": str(relation), "t": str(target), "c": context, "emb": embedding, "conf": new_conf}
-                )
-            
-            # If no rows were updated, create new fact
-            if not update_res:
-                await self._execute_query(
-                    "CREATE fact SET entity = $e, relation = $r, target = $t, context = $c, embedding = $emb, confidence = $conf",
-                    {"e": str(entity), "r": str(relation), "t": str(target), "c": context, "emb": embedding, "conf": confidence}
-                )
-            log(f"Stored fact: {entity} {relation} {target} (context: {context})", "DEBUG")
+            await self._execute_query(sql, {
+                "e": str(entity), 
+                "r": str(relation), 
+                "t": str(target), 
+                "c": context, 
+                "emb": embedding, 
+                "conf": confidence
+            })
+            log(f"Stored fact: {entity} {relation} {target} (Confidence: {confidence})", "DEBUG")
             return {"ok": True}
         except Exception as e:
             log(f"Failed to store fact: {e}", "ERROR")
