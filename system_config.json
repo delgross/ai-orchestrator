@@ -1,0 +1,12 @@
+{
+    "maintenance_tasks": {
+        "rag_ingestion": true,
+        "auto_tagger_task": true,
+        "visual_sentry_task": true,
+        "code_janitor_task": true,
+        "memory_optimization": true,
+        "memory_backup": true,
+        "memory_audit": true,
+        "memory_consolidation": true
+    }
+}
