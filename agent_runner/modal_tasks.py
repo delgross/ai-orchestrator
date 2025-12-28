@@ -109,12 +109,10 @@ if has_modal:
         """
         if prompt is None:
             prompt = (
-                "Analyze this image. Return a JSON object with: "
-                "'description' (detailed text), "
-                "'objects' (list of items), "
-                "'animals' (list), "
-                "'people' (list/count), "
-                "'camera_data' (inferred EXIF/type)."
+                "Analyze this image. "
+                "If it contains a PLANT: Identify species, exact variety, and health status (pests/diseases). "
+                "If it contains a MACHINE: Identify model, wear-and-tear, and rust. "
+                "Return JSON keys: 'description', 'objects', 'animals', 'plants' (list of details), 'people', 'camera_data'."
             )
             
         import base64
@@ -124,8 +122,9 @@ if has_modal:
         import json
         return json.dumps({
             "description": "Image analysis running in cloud.",
-            "objects": ["detected_item_1", "detected_item_2"],
+            "objects": ["detected_item_1"],
             "animals": [],
+            "plants": [],
             "people": [],
             "camera_data": "Unknown"
         })
