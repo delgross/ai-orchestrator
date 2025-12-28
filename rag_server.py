@@ -550,6 +550,7 @@ async def graph_snapshot(limit: int = 1000):
         r = await rag_backend.client.post(rag_backend.sql_url, content=sql, auth=rag_backend.auth, headers=rag_backend.headers)
         if r.status_code == 200:
             res = r.json()
+            logger.info(f"RAW DB RESP: {json.dumps(res)}")
             
             # Helper safely get list
             def get_res(idx):
