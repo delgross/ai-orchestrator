@@ -113,10 +113,26 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 except Exception as e:
                     logger.error(f"Vision analysis failed for {file_path.name}: {e}")
                     continue
-            else:
-                # For PDF/DOCX, we'd need more complex parsing
-                logger.warning(f"Complex file format {file_path.suffix} not yet fully supported for OCR. Skipping.")
-                continue
+            elif ext == '.pdf':
+                try:
+                    import pypdf
+                    reader = pypdf.PdfReader(file_path)
+                    text = []
+                    for i, page in enumerate(reader.pages):
+                        page_text = page.extract_text()
+                        if page_text:
+                            text.append(f"[Page {i+1}]\n{page_text}")
+                    
+                    full_text = "\n\n".join(text)
+                    if not full_text.strip():
+                        logger.warning(f"PDF {file_path.name} appears to be scanned/empty (no text layer). Skipping for now.")
+                        continue
+                        
+                    content = full_text
+                    logger.info(f"PDF PARSE: Extracted {len(content)} chars from {file_path.name}")
+                except Exception as e:
+                    logger.warning(f"PDF parse failed for {file_path.name}: {e}")
+                    continue
 
             # 2. THE DIGITAL LIBRARIAN (Autonomous Classification)
             # Before we ingest, we ask the LLM to categorize the file
