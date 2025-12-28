@@ -178,6 +178,26 @@ class RAGServer:
                     logger.info(f"SEARCH QUALITY: Best Score: {min(scores):.4f}, Avg: {avg_score:.4f} ({len(cleaned)} matches kept)")
                 
                 return cleaned
+            
+            # HYBRID FALLBACK: If vector search is empty/poor, try exact keyword matching
+            logger.info(f"HYBRID FALLBACK: Vector search found no high-confidence matches. Trying keyword search for '{query_text}'...")
+            keyword_sql = """
+            USE NS $ns DB $db;
+            SELECT *, 1.0 AS score FROM chunk 
+            WHERE kb_id = $kb AND content CONTAINS $q
+            LIMIT $limit;
+            """
+            params["q"] = query_text
+            
+            r = await self.client.post(self.sql_url, content=prefix + keyword_sql, auth=self.auth, headers=self.headers)
+            if r.status_code == 200:
+                results = r.json()
+                if isinstance(results, list) and len(results) > 0:
+                    data = results[-1].get("result", [])
+                    logger.info(f"HYBRID SUCCESS: Keyword search found {len(data)} literal matches.")
+                    for row in data: row.pop("embedding", None)
+                    return data
+
             return []
         except Exception as e:
             logger.error(f"Search failed: {e}")
@@ -232,6 +252,27 @@ async def query(req: QueryRequest):
 @app.get("/health")
 async def health():
     return {"status": "healthy", "db": SURREAL_URL}
+
+@app.get("/stats")
+async def stats():
+    """Get a summary of the Knowledge Base contents."""
+    await rag_backend.ensure_db()
+    sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB}; SELECT count() AS count, kb_id FROM chunk GROUP BY kb_id;"
+    try:
+        r = await rag_backend.client.post(rag_backend.sql_url, content=sql, auth=rag_backend.auth, headers=rag_backend.headers)
+        if r.status_code == 200:
+            res = r.json()
+            data = res[-1].get("result", [])
+            total = sum(d.get("count", 0) for d in data)
+            return {
+                "total_chunks": total,
+                "knowledge_bases": {d.get("kb_id"): d.get("count") for d in data},
+                "embedding_model": EMBED_MODEL
+            }
+    except Exception as e:
+        logger.error(f"Stats check failed: {e}")
+        
+    return {"error": "Could not connect to knowledge database"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5555)
