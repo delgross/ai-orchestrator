@@ -13,6 +13,7 @@ from agent_runner.tasks import internet_check_task, stdio_process_health_monitor
 from agent_runner.background_tasks import get_task_manager, TaskPriority
 from agent_runner.health_monitor import initialize_health_monitor, health_check_task
 from agent_runner.memory_tasks import memory_consolidation_task, memory_backup_task, optimize_memory_task, memory_audit_task
+from agent_runner.rag_ingestor import rag_ingestion_task
 from agent_runner.dashboard_tracker import get_dashboard_tracker, DashboardErrorType
 from common.observability import ComponentType, get_observability
 from common.observability_middleware import ObservabilityMiddleware
@@ -144,6 +145,15 @@ async def on_startup():
         func=lambda: memory_audit_task(state),
         interval=1800, # Run every 30 minutes
         description="Reflective fact checking and confidence updates",
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
+
+    task_manager.register(
+        name="rag_ingestion",
+        func=lambda: rag_ingestion_task("http://127.0.0.1:5555", state.http_client),
+        interval=300, # Check every 5 minutes
+        description="Auto-ingestion of files into RAG server",
         priority=TaskPriority.LOW,
         idle_only=True
     )
