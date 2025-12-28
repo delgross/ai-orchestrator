@@ -42,6 +42,7 @@ class AgentEngine:
             "query_static_resources": fs_tools.tool_query_static_resources,
             "mcp_proxy": mcp_tools.tool_mcp_proxy,
             "knowledge_search": self.tool_knowledge_search,
+            "search": self.tool_unified_search,
         }
         return impls
 
@@ -134,6 +135,20 @@ class AgentEngine:
                         "properties": {
                             "query": {"type": "string", "description": "The specific question or topic to search for."},
                             "kb_id": {"type": "string", "description": "The specific knowledge base to search (default 'default'). Use 'farm-noc' for equipment/infrastructure data."}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search",
+                    "description": "The ultimate search tool. It automatically checks your short-term facts (SurrealDB) AND your deep-knowledge bases (RAG). Use this first for any question about your project, farm, or past conversations.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The question or topic to search for."}
                         },
                         "required": ["query"]
                     }
@@ -534,7 +549,7 @@ class AgentEngine:
                             "\n### UPLOADED FILES & KNOWLEDGE BASES (Deep Context):\n"
                             "The following files were uploaded and are ready for deep processing.\n"
                             "1. TO READ RAW TEXT: Use 'read_text(path=\"uploads/{ID}_{FILENAME}\")'.\n"
-                            "2. TO SEARCH DEEP MEANING (RAG): Use 'knowledge_search(query=\"...\", kb_id=\"farm-noc\")'.\n"
+                            "2. TO SEARCH DEEP MEANING (RAG): Use 'search(query=\"...\")'. This checks facts AND files simultaneously.\n"
                             "\nRecent Uploads:\n"
                             + "\n".join(file_summaries)
                         )
@@ -677,6 +692,41 @@ class AgentEngine:
                     return {"ok": False, "error": f"RAG server returned {r.status_code}"}
         except Exception as e:
             return {"ok": False, "error": f"RAG connection failed: {str(e)}"}
+
+    async def tool_unified_search(self, state: AgentState, query: str) -> Dict[str, Any]:
+        """Check both Facts and RAG in one go."""
+        # 1. Start both searches in parallel
+        from agent_runner.tools.mcp import tool_mcp_proxy
+        
+        # We call the memory-server for facts
+        fact_task = asyncio.create_task(tool_mcp_proxy(state, "project-memory", "semantic_search", {"query": query}))
+        rag_task = asyncio.create_task(self.tool_knowledge_search(state, query))
+        
+        results = await asyncio.gather(fact_task, rag_task, return_exceptions=True)
+        
+        fact_res = results[0] if not isinstance(results[0], Exception) else {"ok": False}
+        rag_res = results[1] if not isinstance(results[1], Exception) else {"ok": False}
+        
+        combined_context = ""
+        
+        if fact_res.get("ok"):
+            facts = fact_res.get("result", {}).get("facts", [])
+            if facts:
+                combined_context += "### RELEVANT FACTS FOUND:\n"
+                for f in facts[:5]:
+                    combined_context += f"- {f.get('entity')} {f.get('relation')} {f.get('target')}\n"
+                combined_context += "\n"
+        
+        if rag_res.get("ok"):
+            rag_context = rag_res.get("context_found")
+            if rag_context:
+                combined_context += "### DEEP KNOWLEDGE FOUND:\n"
+                combined_context += rag_context
+                
+        if not combined_context:
+            return {"ok": True, "message": "No relevant info found in facts or documents."}
+            
+        return {"ok": True, "search_results": combined_context}
 
     async def _handle_fallback(self, messages, active_tools, worker_draft):
         """Centralized fallback logic when primary/finalizer models fail."""
