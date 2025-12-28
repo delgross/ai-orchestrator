@@ -611,7 +611,7 @@ class MemoryServer:
         if not self.initialized: return {"ok": False, "error": "DB not connected"}
         try:
             # Delete any mcp_intel record where name is NOT in the active_servers list
-            sql = "DELETE mcp_intel WHERE name NOT INSIDE $active_servers"
+            sql = "DELETE mcp_intel WHERE name NOT IN $active_servers"
             res = await self._execute_query(sql, {"active_servers": active_servers})
             if res is None:
                 return {"ok": False, "error": "Query execution failed"}
