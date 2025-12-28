@@ -112,6 +112,8 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     logger.info(f"MULTIMODAL SUCCESS: Transcribed {len(content)} chars from {file_path.name}")
                 except Exception as e:
                     logger.error(f"Vision analysis failed for {file_path.name}: {e}")
+                    notify_error(f"Ingestion Error: {file_path.name}", f"Image analysis failed: {e}. Moved to review folder.")
+                    file_path.rename(review_dir / file_path.name)
                     continue
             elif ext == '.pdf':
                 try:
@@ -159,20 +161,31 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                                 if v_res.status_code == 200:
                                     desc = v_res.json()["choices"][0]["message"]["content"]
                                     ocr_text.append(f"[Page {page_num} - VISION OCR]\n{desc}")
+                                else:
+                                    logger.error(f"OCR HTTP Error {v_res.status_code}: {v_res.text}")
                             except Exception as ve:
                                 logger.error(f"OCR Failed for page {page_num}: {ve}")
                         
                         full_text += "\n\n".join(ocr_text)
                         
                     if not full_text.strip():
-                        logger.warning(f"PDF {file_path.name} is empty after OCR attempt. Skipping.")
+                        logger.warning(f"PDF {file_path.name} is empty after processing. Moving to REVIEW.")
+                        notify_error(f"Ingestion Failed: {file_path.name}", "File was empty or unreadable after OCR attempt. Moved to review folder.")
+                        file_path.rename(review_dir / file_path.name)
                         continue
                         
                     content = full_text
                     logger.info(f"PDF PARSE: Extracted {len(content)} chars from {file_path.name} (Text+OCR)")
                 except Exception as e:
-                    logger.warning(f"PDF parse failed for {file_path.name}: {e}")
+                    logger.error(f"PDF parse failed for {file_path.name}: {e}")
+                    notify_error(f"Ingestion Error: {file_path.name}", f"PDF parsing failed: {e}. Moved to review folder.")
+                    file_path.rename(review_dir / file_path.name)
                     continue
+            else: # Handle unsupported extensions
+                logger.warning(f"Unknown file extension: {ext}. Moving to REVIEW.")
+                notify_info(f"Unknown File Type: {file_path.name}", f"Extension {ext} not supported. Moved to review folder.")
+                file_path.rename(review_dir / file_path.name)
+                continue
 
             # SANITIZATION: Remove surrogates and non-printable chars that crash JSON/UTF-8
             if content:
