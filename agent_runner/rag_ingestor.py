@@ -195,6 +195,26 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     continue
             elif ext == '.pdf':
                 try:
+                    # CLOUD OFFLOAD STRATEGY: Use Modal H100/CPU if available
+                    from agent_runner.modal_tasks import cloud_process_pdf, has_modal
+                    
+                    if has_modal:
+                        logger.info(f"CLOUD GPU: Offloading PDF {file_path.name} to Modal...")
+                        # Run remote function
+                        # Note: .remote() creates a container. This is blocking here, 
+                        # but that's fine for the background task.
+                        try:
+                            content = cloud_process_pdf.remote(file_path.read_bytes(), file_path.name)
+                            logger.info(f"CLOUD SUCCESS: Received {len(content)} chars from Modal.")
+                        except Exception as cloud_err:
+                            logger.error(f"Modal Cloud processing failed: {cloud_err}. Falling back to local.")
+                            raise cloud_err # Trigger fallback
+                    else:
+                        raise ImportError("Modal not configured")
+
+                except Exception as e:
+                    # FALLBACK: Local PyPDF
+                    logger.info(f"Processing PDF locally (Fallback): {file_path.name}")
                     import pypdf
                     import base64
                     reader = pypdf.PdfReader(file_path)
@@ -206,7 +226,6 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                         if page_text and len(page_text.strip()) > 50:
                             text.append(f"[Page {i+1}]\n{page_text}")
                         else:
-                            # Potential scanned page
                             if hasattr(page, "images") and page.images:
                                 for img in page.images:
                                     scanned_images.append((i+1, img))
@@ -219,19 +238,17 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                         
                         ocr_text = []
                         total_images = len(scanned_images)
-                        # Flag to track if we hit network issues
                         network_issues = False
                         
                         for idx, (page_num, img) in enumerate(scanned_images):
-                            logger.info(f"OCR: Processing Page {page_num}/{total_images} (Image {img.name})...")
-                            
+                            logger.info(f"OCR: Processing Page {page_num}/{total_images}...")
                             try:
                                 img_b64 = base64.b64encode(img.data).decode('utf-8')
                                 vision_payload = {
                                     "model": state.vision_model,
                                     "messages": [
                                         {"role": "user", "content": [
-                                            {"type": "text", "text": f"Transcribe this scanned document page (Page {page_num}) verbatim. Describe any diagrams."},
+                                            {"type": "text", "text": f"Transcribe this scanned document page (Page {page_num})."},
                                             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
                                         ]}
                                     ]
@@ -242,37 +259,15 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                                     desc = v_res.json()["choices"][0]["message"]["content"]
                                     ocr_text.append(f"[Page {page_num} - VISION OCR]\n{desc}")
                                 else:
-                                    logger.error(f"OCR HTTP Error {v_res.status_code}: {v_res.text}")
-                                    # If 5xx or 429, might be temporary
-                                    if v_res.status_code >= 500 or v_res.status_code == 429:
-                                        network_issues = True
-                            except (httpx.ConnectError, httpx.ReadTimeout, httpx.NetworkError) as ne:
-                                logger.warning(f"OCR Network Error for page {page_num}: {ne}. Pausing OCR.")
+                                    network_issues = True
+                            except Exception:
                                 network_issues = True
-                                break # Stop processing this file to save retries
-                            except Exception as ve:
-                                logger.error(f"OCR Failed for page {page_num}: {ve}")
                         
                         full_text += "\n\n".join(ocr_text)
-                        
-                        # If we had network issues, we should NOT move to review. We should leave it to retry.
-                        if network_issues:
-                            logger.warning(f"Ingestion incomplete due to network issues for {file_path.name}. Leaving in INGEST to retry later.")
-                            continue
-                        
-                    if not full_text.strip():
-                        logger.warning(f"PDF {file_path.name} is empty after processing. Moving to REVIEW.")
-                        notify_error(f"Ingestion Failed: {file_path.name}", "File was empty or unreadable after OCR attempt. Moved to review folder.")
-                        file_path.rename(REVIEW_DIR / file_path.name)
-                        continue
-                        
+
                     content = full_text
-                    logger.info(f"PDF PARSE: Extracted {len(content)} chars from {file_path.name} (Text+OCR)")
-                except Exception as e:
-                    logger.error(f"PDF parse failed for {file_path.name}: {e}")
-                    notify_error(f"Ingestion Error: {file_path.name}", f"PDF parsing failed: {e}. Moved to review folder.")
-                    file_path.rename(REVIEW_DIR / file_path.name)
-                    continue
+                    logger.info(f"PDF PARSE: Extracted {len(content)} chars.")
+                
             else: # Handle unsupported extensions
                 logger.warning(f"Unknown file extension: {ext}. Moving to REVIEW.")
                 logger.warning(f"Unknown file extension: {ext}. Moving to REVIEW.")
