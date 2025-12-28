@@ -9,10 +9,15 @@ cd "$ROOT_DIR"
 
 ROUTER_PORT=5455
 AGENT_PORT=5460
+SURREAL_PORT=8000
 ROUTER_LABEL="local.ai.router"
 AGENT_LABEL="local.ai.agent_runner"
+SURREAL_LABEL="local.ai.surrealdb"
 ROUTER_PLIST="$HOME/Library/LaunchAgents/${ROUTER_LABEL}.plist"
 AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
+SURREAL_PLIST="$HOME/Library/LaunchAgents/${SURREAL_LABEL}.plist"
+SURREAL_BIN="$HOME/.surrealdb/surreal"
+SURREAL_DATA_DIR="$HOME/ai/agent_data/surreal_db"
 
 # Detect launchd domain
 USER_UID="$(id -u)"
@@ -98,6 +103,29 @@ check_agent() {
   echo "$port_ok|$http_ok|$launchd_ok|$pid"
 }
 
+# Check SurrealDB status
+check_surreal() {
+  local port_ok=false
+  local http_ok=false
+  local launchd_ok=false
+  local pid=""
+  
+  if port_in_use "$SURREAL_PORT"; then
+    port_ok=true
+    pid=$(get_port_pid "$SURREAL_PORT")
+  fi
+  
+  if service_responding "http://127.0.0.1:$SURREAL_PORT/health"; then
+    http_ok=true
+  fi
+  
+  if job_loaded "$SURREAL_LABEL"; then
+    launchd_ok=true
+  fi
+  
+  echo "$port_ok|$http_ok|$launchd_ok|$pid"
+}
+
 # Show status
 show_status() {
   echo -e "${BLUE}=== AI Orchestrator Status ===${NC}\n"
@@ -149,17 +177,48 @@ show_status() {
   else
     echo -e "${RED}✗ Not running${NC}"
   fi
+
+  # SurrealDB
+  local surreal_status=$(check_surreal)
+  IFS='|' read -r surreal_port surreal_http surreal_launchd surreal_pid <<< "$surreal_status"
+  
+  echo -n "SurrealDB (port $SURREAL_PORT): "
+  if [ "$surreal_http" = "true" ]; then
+    echo -e "${GREEN}✓ Running${NC}"
+    if [ -n "$surreal_pid" ]; then
+      echo "  PID: $surreal_pid"
+    fi
+    if [ "$surreal_launchd" = "true" ]; then
+      echo "  Managed by: launchd"
+    else
+      echo "  Managed by: direct process"
+    fi
+  elif [ "$surreal_port" = "true" ]; then
+    echo -e "${YELLOW}⚠ Port in use but not responding${NC}"
+    if [ -n "$surreal_pid" ]; then
+      echo "  PID: $surreal_pid (may be stuck)"
+    fi
+  else
+    echo -e "${RED}✗ Not running${NC}"
+  fi
   
   echo ""
   
   # Health check
-  if [ "$router_http" = "true" ] && [ "$agent_http" = "true" ]; then
+  if [ "$router_http" = "true" ] && [ "$agent_http" = "true" ] && [ "$surreal_http" = "true" ]; then
     echo -e "${GREEN}✓ All services healthy${NC}"
-    echo ""
-    echo "Dashboard: http://127.0.0.1:$ROUTER_PORT/dashboard"
+    
+    # Check if dashboard is reachable (check HTTP status code)
+    if curl -sf -o /dev/null -w "%{http_code}" "http://127.0.0.1:$ROUTER_PORT/dashboard" | grep -q "200" 2>/dev/null; then
+      echo -e "Dashboard: ${GREEN}✓ Available${NC} (http://127.0.0.1:$ROUTER_PORT/dashboard)"
+    else
+      echo -e "Dashboard: ${RED}✗ Not responding correctly${NC}"
+    fi
+    
     echo "Router API: http://127.0.0.1:$ROUTER_PORT/"
     echo "Agent API: http://127.0.0.1:$AGENT_PORT/"
-  elif [ "$router_http" = "true" ] || [ "$agent_http" = "true" ]; then
+    echo "SurrealDB: http://127.0.0.1:$SURREAL_PORT/"
+  elif [ "$router_http" = "true" ] || [ "$agent_http" = "true" ] || [ "$surreal_http" = "true" ]; then
     echo -e "${YELLOW}⚠ Partial service availability${NC}"
   else
     echo -e "${RED}✗ Services not available${NC}"
@@ -195,6 +254,23 @@ start_agent() {
     echo -e "${YELLOW}Warning: launchd plist not found at $AGENT_PLIST${NC}"
     echo "Run './setup_launchd.sh' first to create plists."
     return 1
+  fi
+}
+
+# Start SurrealDB
+start_surreal() {
+  if [ -f "$SURREAL_PLIST" ]; then
+    echo "Starting SurrealDB via launchd..."
+    if ! job_loaded "$SURREAL_LABEL"; then
+      launchctl bootstrap "$DOMAIN" "$SURREAL_PLIST" 2>/dev/null || true
+    fi
+    launchctl kickstart -k "$DOMAIN/$SURREAL_LABEL" 2>/dev/null || true
+    sleep 2
+  else
+    echo "Starting SurrealDB directly..."
+    mkdir -p "$SURREAL_DATA_DIR"
+    "$SURREAL_BIN" start --user root --pass root "file:$SURREAL_DATA_DIR" --bind 127.0.0.1:$SURREAL_PORT > "$ROOT_DIR/logs/surreal.log" 2>&1 &
+    sleep 2
   fi
 }
 
@@ -242,6 +318,28 @@ stop_agent() {
   fi
 }
 
+# Stop SurrealDB
+stop_surreal() {
+  local surreal_status=$(check_surreal)
+  IFS='|' read -r surreal_port surreal_http surreal_launchd surreal_pid <<< "$surreal_status"
+  
+  if [ "$surreal_launchd" = "true" ]; then
+    echo "Stopping SurrealDB via launchd..."
+    launchctl bootout "$DOMAIN" "$SURREAL_PLIST" 2>/dev/null || true
+    sleep 1
+  fi
+  
+  if [ "$surreal_port" = "true" ] && [ -n "$surreal_pid" ]; then
+    echo "Killing SurrealDB process (PID: $surreal_pid)..."
+    kill "$surreal_pid" 2>/dev/null || true
+    sleep 1
+    if port_in_use "$SURREAL_PORT"; then
+      echo "Force killing..."
+      kill -9 "$surreal_pid" 2>/dev/null || true
+    fi
+  fi
+}
+
 # Start all services
 start_all() {
   echo -e "${BLUE}Starting AI Orchestrator services...${NC}\n"
@@ -251,7 +349,16 @@ start_all() {
   
   local agent_status=$(check_agent)
   IFS='|' read -r agent_port agent_http agent_launchd agent_pid <<< "$agent_status"
+
+  local surreal_status=$(check_surreal)
+  IFS='|' read -r surreal_port surreal_http surreal_launchd surreal_pid <<< "$surreal_status"
   
+  if [ "$surreal_http" = "true" ]; then
+    echo -e "${GREEN}SurrealDB already running${NC}"
+  else
+    start_surreal
+  fi
+
   if [ "$router_http" = "true" ]; then
     echo -e "${GREEN}Router already running${NC}"
   else
@@ -274,6 +381,7 @@ stop_all() {
   echo -e "${BLUE}Stopping AI Orchestrator services...${NC}\n"
   stop_router
   stop_agent
+  stop_surreal
   echo ""
   sleep 1
   show_status
@@ -296,7 +404,17 @@ ensure_running() {
   
   local agent_status=$(check_agent)
   IFS='|' read -r agent_port agent_http agent_launchd agent_pid <<< "$agent_status"
+
+  local surreal_status=$(check_surreal)
+  IFS='|' read -r surreal_port surreal_http surreal_launchd surreal_pid <<< "$surreal_status"
   
+  if [ "$surreal_http" != "true" ]; then
+    echo "SurrealDB not running, starting..."
+    start_surreal
+  else
+    echo -e "${GREEN}SurrealDB already running${NC}"
+  fi
+
   if [ "$router_http" != "true" ]; then
     echo "Router not running, starting..."
     start_router
@@ -316,73 +434,91 @@ ensure_running() {
   show_status
 }
 
+# Sync project to Git
+sync_git() {
+  echo -e "${BLUE}Syncing project to Git...${NC}"
+  git add .
+  if git commit -m "Automated Sync: $(date)"; then
+    echo "Changes committed."
+  else
+    echo "Nothing to commit (or commit failed)."
+  fi
+  
+  if git push origin main; then
+    echo -e "${GREEN}✓ Push successful${NC}"
+  else
+    echo -e "${RED}✗ Push failed (check internet/auth)${NC}"
+  fi
+}
+
+# Run database backup
+run_backup() {
+  echo -e "${BLUE}Running memory database backup...${NC}"
+  ./bin/backup_memory.sh
+}
+
 # Usage
 usage() {
   cat <<EOF
 Usage: $0 [command]
-
 Commands:
-  status       Show status of all services (default)
-  start        Start all services
-  stop         Stop all services
-  restart      Restart all services
-  ensure       Start any missing services (keeps running services running)
-  start-router Start only the router
-  stop-router  Stop only the router
-  start-agent  Start only the agent-runner
-  stop-agent   Stop only the agent-runner
-
-Examples:
-  $0              # Show status
-  $0 ensure       # Start what's missing
-  $0 restart      # Full restart
-  $0 stop         # Stop everything
+  status        Show status of all services (default)
+  start         Start all services
+  stop          Stop all services
+  restart       Restart all services
+  ensure        Start any missing services (keeps running services running)
+  start-router  Start only the router
+  stop-router   Stop only the router
+  restart-router Restart only the router
+  start-agent   Start only the agent-runner
+  stop-agent    Stop only the agent-runner
+  restart-agent Restart only the agent-runner
+  start-surreal Start only SurrealDB
+  stop-surreal  Stop only SurrealDB
+  sync          Sync all code changes to Git
+  backup        Trigger a manual memory backup
 EOF
 }
 
 # Main
-cmd="${1:-status}"
-case "$cmd" in
-  status)
+case "${1:-status}" in
+  status) show_status ;;
+  start) start_all ;;
+  stop) stop_all ;;
+  restart) restart_all ;;
+  ensure) ensure_running ;;
+  start-router) start_router; show_status ;;
+  stop-router) stop_router; show_status ;;
+  restart-router) 
+    if job_loaded "$ROUTER_LABEL"; then
+      echo "Restarting router via launchd..."
+      launchctl kickstart -k "$DOMAIN/$ROUTER_LABEL" 2>/dev/null || true
+      sleep 2
+    else
+      echo "Router not loaded in launchd, starting..."
+      start_router
+    fi
     show_status
     ;;
-  start)
-    start_all
-    ;;
-  stop)
-    stop_all
-    ;;
-  restart)
-    restart_all
-    ;;
-  ensure)
-    ensure_running
-    ;;
-  start-router)
-    start_router
+  start-agent) start_agent; show_status ;;
+  stop-agent) stop_agent; show_status ;;
+  restart-agent)
+    if job_loaded "$AGENT_LABEL"; then
+      echo "Restarting agent-runner via launchd..."
+      launchctl kickstart -k "$DOMAIN/$AGENT_LABEL" 2>/dev/null || true
+      sleep 2
+    else
+      echo "Agent-runner not loaded in launchd, starting..."
+      start_agent
+    fi
     show_status
     ;;
-  stop-router)
-    stop_router
-    show_status
-    ;;
-  start-agent)
-    start_agent
-    show_status
-    ;;
-  stop-agent)
-    stop_agent
-    show_status
-    ;;
-  -h|--help|help)
-    usage
-    ;;
-  *)
-    echo "Unknown command: $cmd"
-    echo ""
-    usage
-    exit 2
-    ;;
+  start-surreal) start_surreal; show_status ;;
+  stop-surreal) stop_surreal; show_status ;;
+  sync) sync_git ;;
+  backup) run_backup ;;
+  -h|--help|help) usage ;;
+  *) echo "Unknown command: $1"; usage; exit 2 ;;
 esac
 
 

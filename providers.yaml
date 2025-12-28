@@ -1,29 +1,11 @@
 providers:
-  # Local Ollama instance (no API key required)
-  ollama:
-    type: ollama
-    base_url: http://127.0.0.1:11434
-    # Note: Ollama doesn't require an API key for local instances
-
   openai:
     type: openai_compat
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
 
-  grok:
-    type: openai_compat
-    base_url: https://api.x.ai/v1
-    api_key_env: XAI_API_KEY
-
-  openrouter:
-    type: openai_compat
-    base_url: https://openrouter.ai/api/v1
-    api_key_env: OPENROUTER_API_KEY
-    default_headers:
-      HTTP-Referer: http://localhost
-      X-Title: AI-Gateway
-
   perplexity:
     type: openai_compat
     base_url: https://api.perplexity.ai
     api_key_env: PERPLEXITY_API_KEY
+

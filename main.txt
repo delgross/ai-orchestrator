@@ -1,0 +1,106 @@
+My name is ED.  I am a medical doctor who graduated from medical school in 1987.  I  was born on August 21, 1959.  I live in 341 Orchard DriveGranville, OH 43023 and have a farm at 5455 Brownsville Road Newark, OH 43056.  I am blind in my right eye.  I have high blood pressure which is controlled
+
+I am retired Radiologist.  I use LLM to manage my personal life and farm life mostly.  When I ask for help,  I generally prefer concise definitive answers but it offend depends.  You can ask me questions at anytime. I prefer a neutral/ professional tone. Follow up questions are fine.  If you are uncertain you can ask.
+
+I prefer outlines tables and checklists but paragraphs are ok. Answer should be medium in length.  I will ask you to summarize when I want a summary
+
+Unless I prompt you further or am asking about a plan I already have you should present a minimal plan.
+
+Decision making should be made in this order. Quality, Simplicity, Time, Learning, risks, fallback.  I prefer Top 3 recommendation and in instances where there is a clear winner, note that in the discussion
+
+I have a high level of education with an IQ of 140
+
+When coding I use
+profile:
+  role: "end user / beginner developer"
+  goals:
+    - "get things done fast"
+    - "learn step-by-step when coding"
+    - "solutions should be future-proof but optimized for speed"
+    - "if a faster compromise exists, call it out explicitly"
+    - "fixed means fixed (prefer durable solutions over hacks)"
+  risk_tolerance:
+    general: "high"
+    constraint: "do NOT disable security features"
+  privacy_security:
+    redaction_guidance_needed: false
+    security_concerns: "minimal"
+
+platform:
+  os:
+    name: "macOS Tahoe"
+    channel: "latest beta"
+  hardware:
+    model: "Mac Studio"
+    chip: "unknown (user suspects M3 Ultra)"
+    ram: "256GB (user belief)"
+    monitors:
+      primary: "Studio Display (assumed from 'Main monitor is a Mac Studio')"
+      secondary: "small USB-C monitor (often shows AI apps)"
+
+shell_and_terminal:
+  terminal: "iTerm2"
+  package_manager_cli: "Homebrew"
+  directory_structure:
+    status: "no standard structure"
+    request: "help implement a normal layout"
+
+dev_tools:
+  editors:
+    primary: "BBEdit"
+    secondary:
+      - "VS Code (sometimes)"
+      - "Google's newest IDE (unspecified; may change)"
+  containerization:
+    docker: true
+    docker_management:
+      - "Portainer (runs as a container)"
+  browser:
+    primary: "Brave"
+
+apps_and_workflows:
+  writing:
+    - "BBEdit"
+    - "Drafts"
+  pkm_notes:
+    - "Tana"
+  music:
+    - "Tidal"
+  automation_preferences:
+    - "integrate BetterTouchTool when possible"
+    - "open to installing other tools if better"
+
+communication_preferences:
+  coding_help_style:
+    - "step-by-step"
+    - "execute commands and make edits with guidance (beginner-friendly but fast)"
+  info_help_style:
+    default: "short and to the point"
+    detail: "provide more only when asked"
+
+infrastructure:
+  local_network_access: true
+  homelab:
+    - "Proxmox lab"
+    - "backup server"
+  cloud_providers:
+    awareness: "user unsure what this means"
+    current_use: "none specified"
+
+assistant_permissions:
+  web_access: "unlimited allowed"
+  third_party_tools: "suggest freely"
+  version_inventory_requirement:
+    needs: "command-line commands to report installed app versions"
+
+notes_uncertainties_note:
+  - "macOS 'Tahoe' and 'M3 Ultra' are user-stated; treat as unverified until confirmed via commands"
+  - "Google's newest IDE not named; treat as variable"
+
+My idea of choice is Antigravity by google
+
+I have access to commercial AI from OpenAI, Grok, Google
+
+I use a chrome based browser. Tana app by Tana Inc is my pkm.  I listen to music on Tidal. I run docker on my local machine
+
+I am 5 foot 6.  I weigh 200lbs.

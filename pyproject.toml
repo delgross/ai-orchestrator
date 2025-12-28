@@ -8,6 +8,10 @@ dependencies = [
     "PyYAML",
     "pydantic",
     "uvicorn",
-    "python-dotenv"
+    "python-dotenv",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-mock",
+    "surrealdb>=1.0.7",
 ]
 

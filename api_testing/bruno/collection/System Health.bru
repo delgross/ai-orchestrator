@@ -1,0 +1,15 @@
+meta {
+  name: System Health
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/admin/system-status
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auth_token}}
+}

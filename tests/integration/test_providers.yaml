@@ -1,0 +1,8 @@
+providers:
+  mock-openai:
+    type: openai_compat
+    base_url: http://localhost:1234/v1
+    api_key_env: MOCK_API_KEY
+  mock-ollama:
+    type: ollama
+    base_url: http://localhost:11434

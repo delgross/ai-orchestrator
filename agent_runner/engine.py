@@ -1,0 +1,633 @@
+import logging
+import os
+import time
+import uuid
+import json
+from typing import Dict, List, Any, Optional, Union
+from fastapi import HTTPException
+import httpx
+import asyncio
+
+from agent_runner.state import AgentState
+from common.constants import OBJ_MODEL, ROLE_USER, ROLE_ASSISTANT, ROLE_SYSTEM, ROLE_TOOL
+from common.unified_tracking import track_event, EventSeverity, EventCategory
+from agent_runner.tools import fs as fs_tools
+from agent_runner.tools import mcp as mcp_tools
+
+logger = logging.getLogger("agent_runner")
+
+class AgentEngine:
+    def __init__(self, state: AgentState):
+        self.state = state
+        self.tool_impls = self._init_tool_impls()
+        self.tool_definitions = self._init_tool_definitions()
+        self.mcp_tool_cache: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _init_tool_impls(self):
+        impls = {
+            "list_dir": fs_tools.tool_list_dir,
+            "path_info": fs_tools.tool_path_info,
+            "read_text": fs_tools.tool_read_text,
+            "write_text": fs_tools.tool_write_text,
+            "append_text": fs_tools.tool_append_text,
+            "make_dir": fs_tools.tool_make_dir,
+            "remove_file": fs_tools.tool_remove_file,
+            "remove_dir": fs_tools.tool_remove_dir,
+            "move_path": fs_tools.tool_move_path,
+            "copy_file": fs_tools.tool_copy_file,
+            "copy_path": fs_tools.tool_copy_path,
+            "find_files": fs_tools.tool_find_files,
+            "batch_operations": fs_tools.tool_batch_operations,
+            "watch_path": fs_tools.tool_watch_path,
+            "query_static_resources": fs_tools.tool_query_static_resources,
+            "mcp_proxy": mcp_tools.tool_mcp_proxy,
+        }
+        return impls
+
+    def _init_tool_definitions(self):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_dir",
+                    "description": "List contents of a directory in the sandboxed workspace. Returns file names, sizes, and types.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Relative path to list (default '.')"},
+                            "recursive": {"type": "boolean", "description": "Whether to list subdirectories", "default": False},
+                            "max_depth": {"type": "integer", "description": "Max recursion depth", "default": 2}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_text",
+                    "description": "Read the text content of a file from the workspace.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Path to the file to read."},
+                            "max_bytes": {"type": "integer", "description": "Optional limit on bytes to read."}
+                        },
+                        "required": ["path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_text",
+                    "description": "Create a new file or overwrite an existing one with text content.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Path to create/overwrite."},
+                            "content": {"type": "string", "description": "The text content to write."},
+                            "overwrite": {"type": "boolean", "description": "Whether to allow overwriting existing files.", "default": False}
+                        },
+                        "required": ["path", "content"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp_proxy",
+                    "description": "Call a tool on an MCP (Model Context Protocol) server. Useful for external capabilities like weather, search, or specialized databases.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "server": {"type": "string", "description": "The name of the MCP server to call."},
+                            "tool": {"type": "string", "description": "The name of the tool on that server."},
+                            "arguments": {"type": "object", "description": "The arguments to pass to the tool."}
+                        },
+                        "required": ["server", "tool", "arguments"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "query_static_resources",
+                    "description": "Search or read documentation and reference materials from the 'Static Resources' folder.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Optional keyword search query."},
+                            "resource_name": {"type": "string", "description": "Specific file name to read."},
+                            "list_all": {"type": "boolean", "description": "List all available resources."}
+                        }
+                    }
+                }
+            }
+        ]
+
+    async def call_gateway_with_tools(self, messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        target_model = model or self.state.agent_model
+        
+        # Universal Offline Fallback Logic
+        if not self.state.internet_available:
+            # Check if target model is remote. 
+            # We treat 'ollama:' and 'local:' as safe. Everything else (openai:, gpt-, claude-, etc.) is suspect.
+            is_safe_local = target_model.startswith(("ollama:", "local:", "test:"))
+            
+            if not is_safe_local:
+                fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+                if target_model != fallback:
+                    logger.warning(f"OFFLINE MODE: Intercepting remote model '{target_model}'. Switching to fallback '{fallback}'.")
+                    target_model = fallback
+
+        # Prepare candidates: [Requested Model, Fallback Model]
+        # We try the requested model first. If it fails or is circuit-broken, we try the fallback.
+        candidates = []
+        if target_model:
+            candidates.append(target_model)
+        
+        fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+        if self.state.fallback_enabled and fallback not in candidates:
+            candidates.append(fallback)
+            
+        last_error = None
+        
+        headers = {}
+        if self.state.router_auth_token:
+            headers["Authorization"] = f"Bearer {self.state.router_auth_token}"
+
+        client = await self.state.get_http_client()
+        url = f"{self.state.gateway_base}/v1/chat/completions"
+
+        for attempt_model in candidates:
+            # 1. Circuit Breaker Check
+            if not self.state.mcp_circuit_breaker.is_allowed(attempt_model):
+                logger.warning(f"Model '{attempt_model}' is circuit broken. Skipping.")
+                last_error = f"Model '{attempt_model}' is circuit broken"
+                continue
+                
+            # 2. Prepare Payload
+            payload = {
+                OBJ_MODEL: attempt_model,
+                "messages": messages,
+                "tools": tools or self.tool_definitions,
+                "tool_choice": "auto",
+                "stream": False,
+            }
+            
+            try:
+                # 3. Attempt Call
+                resp = await client.post(url, json=payload, headers=headers, timeout=self.state.http_timeout)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                # 4. Success -> Record and Return
+                self.state.mcp_circuit_breaker.record_success(attempt_model)
+                
+                # If we fell back, note it in the response (optional, but helpful for debugging/context)
+                if attempt_model != target_model:
+                     logger.info(f"Successfully recovered using fallback model: {attempt_model}")
+                     
+                return data
+                
+            except Exception as e:
+                # 5. Failure -> Record
+                logger.error(f"Model call failed for '{attempt_model}': {e}")
+                self.state.mcp_circuit_breaker.record_failure(attempt_model)
+                last_error = e
+                # Continue to next candidate (fallback)
+
+        # If we get here, all candidates failed
+        logger.error(f"All model attempts failed. Last error: {last_error}")
+        raise HTTPException(status_code=500, detail=f"All models failed. Last error: {str(last_error)}")
+
+    async def execute_tool_call(self, tool_call: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
+        fn = tool_call.get("function") or {}
+        name = fn.get("name")
+        args_str = fn.get("arguments") or "{}"
+        
+        if name.startswith("mcp__"):
+            parts = name.split("__")
+            if len(parts) >= 3:
+                server = parts[1]
+                tool = "__".join(parts[2:])
+                try:
+                    args = json.loads(args_str)
+                    track_event(
+                        event="mcp_proxy_call",
+                        message=f"Calling MCP tool: {server}::{tool}",
+                        severity=EventSeverity.INFO,
+                        category=EventCategory.MCP,
+                        component="engine",
+                        metadata={"server": server, "tool": tool, "arguments": args},
+                        request_id=request_id
+                    )
+                    from agent_runner.tools.mcp import tool_mcp_proxy
+                    result = await tool_mcp_proxy(self.state, server, tool, args)
+                    track_event(
+                        event="mcp_proxy_ok",
+                        message=f"MCP tool success: {server}::{tool}",
+                        severity=EventSeverity.INFO,
+                        category=EventCategory.MCP,
+                        component="engine",
+                        metadata={"server": server, "tool": tool},
+                        request_id=request_id
+                    )
+                    return result
+                except Exception as e:
+                    track_event(
+                        event="mcp_proxy_error",
+                        message=f"MCP tool failed: {server}::{tool}",
+                        severity=EventSeverity.HIGH,
+                        category=EventCategory.MCP,
+                        component="engine",
+                        metadata={"server": server, "tool": tool, "error_type": type(e).__name__},
+                        error=e,
+                        request_id=request_id
+                    )
+                    return {"ok": False, "error": str(e)}
+
+        if name not in self.tool_impls:
+            return {"ok": False, "error": f"Unknown tool '{name}'"}
+            
+        try:
+            args = json.loads(args_str)
+            impl = self.tool_impls[name]
+            
+            track_event(
+                event="tool_call",
+                message=f"Calling local tool: {name}",
+                severity=EventSeverity.INFO,
+                category=EventCategory.TASK,
+                component="engine",
+                metadata={"tool_name": name, "arguments": args},
+                request_id=request_id
+            )
+            
+            if asyncio.iscoroutinefunction(impl):
+                result = await impl(self.state, **args)
+            else:
+                result = impl(self.state, **args)
+            
+            track_event(
+                event="tool_ok",
+                message=f"Local tool success: {name}",
+                severity=EventSeverity.INFO,
+                category=EventCategory.TASK,
+                component="engine",
+                metadata={"tool_name": name},
+                request_id=request_id
+            )
+            return {"ok": True, "result": result}
+        except Exception as e:
+            track_event(
+                event="tool_error",
+                message=f"Local tool failed: {name}",
+                severity=EventSeverity.HIGH,
+                category=EventCategory.TASK,
+                component="engine",
+                metadata={"tool_name": name, "error_type": type(e).__name__},
+                error=e,
+                request_id=request_id
+            )
+            return {"ok": False, "error": str(e)}
+
+    async def discover_mcp_tools(self):
+        """Discover tools from all configured MCP servers."""
+        logger.info(f"Starting MCP discovery. Servers: {list(self.state.mcp_servers.keys())}")
+        for server_name in list(self.state.mcp_servers.keys()):
+            cfg = self.state.mcp_servers[server_name]
+            logger.info(f"Discovering tools for {server_name}. Config: {cfg}")
+            try:
+                from agent_runner.tools.mcp import tool_mcp_proxy
+                res = await tool_mcp_proxy(self.state, server_name, "tools/list", {}, bypass_circuit_breaker=True)
+                if res.get("ok"):
+                    # Handle both direct result or nested result
+                    data = res.get("result", res)
+                    remote_tools = data.get("tools", [])
+                    defs = []
+                    for rt in remote_tools:
+                        defs.append({
+                            "type": "function",
+                            "function": {
+                                "name": rt.get("name"),
+                                "description": rt.get("description"),
+                                "parameters": rt.get("inputSchema", {"type": "object", "properties": {}})
+                            }
+                        })
+                    self.mcp_tool_cache[server_name] = defs
+                    logger.info(f"Discovered {len(defs)} tools from MCP server '{server_name}'")
+            except Exception as e:
+                logger.warning(f"Failed discovery for {server_name}: {e}")
+
+    async def get_all_tools(self) -> List[Dict[str, Any]]:
+        """Combine built-in tools with discovered MCP tools, filtering by environmental constraints."""
+        tools = list(self.tool_definitions)
+        
+        # Add discovered MCP tools
+        for server_name, server_tools in self.mcp_tool_cache.items():
+            # Environmental check: filter out internet-requiring tools if offline
+            server_cfg = self.state.mcp_servers.get(server_name, {})
+            if server_cfg.get("requires_internet") and not self.state.internet_available:
+                continue
+
+            for t in server_tools:
+                # Recreate to avoid modifying the original cached definition
+                orig_func = t.get("function", {})
+                wrapped = {
+                    "type": "function",
+                    "function": {
+                        "name": f"mcp__{server_name}__{orig_func.get('name')}",
+                        "description": orig_func.get("description"),
+                        "parameters": orig_func.get("parameters")
+                    }
+                }
+                tools.append(wrapped)
+        
+        return tools
+
+    def _extract_text_content(self, content: Any) -> str:
+        """Extract plain text from potential list-based content (common in advanced clients)."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            # Extract text from blocks like [{'type': 'text', 'text': 'hi'}]
+            return " ".join([str(block.get("text", "")) for block in content if isinstance(block, dict) and block.get("type") == "text"])
+        return str(content)
+
+    async def _generate_search_query(self, messages: List[Dict[str, Any]]) -> str:
+        """Use LLM to rewrite the latest user message into a standalone search query."""
+        if messages:
+            logger.info(f"DEBUG: Internal Query Gen. History={len(messages)}. Last Role={messages[-1].get('role')}")
+        
+        # Find the last user message
+        last_user_msg = None
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                last_user_msg = m
+                break
+        
+        if not last_user_msg:
+            return ""
+
+        last_user_content = self._extract_text_content(last_user_msg.get("content"))
+
+        # Use the Agent Model (fast) to rewrite
+        sys_prompt = (
+            "You are a Database Search Query Generator. "
+            "Convert the LAST user message into a specific keyword search query for a vector database. "
+            "Resolve pronouns based on context. "
+            "Do NOT answer the question. Do NOT be polite. "
+            "Output ONLY the query string."
+        )
+        
+        # Reduced context for rewriting
+        # Extract text from last 3 messages to avoid passing huge JSON blobs
+        context_text = []
+        for m in messages[-3:]:
+            role = m.get("role")
+            text = self._extract_text_content(m.get("content"))
+            context_text.append(f"{role}: {text}")
+        
+        user_prompt = f"Context:\n{chr(10).join(context_text)}\n\nGenerate Search Query for the last user message:"
+        
+        prompt_msgs = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        try:
+            # We call the gateway without tools
+            t0 = time.time()
+            # Using agent_model (likely gpt-4o-mini) for speed
+            response = await self.call_gateway_with_tools(
+                messages=prompt_msgs,
+                model=self.state.agent_model, 
+                tools=None
+            )
+            rewritten = response["choices"][0]["message"]["content"].strip()
+            # Clean quotes
+            if rewritten.startswith('"') and rewritten.endswith('"'):
+                rewritten = rewritten[1:-1]
+            dur = (time.time() - t0) * 1000
+            logger.info(f"Query Refinement: '{last_user_content[:50]}...' -> '{rewritten}' ({dur:.2f}ms)")
+            return rewritten
+        except Exception as e:
+            logger.warning(f"Query refinement failed: {e}. Falling back to raw content.")
+            return last_user_content
+
+    async def get_system_prompt(self, user_messages: Optional[List[Dict[str, Any]]] = None) -> str:
+        """Construct the dynamic system prompt with memory context and environmental awareness."""
+        memory_facts = ""
+        memory_status_msg = ""
+        if user_messages:
+            try:
+                # Use LLM to generate a context-aware search query
+                search_query = await self._generate_search_query(user_messages)
+                if search_query:
+                    from agent_runner.tools.mcp import tool_mcp_proxy
+                    
+                    t0_mem = time.time()
+                    search_res = await tool_mcp_proxy(self.state, "project-memory", "semantic_search", {"query": search_query, "limit": 10}, bypass_circuit_breaker=True)
+                    dur_mem = (time.time() - t0_mem) * 1000
+                    logger.info(f"Memory Retrieval took {dur_mem:.2f}ms")
+
+                    if search_res.get("ok"):
+                        # Extract facts from MCP response format
+                        # Stdio MCP servers return [TextContent(text='{...}')]
+                        result_obj = search_res.get("result", {})
+                        content_list = result_obj.get("content", []) if isinstance(result_obj, dict) else []
+                        
+                        facts_data = []
+                        if content_list and content_list[0].get("type") == "text":
+                            try:
+                                # The MCP server returns a JSON-string in the text field
+                                inner_res = json.loads(content_list[0].get("text", "{}"))
+                                facts_data = inner_res.get("facts", [])
+                            except (json.JSONDecodeError, TypeError):
+                                facts_data = []
+                        
+                        if facts_data:
+                            # Log retrieved facts for debugging
+                            log_facts = [f"{f.get('entity')} {f.get('relation')} {f.get('target')}" for f in facts_data]
+                            logger.info(f"Memory Hit: Found {len(facts_data)} facts: {log_facts}")
+                            fact_strings = [f"- {s}" for s in log_facts]
+                            memory_facts = (
+                                "\n### RETRIEVED MEMORY CONTEXT (High Recall Mode)\n"
+                                "The following facts were retrieved from the database based on the user's query.\n"
+                                "WARNING: The database has returned these with NO relevance filtering (Raw Recall).\n"
+                                "CRITICAL INSTRUCTION: You must act as the filter. Evaluate each fact below. If it is irrelevant to the specific question, IGNORE it. If it is relevant, USE it.\n\n"
+                                + "\n".join(fact_strings)
+                            )
+                    else:
+                        memory_status_msg = f"\nSYSTEM ALERT: Long-term memory retrieval failed (MCP Error: {search_res.get('error')}). You are operating with limited context."
+            except Exception as e:
+                logger.warning(f"Context injection failed during prompt construction: {e}")
+                memory_status_msg = f"\nSYSTEM ALERT: Long-term memory retrieval failed (Exception: {str(e)}). Context injection skipped."
+
+        # Build the base instructions based on internet availability
+        if self.state.internet_available:
+            env_instructions = (
+                "CRITICAL: You HAVE constant, real-time access to the internet via your MCP tools. NEVER apologize for not having internet access.\n"
+                "If a user asks for news, stock prices, or current events, use 'mcp__exa__web_search_exa' or 'mcp__tavily_search__tavily_search' immediately.\n"
+                "NEVER give canned responses about being a large language model with restricted training data. You are an agent, and your training data is supplemented by your tools in real-time."
+            )
+        else:
+            env_instructions = (
+                "NOTICE: The system is currently in LOCAL-ONLY mode because the internet is unavailable.\n"
+                "Do NOT attempt to use web search tools (exa, tavily, perplexity, firecrawl). They will fail.\n"
+                "Inform the user that you are operating offline if they ask for real-time information.\n"
+                "Rely on your internal knowledge and the 'project-memory' and 'filesystem' tools."
+            )
+
+        # Check for service outages via circuit breaker
+        service_alerts = ""
+        open_breakers = [name for name, b in self.state.mcp_circuit_breaker.get_status().items() if b["state"] == "open"]
+        if open_breakers:
+            service_alerts = (
+                "\nCRITICAL SERVICE ALERTS:\n"
+                f"The following MCP servers are temporarily DISABLED due to repeated infrastructure failures: {', '.join(open_breakers)}.\n"
+                "Do NOT attempt to use tools from these servers until they are restored. Inform the user of the outage if they specifically requested these tools."
+            )
+        
+        if memory_status_msg:
+             service_alerts += f"\n{memory_status_msg}"
+
+        import datetime
+        current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        prompt = (
+            "You are Antigravity, a powerful agentic AI assistant running inside the Orchestrator.\n"
+            f"Current System Time: {current_time_str}\n"
+            f"{env_instructions}\n"
+            f"{service_alerts}\n"
+            "Use the tools provided to you to be the most helpful assistant possible."
+            f"{memory_facts}"
+        )
+        return prompt
+
+    async def agent_loop(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, request_id: Optional[str] = None) -> Dict[str, Any]:
+        # Context Pruning: Prevent "Choking" on long histories
+        PRUNE_LIMIT = 20
+        if len(user_messages) > PRUNE_LIMIT:
+            original_len = len(user_messages)
+            user_messages = user_messages[-PRUNE_LIMIT:]
+            
+            # Sanity Check: Don't start with a 'tool' outcome as it violates OpenAI protocol
+            # (A tool message must be preceded by a tool_call)
+            while user_messages and user_messages[0].get("role") == "tool":
+                user_messages.pop(0)
+            
+            logger.info(f"Context Pruned: {original_len} -> {len(user_messages)} messages")
+
+        # Context Awareness: Adjust model if offline
+        active_model = model or self.state.agent_model
+        if not self.state.internet_available and active_model.startswith("openai:"):
+            fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+            logger.warning(f"Internet offline: Diverting from Cloud model to Local Fallback ({fallback})")
+            active_model = fallback
+
+        # 1. Context Injection: Get dynamic prompt
+        system_prompt = await self.get_system_prompt(user_messages)
+        messages = [{"role": ROLE_SYSTEM, "content": system_prompt}] + user_messages
+        steps = 0
+        active_tools = tools or await self.get_all_tools()
+        
+        while steps < self.state.max_tool_steps:
+            steps += 1
+            response = await self.call_gateway_with_tools(messages, active_model, active_tools)
+            choice = response["choices"][0]
+            message = choice["message"]
+            
+            messages.append(message)
+            
+            if not message.get("tool_calls"):
+                # Check for Finalizer Handover
+                if self.state.finalizer_enabled and self.state.finalizer_model and self.state.finalizer_model != active_model:
+                    # Circuit Breaker Check
+                    # We reuse the registry for model stability tracking
+                    finalizer_model_id = self.state.finalizer_model
+                    is_cb_allowed = self.state.mcp_circuit_breaker.is_allowed(finalizer_model_id)
+
+                    if is_cb_allowed:
+                        logger.info(f"Finalizer Handover: {active_model} -> {finalizer_model_id}")
+                        
+                        # Preserve Worker's draft in case both Finalizer and Fallback fail
+                        worker_draft = messages.pop() if messages else None
+                        
+                        try:
+                            # 1. Attempt Finalizer
+                            final_res = await self.call_gateway_with_tools(messages, finalizer_model_id, active_tools)
+                            response = final_res
+                            message = response["choices"][0]["message"]
+                            messages.append(message)
+                            
+                            # Success: Record it
+                            self.state.mcp_circuit_breaker.record_success(finalizer_model_id)
+                            
+                        except Exception as e:
+                            logger.error(f"Finalizer execution failed: {e}")
+                            # Failure: Record it
+                            self.state.mcp_circuit_breaker.record_failure(finalizer_model_id)
+                            
+                            # 2. Attempt Fallback (Logic centralized below)
+                            await self._handle_fallback(messages, active_tools, worker_draft)
+                    else:
+                        logger.warning(f"Finalizer '{finalizer_model_id}' is CIRCUIT BROKEN. Skipping directly to fallback.")
+                        # 2. Attempt Fallback (Directly)
+                         # Preserve Worker's draft in case both Finalizer and Fallback fail
+                        worker_draft = messages.pop() if messages else None
+                        await self._handle_fallback(messages, active_tools, worker_draft)
+
+                # Store episode before returning
+                if request_id:
+                    try:
+                        logger.info(f"Storing request {request_id} with {len(messages)} messages")
+                        from agent_runner.tools.mcp import tool_mcp_proxy
+                        await tool_mcp_proxy(self.state, "project-memory", "store_episode", {"request_id": request_id, "messages": messages})
+                    except Exception as e:
+                        logger.warning(f"Failed to store episode for request {request_id}: {e}")
+
+                return response
+            
+            # Helper for tool execution loop
+            if message.get("tool_calls"):
+                for tool_call in message["tool_calls"]:
+                    result = await self.execute_tool_call(tool_call, request_id=request_id)
+                    messages.append({
+                        "role": ROLE_TOOL,
+                        "tool_call_id": tool_call["id"],
+                        "content": json.dumps(result.get("result", result.get("error")))
+                    })
+        
+        # 2. Episodic Logging: Store the thread for background consolidation (Max steps reached)
+        if request_id:
+             try:
+                 logger.info(f"Storing request {request_id} with {len(messages)} messages")
+                 from agent_runner.tools.mcp import tool_mcp_proxy
+                 # Sanitize messages to simple JSON types (Dicts) explicitly
+                 safe_messages = json.loads(json.dumps(messages, default=str))
+                 await tool_mcp_proxy(self.state, "project-memory", "store_episode", {"request_id": request_id, "messages": safe_messages})
+             except Exception as e:
+                 logger.warning(f"Failed to store episode for request {request_id}: {e}")
+
+        return {"error": "Max tool steps reached"}
+
+    async def _handle_fallback(self, messages, active_tools, worker_draft):
+        """Centralized fallback logic when primary/finalizer models fail."""
+        if self.state.fallback_enabled and self.state.fallback_model:
+            logger.info(f"Activating Fallback Engine: {self.state.fallback_model}")
+            try:
+                fallback_res = await self.call_gateway_with_tools(messages, self.state.fallback_model, active_tools)
+                response = fallback_res
+                message = response["choices"][0]["message"]
+                message["content"] = f"{message.get('content', '')}\n\n[System: Generated by Fallback Engine]"
+                messages.append(message)
+            except Exception as fb_e:
+                logger.error(f"Fallback Engine failed: {fb_e}")
+                # 3. Revert to Worker
+                if worker_draft: messages.append(worker_draft)
+        else:
+            # Fallback disabled, Revert
+            logger.warning("Fallback disabled. Reverting to Worker response.")
+            if worker_draft: messages.append(worker_draft)

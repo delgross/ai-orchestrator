@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Antigravity Direct Chat</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #0f1115;
+            color: #e0e0e0;
+        }
+
+        h1 {
+            color: #fff;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+
+        .config {
+            background: #1a1c20;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            border: 1px solid #333;
+        }
+
+        #chat-history {
+            height: 600px;
+            overflow-y: auto;
+            border: 1px solid #333;
+            padding: 20px;
+            margin-bottom: 20px;
+            background: #16181d;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 80%;
+            line-height: 1.5;
+        }
+
+        .user {
+            background: #2b5c9c;
+            align-self: flex-end;
+            color: white;
+        }
+
+        .assistant {
+            background: #252830;
+            align-self: flex-start;
+            border: 1px solid #333;
+            color: #e0e0e0;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+        }
+
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            background: #1a1c20;
+            color: white;
+            font-size: 16px;
+            outline: none;
+        }
+
+        input[type="text"]:focus {
+            border-color: #2b5c9c;
+        }
+
+        button {
+            padding: 0 25px;
+            cursor: pointer;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 16px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #218838;
+        }
+
+        button:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        #status {
+            font-family: monospace;
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 5px;
+            height: 20px;
+        }
+
+        /* Loading Animation */
+        .typing::after {
+            content: '...';
+            animation: ellipsis 1.5s infinite;
+        }
+
+        @keyframes ellipsis {
+            0% {
+                content: '.';
+            }
+
+            33% {
+                content: '..';
+            }
+
+            66% {
+                content: '...';
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Antigravity Direct Link Debugger</h1>
+
+    <div class="config">
+        <label>Target Model:
+            <select id="model-select"
+                style="padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">
+                <option value="agent:mcp">Orchestrator (Agent Runner + Tools)</option>
+                <option value="router">Raw Router (Mistral/Ollama)</option>
+            </select>
+        </label>
+        <div style="font-size: 0.9em; color: #888;">Connecting to: http://localhost:5455 (Bypassing Docker)</div>
+    </div>
+
+    <div id="chat-history">
+        <div class="message assistant">System initialized. Ready to test connectivity via port 5455.</div>
+    </div>
+
+    <div class="controls">
+        <button onclick="toggleRecording()" id="mic-btn" style="padding: 0 15px; background: #444; margin-right: 5px;"
+            title="Voice Input">🎤</button>
+        <input type="text" id="user-input" placeholder="Type or click mic..."
+            onkeydown="if(event.key==='Enter') sendMessage()" autofocus>
+        <button onclick="sendMessage()" id="send-btn">Send</button>
+    </div>
+    <div style="margin-top: 10px; display: flex; gap: 15px; align-items: center;">
+        <label style="color: #aaa; font-size: 0.9em; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+            <input type="checkbox" id="tts-toggle"> 🔊 Read Responses Aloud
+        </label>
+        <div id="status">Ready</div>
+    </div>
+
+    <!-- System Configuration Section -->
+    <div style="margin-top: 20px; border-top: 1px solid #333; padding-top: 15px;">
+        <h3 style="margin: 0 0 10px 0; font-size: 1.1em; color: #ccc;">System Configuration</h3>
+        <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-end;">
+            <div>
+                <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Memory Indexer
+                    (Background)</label>
+                <select id="indexer-model"
+                    style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
+                    <option value="ollama:mistral:latest">Mistral (Local / Privacy)</option>
+                    <option value="openai:gpt-4o" selected>GPT-4o (Cloud / Smart)</option>
+                    <option value="openai:gpt-4o-mini">GPT-4o Mini (Cloud / Fast)</option>
+                </select>
+            </div>
+            <div>
+                <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Chat Agent
+                    (Foreground)</label>
+                <select id="agent-model"
+                    style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
+                    <option value="openai:gpt-4o" selected>GPT-4o (Cloud / Smart)</option>
+                    <option value="openai:gpt-4o-mini">GPT-4o Mini (Cloud / Fast)</option>
+                    <option value="ollama:mistral:latest">Mistral (Local / Privacy)</option>
+                </select>
+            </div>
+            <div>
+                <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Planner
+                    (Tasks)</label>
+                <select id="task-model"
+                    style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
+                    <option value="ollama:mistral:latest">Mistral (Local)</option>
+                    <option value="openai:gpt-4o">GPT-4o (Cloud)</option>
+                </select>
+            </div>
+            <button onclick="updateSystemConfig()"
+                style="padding: 7px 15px; background: #333; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer;">Update
+                System</button>
+        </div>
+        <div id="config-status"
+            style="font-size: 0.85em; color: #28a745; margin-top: 8px; opacity: 0; transition: opacity 0.5s;">
+            Configuration Updated</div>
+    </div>
+    <script>
+        // Token from Router Config (Hardcoded for debugging simplicity)
+        const API_KEY = "9sYBjBLjAHKG8g8ZzzsUeBOvtzgQFHmX7oIeygdpzic";
+        const ROUTER_URL = "http://localhost:5455/v1/chat/completions";
+
+        const historyDiv = document.getElementById('chat-history');
+        const statusDiv = document.getElementById('status');
+        const input = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        async function updateSystemConfig() {
+            const indexerModel = document.getElementById('indexer-model').value;
+            const agentModel = document.getElementById('agent-model').value;
+            const taskModel = document.getElementById('task-model').value;
+            const statusLabel = document.getElementById('config-status');
+
+            try {
+                // Determine Agent URL (Port 5460)
+                const AGENT_URL = "http://localhost:5460/admin/config/models";
+                const resp = await fetch(AGENT_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        "summarization_model": indexerModel,
+                        "agent_model": agentModel,
+                        "task_model": taskModel
+                    })
+                });
+                const data = await resp.json();
+                if (data.ok) {
+                    statusLabel.textContent = `System models updated!`;
+                    statusLabel.style.opacity = 1;
+                    setTimeout(() => statusLabel.style.opacity = 0, 3000);
+                } else {
+                    alert("Update failed: " + JSON.stringify(data));
+                }
+            } catch (e) {
+                alert("Connection error: " + e);
+            }
+        }
+
+        async function sendMessage() {
+            const text = input.value.trim();
+            if (!text) return;
+
+            // UI Updates
+            appendMessage('user', text);
+            input.value = '';
+            input.disabled = true;
+            sendBtn.disabled = true;
+            statusDiv.textContent = "Connecting to Router...";
+
+            const model = document.getElementById('model-select').value;
+            const assistantMsgDiv = appendMessage('assistant', '');
+            assistantMsgDiv.classList.add('typing'); // Add typing indicator
+
+            let fullResponse = "";
+
+            try {
+                // Fetch with Streaming enabled
+                const response = await fetch(ROUTER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${API_KEY}`
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [{ role: "user", content: text }],
+                        stream: true
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP Error ${response.status}: ${errorText}`);
+                }
+
+                // Setup Stream Reader
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+
+                statusDiv.textContent = "Connected. Waiting for token stream...";
+                assistantMsgDiv.classList.remove('typing'); // Remove typing dots once stream starts
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed) continue;
+
+                        if (trimmed.startsWith('data: ')) {
+                            const data = trimmed.slice(6);
+                            if (data === '[DONE]') break;
+                            try {
+                                const json = JSON.parse(data);
+                                // Handle both standard delta and direct agent errors
+                                if (json.error) {
+                                    fullResponse += `\n[Server Error: ${json.error}]`;
+                                } else {
+                                    const content = json.choices[0]?.delta?.content || "";
+                                    fullResponse += content;
+                                }
+                                assistantMsgDiv.textContent = fullResponse;
+                                historyDiv.scrollTop = historyDiv.scrollHeight;
+                            } catch (e) {
+                                console.warn("Skipping invalid JSON chunk:", data);
+                            }
+                        } else if (trimmed.startsWith(': keep-alive')) {
+                            statusDiv.textContent = "Agent is Thinking... (Keep-Alive Packet Received)";
+                        }
+                    }
+                }
+                statusDiv.textContent = "Stream Complete.";
+                speak(fullResponse);
+            } catch (err) {
+                statusDiv.textContent = "Error: " + err.message;
+                statusDiv.style.color = "#ff5555";
+                assistantMsgDiv.textContent += `\n[Connection Failed: ${err.message}]`;
+                assistantMsgDiv.classList.remove('typing');
+            } finally {
+                input.disabled = false;
+                sendBtn.disabled = false;
+                input.focus();
+                setTimeout(() => {
+                    if (statusDiv.textContent === "Stream Complete.") statusDiv.textContent = "Ready";
+                    statusDiv.style.color = "#666";
+                }, 3000);
+            }
+        }
+
+        // --- Audio Logic ---
+        const micBtn = document.getElementById('mic-btn');
+        const ttsToggle = document.getElementById('tts-toggle');
+        let recognition;
+
+        if ('webkitSpeechRecognition' in window) {
+            recognition = new webkitSpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onstart = () => {
+                micBtn.style.background = '#dd2222';
+                statusDiv.textContent = "Listening...";
+            };
+            recognition.onend = () => {
+                micBtn.style.background = '#444';
+                if (statusDiv.textContent === "Listening...") statusDiv.textContent = "Ready";
+            };
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                input.value = transcript;
+                setTimeout(sendMessage, 200); // Auto-send after brief pause
+            };
+        } else {
+            micBtn.style.display = 'none';
+            console.warn("Speech Recognition not supported in this browser.");
+        }
+
+        function toggleRecording() {
+            if (!recognition) return alert("Browser does not support Speech API.");
+            try { recognition.start(); } catch (e) { recognition.stop(); }
+        }
+
+        function speak(text) {
+            if (!ttsToggle.checked || !text) return;
+            window.speechSynthesis.cancel();
+            // Remove markdown bold/italic/code markers for smoother speech
+            const cleanText = text.replace(/[*#`_\[\]]/g, '').replace(/https?:\/\/\S+/g, 'link');
+            const u = new SpeechSynthesisUtterance(cleanText);
+            u.rate = 1.1;
+            window.speechSynthesis.speak(u);
+        }
+
+        function appendMessage(role, text) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.textContent = text;
+            historyDiv.appendChild(div);
+            historyDiv.scrollTop = historyDiv.scrollHeight;
+            return div;
+        }
+    </script>
+</body>
+
+</html>

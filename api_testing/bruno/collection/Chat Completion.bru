@@ -1,0 +1,27 @@
+meta {
+  name: Chat Completion
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/v1/chat/completions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auth_token}}
+}
+
+body:json {
+  {
+    "model": "agent:mcp",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello, are you online?"
+      }
+    ]
+  }
+}

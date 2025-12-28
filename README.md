@@ -250,8 +250,7 @@ ai/
 
 - **5455**: Router (main API gateway)
 - **5460**: Agent-runner (tool-enabled agent)
-- **3080**: LibreChat frontend (if installed)
-- **3090**: LibreChat API (if installed)
+- **3080**: LibreChat (frontend + backend, if installed)
 - **27017**: MongoDB (if LibreChat installed)
 - **7700**: Meilisearch (if LibreChat installed)
 - **6379**: Redis (if LibreChat installed)
@@ -333,16 +332,6 @@ curl http://127.0.0.1:5455/v1/chat/completions \
 - Agent file operations are sandboxed to `AGENT_FS_ROOT`
 - MCP tokens are stored in `agent_runner.env` (keep secure)
 - Provider API keys are in `providers.env` (keep secure)
-
-## Documentation
-
-Comprehensive guides for project organization and Git usage are located in the workspace root:
-
-- **[Project Organization Guide](../docs/PROJECT_ORGANIZATION.md)** - How to structure and organize projects
-- **[Git Workflow Guide](../docs/GIT_WORKFLOW.md)** - Complete Git usage guide for all projects
-- **[Quick Reference](../docs/QUICK_REFERENCE.md)** - Quick commands and patterns
-
-These guides apply to all projects in your workspace, not just this one.
 
 ## License
 

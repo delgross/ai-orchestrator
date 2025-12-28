@@ -6,7 +6,7 @@ set -e
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/agent_runner/agent_runner.env"
 VENV_PYTHON="$ROOT_DIR/agent_runner/.venv/bin/python"
-UVICORN_ARGS=(agent_runner:app --host 127.0.0.1 --port 5460)
+UVICORN_ARGS=(agent_runner.main:app --host 127.0.0.1 --port 5460)
 
 load_env() {
   if [ -f "$ENV_FILE" ]; then
@@ -17,10 +17,38 @@ load_env() {
   fi
 }
 
+ensure_path() {
+  # launchd often provides a minimal PATH; make common tool locations available.
+  # Explicitly include the user's NVM and Homebrew paths discovered during investigation.
+  export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+  
+  # Add known specific tool paths for this machine
+  export PATH="/Users/bee/.nvm/versions/node/v22.21.1/bin:$PATH"
+  export PATH="/opt/homebrew/bin:$PATH"
+
+  # Fallback for dynamic NVM discovery
+  if ! command -v npx >/dev/null 2>&1; then
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    if [ -d "$nvm_dir/versions/node" ]; then
+      local newest_npx
+      newest_npx="$(ls -1d "$nvm_dir"/versions/node/*/bin/npx 2>/dev/null | sort -V | tail -n 1 || true)"
+      if [ -n "$newest_npx" ] && [ -x "$newest_npx" ]; then
+        export PATH="$(dirname "$newest_npx"):$PATH"
+      fi
+    fi
+  fi
+}
+
 start_app() {
-  cd "$ROOT_DIR/agent_runner"
+  cd "$ROOT_DIR"
   load_env
-  exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}"
+  ensure_path
+  # Auto-reload in development (set DEV_MODE=1 to enable)
+  if [ "${DEV_MODE:-0}" = "1" ]; then
+    exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}" --reload
+  else
+    exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}"
+  fi
 }
 
 case "${1:-start}" in
@@ -36,8 +64,9 @@ case "${1:-start}" in
     ;;
   *)
     # passthrough args to uvicorn
-    cd "$ROOT_DIR/agent_runner"
+    cd "$ROOT_DIR"
     load_env
+    ensure_path
     exec "$VENV_PYTHON" -m uvicorn "$@"
     ;;
 esac

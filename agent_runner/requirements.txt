@@ -1,0 +1,29 @@
+# Agent Runner Requirements
+# Core dependencies for the agent-runner service
+
+# Web framework and HTTP client
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+httpx>=0.25.0
+
+# Configuration
+pyyaml>=6.0
+
+# Optional but recommended
+websockets>=12.0  # For WebSocket MCP server support
+psutil>=5.9.0  # For performance monitoring (optional but recommended)
+
+# Standard library modules used (no install needed):
+# - asyncio
+# - datetime
+# - json
+# - os
+# - shlex
+# - shutil
+# - time
+# - pathlib
+# - typing
+# - enum
+# - logging
+# - dataclasses
+

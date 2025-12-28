@@ -30,7 +30,7 @@ services:
     volumes:
       - meilisearch_data:/meili_data
     environment:
-      - MEILI_MASTER_KEY=your_master_key_change_this
+      - MEILI_MASTER_KEY=ac28743ede6e7114d89983481f81f71860bbb8635b1538f259eeb2a96dc2fd5e
       - MEILI_ENV=development
     networks:
       - librechat-network
@@ -57,7 +57,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # LibreChat API
+  # LibreChat (runs both frontend and backend)
   api:
     image: ghcr.io/danny-avila/librechat:latest
     container_name: librechat-api
@@ -73,13 +73,17 @@ services:
       - "3080:3080"
     volumes:
       - librechat_data:/app/librechat_data
+      - librechat_config:/app/config
     entrypoint: >
       sh -c "
-        if [ -f /app/librechat_data/librechat.yaml ]; then
+        if [ -f /app/config/librechat.yaml ]; then
+          rm -rf /app/librechat.yaml 2>/dev/null || true;
+          cp /app/config/librechat.yaml /app/librechat.yaml;
+        elif [ -f /app/librechat_data/librechat.yaml ]; then
           rm -rf /app/librechat.yaml 2>/dev/null || true;
           cp /app/librechat_data/librechat.yaml /app/librechat.yaml;
         fi &&
-        exec npm run backend
+        exec npm start
       "
     environment:
       # Database
@@ -90,7 +94,7 @@ services:
       
       # Meilisearch
       - MEILI_HOST=http://meilisearch:7700
-      - MEILI_MASTER_KEY=your_master_key_change_this
+      - MEILI_MASTER_KEY=ac28743ede6e7114d89983481f81f71860bbb8635b1538f259eeb2a96dc2fd5e
       
       # App settings
       - NODE_ENV=production
@@ -98,8 +102,8 @@ services:
       - DOMAIN_SERVER=http://localhost:3080
       
       # Security (CHANGE THESE!)
-      - JWT_SECRET=your_jwt_secret_change_this_to_random_string
-      - JWT_REFRESH_SECRET=your_refresh_secret_change_this_to_random_string
+      - JWT_SECRET=dc537909a6ad8b1525c4d7461baf7c648ff6795ed16859daa23f42fa8efb5159
+      - JWT_REFRESH_SECRET=95066b31ad3ad1695692f62475d5042b7e15dc1d5fc0b312870e67d0aeb92cfe
       - JWT_REFRESH_EXPIRATION=30d
       - JWT_EXPIRATION=15m
       

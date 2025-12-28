@@ -1,0 +1,32 @@
+Farm Network Topology Diagram:
+
+1. **Starlink Internet**: 
+   - Provides WAN connection
+
+2. **Omada TP-Link Router**: 
+   - Sits behind Starlink router
+   - Treats Starlink as the WAN
+   - No VLANs configured
+
+3. **TP-Link Mesh WiFi System**: 
+   - Covers approximately 15 acres
+
+4. **Fiber Connection**: 
+   - Upcoming installation to two outbuildings
+
+5. **IoT Devices**:
+   - **Yolink Devices**: Various IoT devices
+   - **Zigbee Devices**: Various devices
+   - **Z-Wave Device**: Single device
+
+6. **Reolink Cameras**: 
+   - Number of cameras connected to the network
+
+7. **VPS**: 
+   - Runs Ubuntu (version unknown)
+
+8. **Seedbox**:
+   - **Provider**: Seedbox.cc
+   - Access methods include HTTP, FTP, and SSH.
+
+*Note*: This is a textual representation. A visual diagram would typically include connecting lines between these components to represent the physical and logical connections. You may wish to use a diagramming tool to create a visual representation based on this structure.

@@ -21,5 +21,11 @@ if [ -f "$PROJECT_ROOT/providers.env" ]; then
 fi
 
 # Use the venv from the project root
-exec "$PROJECT_ROOT/.venv/bin/python3" -m uvicorn router.router:app \
-  --host 127.0.0.1 --port 5455 --log-level info
+# Auto-reload in development (set DEV_MODE=1 to enable)
+if [ "${DEV_MODE:-0}" = "1" ]; then
+  exec "$PROJECT_ROOT/.venv/bin/python3" -m uvicorn router.router:app \
+    --host 127.0.0.1 --port 5455 --log-level info --reload
+else
+  exec "$PROJECT_ROOT/.venv/bin/python3" -m uvicorn router.router:app \
+    --host 127.0.0.1 --port 5455 --log-level info
+fi
