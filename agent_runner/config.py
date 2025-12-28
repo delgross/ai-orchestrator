@@ -8,8 +8,8 @@ from agent_runner.state import AgentState
 
 logger = logging.getLogger("agent_runner")
 
-def load_mcp_servers(state: AgentState) -> None:
-    """Load MCP servers from manifests and config."""
+async def load_mcp_servers(state: AgentState) -> None:
+    """Load MCP servers from manifests and config and sync to memory."""
     state.mcp_servers.clear()
     
     # 1. Load from manifest files
@@ -48,6 +48,32 @@ def load_mcp_servers(state: AgentState) -> None:
                         state.mcp_servers[name] = cfg
         except Exception as e:
             logger.error(f"Failed to load config.yaml: {e}")
+
+    # 3. Auto-Sync to Project Memory
+    # This ensures the database always has the latest server list for RAG/Tools
+    if "project-memory" in state.mcp_servers:
+        from agent_runner.tools.mcp import tool_mcp_proxy
+        logger.info("Syncing MCP server definitions to Project Memory...")
+        
+        for name, cfg in state.mcp_servers.items():
+            try:
+                # Basic heuristic for github/info (can be improved later)
+                github_url = "https://github.com/modelcontextprotocol/servers"
+                if "args" in cfg:
+                    # Try to find a package name in args
+                    for arg in cfg.get("args", []):
+                        if isinstance(arg, str) and arg.startswith("@") and "/" in arg:
+                            github_url = f"https://www.npmjs.com/package/{arg}"
+                            break
+                            
+                await tool_mcp_proxy(state, "project-memory", "store_mcp_intel", {
+                    "name": name,
+                    "github_url": github_url,
+                    "newsletter": "Auto-Synced",
+                    "similar_servers": []
+                }, bypass_circuit_breaker=True)
+            except Exception as e:
+                logger.warning(f"Failed to sync MCP server '{name}' to memory: {e}")
 
 def load_agent_runner_limits(state: AgentState) -> None:
     """Load limits and general config from config.yaml."""

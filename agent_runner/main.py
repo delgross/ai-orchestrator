@@ -67,7 +67,7 @@ async def on_startup():
     setup_logger("unified_tracking", log_file="agent_runner.log")
     setup_logger("logging_utils", log_file="agent_runner.log")
     setup_logger("common.circuit_breaker", log_file="agent_runner.log")
-    load_mcp_servers(state)
+    await load_mcp_servers(state)
     load_agent_runner_limits(state)
     
     # Run startup backup for data safety
