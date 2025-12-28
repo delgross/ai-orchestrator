@@ -528,6 +528,7 @@ class AgentEngine:
                 memory_status_msg = f"\nSYSTEM ALERT: Long-term memory retrieval failed (Exception: {str(e)}). Context injection skipped."
 
         # Build the base instructions based on internet availability
+        current_time_str = time.strftime("%Y-%m-%d %H:%M:%S")
         if self.state.internet_available:
             env_instructions = (
                 "CRITICAL: You HAVE constant, real-time access to the internet via your MCP tools. NEVER apologize for not having internet access.\n"

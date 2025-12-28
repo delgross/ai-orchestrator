@@ -310,10 +310,7 @@ async def embeddings(request: Request):
             
     raise HTTPException(status_code=404, detail=f"Provider not found for embedding model: {model}")
 
-            if isinstance(e, HTTPException): raise
-            raise HTTPException(status_code=500, detail=str(e))
-            
-    raise HTTPException(status_code=404, detail=f"Provider not found for embedding model: {model}")
+
 
 # --- Audio API ---
 
