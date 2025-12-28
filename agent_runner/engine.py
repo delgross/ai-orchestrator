@@ -153,6 +153,37 @@ class AgentEngine:
                         "required": ["query"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "ingest_knowledge",
+                    "description": "Store a piece of text into the deep knowledge base (RAG). Use this for permanent business logic, farm specs, or medical protocols.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string", "description": "The content to remember."},
+                            "kb_id": {"type": "string", "description": "Knowledge base ID (default 'default')."},
+                            "source_name": {"type": "string", "description": "Friendly name for the source (e.g. 'Farm Policy 2025')."}
+                        },
+                        "required": ["text"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "ingest_file",
+                    "description": "Take an existing file from the uploads folder and ingest it into the deep knowledge base.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Path to the file (e.g. 'uploads/data.txt')."},
+                            "kb_id": {"type": "string", "description": "Knowledge base ID (default 'default')."}
+                        },
+                        "required": ["path"]
+                    }
+                }
             }
         ]
 
