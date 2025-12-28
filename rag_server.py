@@ -24,6 +24,20 @@ logger = logging.getLogger("rag_server")
 
 app = FastAPI(title="Antigravity RAG Server")
 
+# MiddleWare for performance tracking
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    
+    # Log the request details
+    if request.url.path not in ["/health"]:
+        logger.info(f"API {request.method} {request.url.path} - Completed in {process_time:.4f}s")
+    
+    return response
+
 class IngestRequest(BaseModel):
     content: str
     kb_id: str = "default"
@@ -168,18 +182,23 @@ async def ingest(req: IngestRequest):
         paragraphs = [req.content]
         
     success_count = 0
+    logger.info(f"INGEST: Received {len(req.content)} chars for KB '{req.kb_id}' from file '{req.filename}'")
     for p in paragraphs:
         if await rag_backend.add_chunk(p, req.kb_id, req.filename, req.metadata):
             success_count += 1
             
+    logger.info(f"INGEST COMPLETE: Created {success_count} chunks in SurrealDB")
     return {"ok": True, "chunks_ingested": success_count}
 
 @app.post("/query")
 async def query(req: QueryRequest):
+    logger.info(f"QUERY: '{req.query}' [KB: {req.kb_id}, Limit: {req.limit}]")
     results = await rag_backend.search(req.query, req.kb_id, req.limit)
     
     # Format response for the Router
     context_text = "\n---\n".join([f"Source: {r.get('filename')}\n{r.get('content')}" for r in results])
+    
+    logger.info(f"QUERY COMPLETE: Found {len(results)} relevant chunks.")
     
     return {
         "ok": True,
