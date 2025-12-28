@@ -16,6 +16,9 @@ SURREAL_LABEL="local.ai.surrealdb"
 ROUTER_PLIST="$HOME/Library/LaunchAgents/${ROUTER_LABEL}.plist"
 AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
 SURREAL_PLIST="$HOME/Library/LaunchAgents/${SURREAL_LABEL}.plist"
+RAG_PORT=5555
+RAG_LABEL="local.ai.rag_server"
+RAG_PLIST="$HOME/Library/LaunchAgents/${RAG_LABEL}.plist"
 SURREAL_BIN="$HOME/.surrealdb/surreal"
 SURREAL_DATA_DIR="$HOME/ai/agent_data/surreal_db"
 
@@ -201,6 +204,22 @@ show_status() {
   else
     echo -e "${RED}✗ Not running${NC}"
   fi
+
+  # RAG-server
+  local rag_status=$(check_rag)
+  IFS='|' read -r rag_port rag_http rag_launchd rag_pid <<< "$rag_status"
+  
+  echo -n "RAG-server (port $RAG_PORT): "
+  if [ "$rag_http" = "true" ]; then
+    echo -e "${GREEN}✓ Running${NC}"
+    if [ -n "$rag_pid" ]; then
+      echo "  PID: $rag_pid"
+    fi
+  elif [ "$rag_port" = "true" ]; then
+    echo -e "${YELLOW}⚠ Port in use but not responding${NC}"
+  else
+    echo -e "${RED}✗ Not running${NC}"
+  fi
   
   echo ""
   
@@ -340,6 +359,18 @@ stop_surreal() {
   fi
 }
 
+# Stop RAG-server
+stop_rag() {
+  local rag_status=$(check_rag)
+  IFS='|' read -r rag_port rag_http rag_launchd rag_pid <<< "$rag_status"
+  
+  if [ -n "$rag_pid" ]; then
+    echo "Stopping RAG-server (PID: $rag_pid)..."
+    kill "$rag_pid" 2>/dev/null || true
+    sleep 1
+  fi
+}
+
 # Start all services
 start_all() {
   echo -e "${BLUE}Starting AI Orchestrator services...${NC}\n"
@@ -381,6 +412,7 @@ stop_all() {
   echo -e "${BLUE}Stopping AI Orchestrator services...${NC}\n"
   stop_router
   stop_agent
+  stop_rag
   stop_surreal
   echo ""
   sleep 1
@@ -427,6 +459,13 @@ ensure_running() {
     start_agent
   else
     echo -e "${GREEN}Agent-runner already running${NC}"
+  fi
+
+  if [ "$rag_http" != "true" ]; then
+    echo "RAG-server not running, starting..."
+    start_rag
+  else
+    echo -e "${GREEN}RAG-server already running${NC}"
   fi
   
   echo ""
