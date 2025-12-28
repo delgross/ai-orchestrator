@@ -135,19 +135,13 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     
                     # If text content is low but we have images, trigger OCR
                     if len(full_text) < 500 and scanned_images:
-                        logger.warning(f"PDF {file_path.name} appears to be scanned ({len(scanned_images)} images). Triggering Vision OCR (Subset)...")
-                        
-                        # Selection Strategy: First 3 pages (Title/Intro), Last 2 pages (Index), and 3 random middle
-                        # to get a good gist without burning 100 calls.
-                        # Actually, let's do First 5 + Last 2.
-                        selected_indices = [0, 1, 2, 3, 4, len(scanned_images)-1, len(scanned_images)-2]
-                        # Filter valid
-                        selected_indices = sorted(list(set([k for k in selected_indices if 0 <= k < len(scanned_images)])))
+                        logger.warning(f"PDF {file_path.name} appears to be scanned ({len(scanned_images)} images). Triggering Full Vision OCR...")
                         
                         ocr_text = []
-                        for idx in selected_indices:
-                            page_num, img = scanned_images[idx]
-                            logger.info(f"OCR: Processing Page {page_num} Image {img.name}...")
+                        total_images = len(scanned_images)
+                        
+                        for idx, (page_num, img) in enumerate(scanned_images):
+                            logger.info(f"OCR: Processing Page {page_num}/{total_images} (Image {img.name})...")
                             
                             try:
                                 img_b64 = base64.b64encode(img.data).decode('utf-8')
