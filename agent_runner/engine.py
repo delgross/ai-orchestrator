@@ -684,46 +684,70 @@ class AgentEngine:
                 r = await client.post(rag_url, json=payload, timeout=25.0)
                 if r.status_code == 200:
                     data = r.json()
-                    answer = data.get("answer", "")
-                    if not answer:
-                        return {"ok": True, "results": [], "message": "No relevant documents found for this query."}
-                    return {"ok": True, "context_found": answer}
+                    # Return both the concatenated text AND the raw chunks for citation building
+                    return {
+                        "ok": True, 
+                        "context_found": data.get("answer", ""), 
+                        "chunks": data.get("context", [])
+                    }
                 else:
                     return {"ok": False, "error": f"RAG server returned {r.status_code}"}
         except Exception as e:
             return {"ok": False, "error": f"RAG connection failed: {str(e)}"}
 
     async def tool_unified_search(self, state: AgentState, query: str) -> Dict[str, Any]:
-        """Check both Facts and RAG in one go."""
-        # 1. Start both searches in parallel
-        from agent_runner.tools.mcp import tool_mcp_proxy
+        """Check both Facts and RAG in one go with smart KB routing."""
+        # 1. SMART KB DISPATCHER (Low Hanging Fruit)
+        # Detect if we should search specific Knowledge Bases
+        target_kb = "default"
+        q_lower = query.lower()
+        if any(w in q_lower for w in ["starlink", "router", "noc", "wan", "lan", "ip"]):
+            target_kb = "farm-noc"
+        elif any(w in q_lower for w in ["medical", "osu", "clinic", "health"]):
+            target_kb = "osu-med"
         
-        # We call the memory-server for facts
+        # 2. Start both searches in parallel
+        from agent_runner.tools.mcp import tool_mcp_proxy
         fact_task = asyncio.create_task(tool_mcp_proxy(state, "project-memory", "semantic_search", {"query": query}))
-        rag_task = asyncio.create_task(self.tool_knowledge_search(state, query))
+        rag_task = asyncio.create_task(self.tool_knowledge_search(state, query, kb_id=target_kb))
         
         results = await asyncio.gather(fact_task, rag_task, return_exceptions=True)
         
         fact_res = results[0] if not isinstance(results[0], Exception) else {"ok": False}
         rag_res = results[1] if not isinstance(results[1], Exception) else {"ok": False}
         
-        combined_context = ""
+        combined_context = f"SEARCH MODE: Unified (KB: {target_kb})\n\n"
         
         if fact_res.get("ok"):
-            facts = fact_res.get("result", {}).get("facts", [])
-            if facts:
-                combined_context += "### RELEVANT FACTS FOUND:\n"
-                for f in facts[:5]:
-                    combined_context += f"- {f.get('entity')} {f.get('relation')} {f.get('target')}\n"
-                combined_context += "\n"
+            # Unwrap MCP response
+            try:
+                res_obj = fact_res.get("result", {})
+                if "content" in res_obj:
+                    # Standard MCP TextContent
+                    facts_data = json.loads(res_obj["content"][0]["text"])
+                    facts = facts_data.get("facts", [])
+                else:
+                    facts = res_obj.get("facts", [])
+                
+                if facts:
+                    combined_context += "### [MEMORY DIARY] (Short-term confirmed facts):\n"
+                    # Filter for only high confidence facts in search results
+                    for f in facts[:5]:
+                        if f.get("confidence", 1.0) > 0.4:
+                            combined_context += f"- {f.get('entity')} {f.get('relation')} {f.get('target')} (Confidence: {f.get('confidence', 0.0):.2f})\n"
+                    combined_context += "\n"
+            except: pass
         
         if rag_res.get("ok"):
-            rag_context = rag_res.get("context_found")
-            if rag_context:
-                combined_context += "### DEEP KNOWLEDGE FOUND:\n"
-                combined_context += rag_context
+            chunks = rag_res.get("chunks", [])
+            if chunks:
+                combined_context += f"### [DEEP KNOWLEDGE] (Verified documents from KB: {target_kb}):\n"
+                for i, c in enumerate(chunks):
+                    fname = c.get("filename", "Unknown Source")
+                    quality = c.get("quality_score", 0.0)
+                    combined_context += f"\n[SOURCE {i+1}: {fname}] (QoI: {quality:.2f})\n{c.get('content')}\n"
                 
-        if not combined_context:
+        if len(combined_context) < 50:
             return {"ok": True, "message": "No relevant info found in facts or documents."}
             
         return {"ok": True, "search_results": combined_context}
