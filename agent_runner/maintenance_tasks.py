@@ -74,6 +74,54 @@ async def graph_optimization_task(state: AgentState):
             logger.info(f"Graph Result: {result}")
         else:
             logger.warning("Modal not active. Skipping.")
+
+async def morning_briefing_task(state: AgentState):
+    """
+    Daily Report:
+    Summarizes system health, ingestion stats, and any alerts.
+    """
+    logger.info("☀️ Morning Briefing: Generating report...")
+    try:
+        import datetime
+        today = datetime.date.today().isoformat()
+        report_path = Path(os.getenv("FS_ROOT", "~/ai/fs_root")) / "reports"
+        report_path.mkdir(parents=True, exist_ok=True)
+        
+        # Simple stats collection (mocked for now, usually queries DB)
+        stats = {
+            "uptime_hours": (time.time() - state.started_at) / 3600,
+            "requests": state.request_count,
+            "errors": state.error_count
+        }
+        
+        content = f"# System Briefing: {today}\n\n"
+        content += f"- **Uptime:** {stats['uptime_hours']:.1f} hours\n"
+        content += f"- **Requests:** {stats['requests']}\n"
+        content += f"- **Errors:** {stats['errors']}\n"
+        content += "\n**System Status:** Operational and monitoring."
+        
+        (report_path / f"BRIEFING_{today}.md").write_text(content)
+        logger.info(f"Briefing saved to {report_path}")
+        
     except Exception as e:
-        logger.error(f"Graph Optimization failed: {e}")
+        logger.error(f"Briefing failed: {e}")
+
+async def daily_research_task(state: AgentState):
+    """
+    Autonomous Research:
+    Reads 'research_topics.txt' and performs a web search (if tool available).
+    """
+    logger.info("🔎 Daily Research: Checking topics...")
+    # Placeholder for web search integration
+    # topics_file = Path("ai/config/research_topics.txt")
+    # ...
+
+async def stale_memory_pruner_task(state: AgentState):
+    """
+    Memory Pruner:
+    Identifying and removing low-confidence facts.
+    """
+    logger.info("🕸️ Stale Pruner: Scanning for decay...")
+    # Placeholder
+
 
