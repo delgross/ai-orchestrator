@@ -49,26 +49,28 @@ def setup_logger(
     # Get or create logger
     logger = logging.getLogger(name)
     
-    # Only configure if not already configured
-    if not logger.handlers:
-        # File handler with rotation
-        file_handler = RotatingFileHandler(
-            log_file,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8"
-        )
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-        )
-        logger.addHandler(file_handler)
-        
-        # Console handler for development
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-        )
-        logger.addHandler(console_handler)
+    # Always reconfigure to ensure consistency (e.g. Uvicorn override/reload)
+    if logger.handlers:
+        logger.handlers.clear()
+
+    # File handler with rotation
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding="utf-8"
+    )
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    )
+    logger.addHandler(file_handler)
+    
+    # Console handler for development
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    )
+    logger.addHandler(console_handler)
     
     # Configure Third-Party Noise
     # This ensures that even if other modules behave badly, we squash the noise

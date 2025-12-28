@@ -134,6 +134,10 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     logger.warning(f"PDF parse failed for {file_path.name}: {e}")
                     continue
 
+            # SANITIZATION: Remove surrogates and non-printable chars that crash JSON/UTF-8
+            if content:
+                content = content.encode('utf-8', 'ignore').decode('utf-8')
+
             # 2. THE DIGITAL LIBRARIAN (Autonomous Classification)
             # Before we ingest, we ask the LLM to categorize the file
             kb_id = "default"
