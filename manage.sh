@@ -302,8 +302,8 @@ start_agent() {
 # Start RAG-server
 start_rag() {
   echo "Starting RAG-server..."
-  # For now, start directly. Plist can be added later via setup_launchd.
-  nohup python3 rag_server.py > "$ROOT_DIR/logs/rag.log" 2>&1 &
+  # Use the shared project venv
+  nohup "$ROOT_DIR/.venv/bin/python3" rag_server.py > "$ROOT_DIR/logs/rag.log" 2>&1 &
   sleep 2
 }
 
