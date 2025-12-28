@@ -205,14 +205,14 @@ if has_modal:
             "confidence": 0.89
         }
 
-@app.local_entrypoint()
-def test_main():
-    print("🚀 Triggering Cloud Test from CLI...")
-    nodes = [1, 2, 3, 4, 5]
-    edges = [(1,2), (2,3), (3,1), (4,5)]
-    print("   Evaluating Graph...")
-    res = graph_community_detection.remote(nodes, edges)
-    print(f"✅ Result: {res}")
+    @app.local_entrypoint()
+    def test_main():
+        print("🚀 Triggering Cloud Test from CLI...")
+        nodes = [1, 2, 3, 4, 5]
+        edges = [(1,2), (2,3), (3,1), (4,5)]
+        print("   Evaluating Graph...")
+        res = graph_community_detection.remote(nodes, edges)
+        print(f"✅ Result: {res}")
 
 
 
