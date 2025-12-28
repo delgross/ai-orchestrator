@@ -564,9 +564,15 @@ async def graph_snapshot(limit: int = 1000):
             
             # Format for Force Graph
             nodes = []
+            if entities:
+                logger.info(f"SAMPLE ENTITY ({type(entities[0])}): {entities[0]}")
+
             for e in entities:
-                # Surreal ID is "entity:name", we just want the ID part or the full thing
-                # let's use the full ID as the unique key
+                if isinstance(e, str):
+                    # Fallback for ID-only return
+                    nodes.append({"id": e, "label": e, "group": "Unknown", "val": 1})
+                    continue
+                
                 nodes.append({
                     "id": e.get("id"),
                     "label": e.get("name", "Unknown"),
