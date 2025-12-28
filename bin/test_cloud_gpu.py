@@ -5,7 +5,7 @@ import os
 # Add parent dir to path so we can import agent_runner
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent_runner.modal_tasks import graph_community_detection, has_modal
+from agent_runner.modal_tasks import graph_community_detection, has_modal, app
 
 def test_gpu_connection():
     print("🔌 Testing Cloud GPU Connection (Modal)...")
@@ -23,8 +23,9 @@ def test_gpu_connection():
 
     print("   Sending data to Cloud...")
     try:
-        # call .remote() to trigger cloud execution
-        result = graph_community_detection.remote(nodes, edges)
+        # call .remote() inside app context for ephemeral run
+        with app.run():
+            result = graph_community_detection.remote(nodes, edges)
         
         print("\n✅ SUCCESS: Received response from Cloud!")
         print(f"   Result: {result}")
