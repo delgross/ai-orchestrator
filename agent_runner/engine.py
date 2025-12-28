@@ -738,16 +738,23 @@ class AgentEngine:
         target_kbs = ["default"]
         q_lower = query.lower()
         
+        # CIRCUIT BREAKER: Fast health check before committing to complex parallel search
         try:
             async with httpx.AsyncClient() as client:
-                stats_res = await client.get("http://127.0.0.1:5555/stats", timeout=5.0)
-                if stats_res.status_code == 200:
+                # We check stats as it doubles as a health & discovery check
+                stats_res = await client.get("http://127.0.0.1:5555/stats", timeout=2.0)
+                if stats_res.status_code != 200:
+                    logger.warning("UNIFIED SEARCH: RAG Circuit Breaker TRIPPED. Falling back to MEMORY ONLY.")
+                    target_kbs = [] # Disable RAG for this query
+                else:
                     available_kbs = stats_res.json().get("knowledge_bases", {}).keys()
                     # Detect if query keywords match any known KB names
                     for kb in available_kbs:
                         if kb.replace("farm-", "").replace("osu-", "") in q_lower:
                             target_kbs.append(kb)
-        except: pass
+        except Exception as e:
+            logger.warning(f"UNIFIED SEARCH: RAG Connection Failed ({e}). Falling back to MEMORY ONLY.")
+            target_kbs = []
 
         # Hardcoded semantic fallbacks for common aliases
         domains = {

@@ -432,6 +432,14 @@ start_all() {
   else
     start_agent
   fi
+
+  local rag_status=$(check_rag)
+  IFS='|' read -r rag_port rag_http rag_launchd rag_pid <<< "$rag_status"
+  if [ "$rag_http" = "true" ]; then
+    echo -e "${GREEN}RAG Server already running${NC}"
+  else
+    start_rag
+  fi
   
   echo ""
   sleep 2
@@ -548,6 +556,9 @@ Commands:
   restart-agent Restart only the agent-runner
   start-surreal Start only SurrealDB
   stop-surreal  Stop only SurrealDB
+  start-rag     Start only RAG Server
+  stop-rag      Stop only RAG Server
+  restart-rag   Restart only RAG Server
   sync          Sync all code changes to Git
   backup        Trigger a manual memory backup
 EOF
@@ -588,6 +599,19 @@ case "${1:-status}" in
     ;;
   start-surreal) start_surreal; show_status ;;
   stop-surreal) stop_surreal; show_status ;;
+  start-rag) start_rag; show_status ;;
+  stop-rag) stop_rag; show_status ;;
+  restart-rag)
+    if job_loaded "$RAG_LABEL"; then
+      echo "Restarting RAG via launchd..."
+      launchctl kickstart -k "$DOMAIN/$RAG_LABEL" 2>/dev/null || true
+      sleep 2
+    else
+      echo "RAG not loaded in launchd, starting..."
+      start_rag
+    fi
+    show_status
+    ;;
   sync) sync_git ;;
   backup) run_backup ;;
   -h|--help|help) usage ;;

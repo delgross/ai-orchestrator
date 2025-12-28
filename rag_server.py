@@ -45,6 +45,7 @@ class IngestRequest(BaseModel):
     metadata: Dict[str, Any] = {}
     window_size: int = 1000
     overlap: int = 200
+    prepend_text: str = ""
 
 class QueryRequest(BaseModel):
     query: str
@@ -63,6 +64,15 @@ class RAGServer:
         }
         self.sql_url = f"{SURREAL_URL.rstrip('/')}/sql"
         self._initialized = False
+        # Performance Telemetry
+        self.metrics = {
+            "total_searches": 0,
+            "total_ingests": 0,
+            "avg_search_time": 0.0,
+            "avg_ingest_time": 0.0,
+            "last_ingest_at": None,
+            "errors": 0
+        }
 
     async def ensure_db(self):
         if self._initialized: return
@@ -106,6 +116,7 @@ class RAGServer:
         return [0.0] * 1024
 
     async def add_chunk(self, content: str, kb_id: str, filename: Optional[str] = None, metadata: Dict[str, Any] = {}):
+        start_time = time.time()
         await self.ensure_db()
         embedding = await self.get_embedding(content)
         
@@ -136,12 +147,21 @@ class RAGServer:
         try:
             r = await self.client.post(self.sql_url, content=prefix + query, auth=self.auth, headers=self.headers)
             r.raise_for_status()
+            
+            # Update metrics
+            elapsed = time.time() - start_time
+            self.metrics["total_ingests"] += 1
+            self.metrics["avg_ingest_time"] = (self.metrics["avg_ingest_time"] * 0.9) + (elapsed * 0.1)
+            self.metrics["last_ingest_at"] = time.time()
+            
             return True
         except Exception as e:
+            self.metrics["errors"] += 1
             logger.error(f"Failed to store chunk: {e}")
             return False
 
     async def search(self, query_text: str, kb_id: str, limit: int = 5):
+        start_time = time.time()
         await self.ensure_db()
         embedding = await self.get_embedding(query_text)
         
@@ -195,8 +215,13 @@ class RAGServer:
                     row.pop("embedding", None)
                     cleaned.append(row)
                 
+                # Update metrics
+                elapsed = time.time() - start_time
+                self.metrics["total_searches"] += 1
+                self.metrics["avg_search_time"] = (self.metrics["avg_search_time"] * 0.9) + (elapsed * 0.1)
+
                 if scores:
-                    logger.info(f"QoI AUDIT: Best Quality: {max([r.get('quality_score', 0) for r in data]):.4f}, Avg Dist: {sum(scores)/len(scores):.4f}")
+                    logger.info(f"QoI AUDIT: Best Quality: {max([r.get('quality_score', 0) for r in data]):.4f}, Avg Dist: {sum(scores)/len(scores):.4f}, Time: {elapsed:.4f}s")
                 
                 return cleaned
             
@@ -221,6 +246,7 @@ class RAGServer:
 
             return []
         except Exception as e:
+            self.metrics["errors"] += 1
             logger.error(f"Search failed: {e}")
             return []
 
@@ -250,7 +276,9 @@ async def ingest(req: IngestRequest):
     success_count = 0
     logger.info(f"INGEST: Received {len(req.content)} chars. Accuracy-friendly chunking produced {len(chunks)} overlapping windows.")
     for p in chunks:
-        if await rag_backend.add_chunk(p, req.kb_id, req.filename, req.metadata):
+        # Global Context Injection: Prepend the summary if provided
+        final_content = f"{req.prepend_text}{p}"
+        if await rag_backend.add_chunk(final_content, req.kb_id, req.filename, req.metadata):
             success_count += 1
             
     logger.info(f"INGEST COMPLETE: {success_count} chunks stored in SurrealDB.")
@@ -290,7 +318,9 @@ async def stats():
             return {
                 "total_chunks": total,
                 "knowledge_bases": {d.get("kb_id"): d.get("count") for d in data},
-                "embedding_model": EMBED_MODEL
+                "embedding_model": EMBED_MODEL,
+                "performance": rag_backend.metrics,
+                "status": "online" if total > 0 else "empty"
             }
     except Exception as e:
         logger.error(f"Stats check failed: {e}")
