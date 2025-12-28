@@ -393,3 +393,21 @@ async def stop_agent_runner():
     """Stop the Agent Runner process."""
     # Proxy to agent runner's own stop endpoint
     return await _proxy_agent_runner("POST", "/system/process/stop")
+
+
+@router.post("/system/process/agent/restart")
+async def restart_agent_runner():
+    """Restart the Agent Runner process (Stop -> Start)."""
+    import asyncio
+    
+    # 1. Stop
+    try:
+        await _proxy_agent_runner("POST", "/system/process/stop")
+    except:
+        pass # Might be down already
+        
+    # 2. Wait
+    await asyncio.sleep(2.0)
+    
+    # 3. Start
+    return await start_agent_runner()

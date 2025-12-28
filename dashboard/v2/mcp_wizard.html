@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>MCP Smart Importer</title>
+    <style>
+        :root {
+            --bg: #0b1020;
+            --panel: #141a2a;
+            --border: #29334d;
+            --text: #f5f7ff;
+            --accent: #4f8bff;
+            --success: #4ade80;
+            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, sans-serif;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            margin-top: 0;
+            color: var(--accent);
+        }
+
+        .container {
+            flex: 1;
+            display: flex;
+            gap: 2rem;
+        }
+
+        .editor-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        textarea {
+            flex: 1;
+            background: var(--panel);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 1rem;
+            font-family: var(--mono);
+            font-size: 14px;
+            line-height: 1.5;
+            resize: none;
+            border-radius: 8px;
+        }
+
+        textarea:focus {
+            outline: 2px solid var(--accent);
+        }
+
+        .controls {
+            margin-top: 1rem;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: wait;
+        }
+
+        .status-pane {
+            width: 300px;
+            background: rgba(0, 0, 0, 0.2);
+            border-left: 1px solid var(--border);
+            padding-left: 1rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #log {
+            font-family: var(--mono);
+            font-size: 12px;
+            color: #aaa;
+            white-space: pre-wrap;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            background: #333;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>⚡ Smart MCP Importer</h1>
+    <p style="color: #889;">Paste <i>anything</i> here—JSON, YAML, a GitHub URL, or instructions. The Agent will figure
+        it out.</p>
+
+    <div class="container">
+        <div class="editor-pane">
+            <textarea id="inputConfig" placeholder="// Example:
+// Add the 'weather' server using npx.
+// Or paste a JSON snippet from a README..."></textarea>
+
+            <div class="controls">
+                <button id="btnProcess" onclick="processConfig()">🤖 Process & Add Server</button>
+                <span id="statusText" style="color: var(--success); opacity: 0; transition: opacity 0.5s;">Done!</span>
+            </div>
+        </div>
+
+        <div class="status-pane">
+            <h3>Agent Log</h3>
+            <div id="log">Waiting for input...</div>
+        </div>
+    </div>
+
+    <script>
+        async function processConfig() {
+            const input = document.getElementById('inputConfig').value;
+            if (!input.trim()) return;
+
+            const btn = document.getElementById('btnProcess');
+            const log = document.getElementById('log');
+            const status = document.getElementById('statusText');
+
+            btn.disabled = true;
+            btn.innerText = "Processing...";
+            log.innerText = "🚀 Sending to Agent...";
+
+            try {
+                // We act as a user asking the Agent to do this via the Router
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: "agent:mcp", // Use the MCP-capable agent
+                        messages: [
+                            {
+                                role: "system",
+                                content: "You are an intelligent System Administrator. The user will provide an MCP configuration, a JSON snippet, OR a GitHub URL. \n\nIF URL PROVIDED: You MUST use your available MCP web tools (e.g. Firecrawl, Exa, Tavily) to read the content/README of the repository. Only use `curl` as a last resort. \n\nTHEN: \n1. Parse the installation instructions (look for npx/docker commands). \n2. Edit 'ai/config/config.yaml' to append the new server (mcp_servers section). \n3. Ensure valid YAML syntax. \n4. Run './manage.sh restart-agent' to apply. \n5. Reply with a summary."
+                            },
+                            { role: "user", content: "Please add this MCP configuration:\n\n" + input }
+                        ]
+                    })
+                });
+
+                const data = await response.json();
+                const reply = data.choices[0].message.content;
+
+                log.innerText += "\n\n✅ Agent Reply:\n" + reply;
+                status.style.opacity = 1;
+
+            } catch (e) {
+                log.innerText += "\n\n❌ Error:\n" + e.message;
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Process & Add Server";
+            }
+        }
+    </script>
+</body>
+
+</html>

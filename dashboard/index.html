@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <title>AI Orchestrator Dashboard</title>
@@ -7,23 +8,24 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='grad' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' style='stop-color:%234f8bff;stop-opacity:1' /><stop offset='100%' style='stop-color:%234ade80;stop-opacity:1' /></linearGradient></defs><circle cx='50' cy='50' r='45' fill='url(%23grad)'/><path d='M30 50 L45 65 L70 35' stroke='%230b1020' stroke-width='6' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='grad' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' style='stop-color:%234f8bff;stop-opacity:1' /><stop offset='100%' style='stop-color:%234ade80;stop-opacity:1' /></linearGradient></defs><circle cx='50' cy='50' r='45' fill='url(%23grad)'/><path d='M30 50 L45 65 L70 35' stroke='%230b1020' stroke-width='6' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
   <style>
     :root {
       color-scheme: dark light;
-      
+
       /* Base Colors - Improved palette */
       --bg: #0b1020;
       --panel: #141a2a;
       --border: #29334d;
       --text: #f5f7ff;
       --muted: #9aa3c2;
-      
+
       /* Primary Accent - Consistent blue */
       --accent: #4f8bff;
       --accent-soft: rgba(79, 139, 255, 0.12);
       --accent-hover: rgba(79, 139, 255, 0.2);
-      
+
       /* Semantic Status Colors - Consistent pairs */
       --status-success: #4ade80;
       --status-success-bg: rgba(74, 222, 128, 0.12);
@@ -33,47 +35,53 @@
       --status-warning-bg: rgba(250, 204, 21, 0.12);
       --status-info: #4f8bff;
       --status-info-bg: rgba(79, 139, 255, 0.12);
-      
+
       /* State Pairs - For items that change state */
       --state-active: var(--status-success);
       --state-active-bg: var(--status-success-bg);
       --state-inactive: var(--muted);
       --state-inactive-bg: rgba(154, 163, 194, 0.08);
-      
+
       --state-enabled: var(--status-success);
       --state-enabled-bg: var(--status-success-bg);
       --state-disabled: var(--muted);
       --state-disabled-bg: var(--state-inactive-bg);
-      
+
       --state-online: var(--status-success);
       --state-online-bg: var(--status-success-bg);
       --state-offline: var(--status-error);
       --state-offline-bg: var(--status-error-bg);
-      
+
       --state-healthy: var(--status-success);
       --state-healthy-bg: var(--status-success-bg);
       --state-degraded: var(--status-warning);
       --state-degraded-bg: var(--status-warning-bg);
       --state-down: var(--status-error);
       --state-down-bg: var(--status-error-bg);
-      
+
       /* Legacy aliases for backward compatibility */
       --ok: var(--status-success);
       --error: var(--status-error);
       --warn: var(--status-warning);
-      
+
       /* Typography Scale - Consistent sizes */
-      --font-xs: 0.65rem;    /* 10.4px - Tiny labels, tags */
-      --font-sm: 0.75rem;    /* 12px - Small text, captions */
-      --font-base: 0.85rem;   /* 13.6px - Body text, default */
-      --font-md: 0.95rem;     /* 15.2px - Card titles, emphasis */
-      --font-lg: 1.1rem;      /* 17.6px - Section headers */
-      --font-xl: 1.6rem;      /* 25.6px - Page title */
-      
+      --font-xs: 0.65rem;
+      /* 10.4px - Tiny labels, tags */
+      --font-sm: 0.75rem;
+      /* 12px - Small text, captions */
+      --font-base: 0.85rem;
+      /* 13.6px - Body text, default */
+      --font-md: 0.95rem;
+      /* 15.2px - Card titles, emphasis */
+      --font-lg: 1.1rem;
+      /* 17.6px - Section headers */
+      --font-xl: 1.6rem;
+      /* 25.6px - Page title */
+
       /* Font Families */
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      
+
       /* Spacing Scale */
       --space-xs: 0.25rem;
       --space-sm: 0.5rem;
@@ -146,9 +154,17 @@
       gap: 0.3rem;
     }
 
-    .health-item.error { color: var(--status-error); }
-    .health-item.warn { color: var(--status-warning); }
-    .health-item.ok { color: var(--status-success); }
+    .health-item.error {
+      color: var(--status-error);
+    }
+
+    .health-item.warn {
+      color: var(--status-warning);
+    }
+
+    .health-item.ok {
+      color: var(--status-success);
+    }
 
     /* Tabs */
     .tabs {
@@ -318,13 +334,27 @@
       font-size: var(--font-sm);
       color: var(--muted);
     }
-    
+
     /* Status value classes for consistent state display */
-    .status-success { color: var(--status-success); }
-    .status-error { color: var(--status-error); }
-    .status-warning { color: var(--status-warning); }
-    .status-info { color: var(--status-info); }
-    .status-muted { color: var(--muted); }
+    .status-success {
+      color: var(--status-success);
+    }
+
+    .status-error {
+      color: var(--status-error);
+    }
+
+    .status-warning {
+      color: var(--status-warning);
+    }
+
+    .status-info {
+      color: var(--status-info);
+    }
+
+    .status-muted {
+      color: var(--muted);
+    }
 
     .section-title {
       font-size: var(--font-base);
@@ -433,61 +463,74 @@
       color: var(--error);
       font-size: 0.78rem;
     }
-    
+
     /* Responsive Design */
     @media (max-width: 768px) {
       .layout {
         grid-template-columns: 1fr;
       }
+
       .card-header {
         flex-direction: column;
         align-items: flex-start;
         gap: 0.5rem;
       }
+
       .controls {
         width: 100%;
         flex-wrap: wrap;
       }
+
       .controls input,
       .controls select {
         width: 100%;
         margin-bottom: 0.5rem;
       }
+
       .grid {
         grid-template-columns: 1fr;
       }
+
       .kpi {
         min-width: auto;
       }
+
       h1 {
         font-size: var(--font-lg);
       }
+
       .tab {
         font-size: var(--font-sm);
         padding: 0.4rem 0.6rem;
       }
+
       .tabs {
         overflow-x: auto;
         flex-wrap: nowrap;
       }
     }
-    
+
     @media (max-width: 480px) {
       body {
         padding: 0.75rem;
       }
+
       .card {
         padding: 0.75rem;
       }
+
       .card-title {
         font-size: var(--font-base);
       }
+
       .kpi-label {
         font-size: var(--font-xs);
       }
+
       .kpi-value {
         font-size: var(--font-md);
       }
+
       .tab {
         font-size: var(--font-xs);
         padding: 0.3rem 0.5rem;
@@ -495,6 +538,7 @@
     }
   </style>
 </head>
+
 <body>
   <header style="margin-bottom:1rem;">
     <h1>AI Orchestrator Dashboard</h1>
@@ -521,69 +565,82 @@
   </div>
 
   <div id="overview" class="tab-content active">
-  <div class="layout">
-    <!-- Left: status + config -->
-    <section class="card">
-      <div class="card-header">
-        <div class="card-title">Status &amp; Configuration</div>
-        <div id="status-tag" class="tag">
-          <span class="tag-dot"></span>
-          <span id="status-text">Checking...</span>
+    <div class="layout">
+      <!-- Left: status + config -->
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">Status &amp; Configuration</div>
+          <div id="status-tag" class="tag">
+            <span class="tag-dot"></span>
+            <span id="status-text">Checking...</span>
+          </div>
         </div>
-      </div>
 
-      <div class="controls">
-        <label class="muted" style="font-size:var(--font-sm);">Router base:</label>
-        <input id="router-base" type="text" value="" />
-        <input id="auth-token" type="password" placeholder="Optional ROUTER_AUTH_TOKEN" />
-        <button id="save-auth-token-btn" type="button" title="Save auth token to config.yaml and restart router">Save Token</button>
-        <button id="refresh-btn" type="button">Refresh</button>
-        <!-- Auth token warning banner -->
-        <div id="auth-token-warning" style="display:none; margin-top:0.5rem; padding:0.75rem; background:rgba(250, 204, 21, 0.15); border:1px solid var(--status-warning); border-radius:0.5rem; color:var(--status-warning); font-size:var(--font-sm);">
-          <strong>⚠️ Authentication Required:</strong> Router authentication is enabled but no token is set. Some features may not work. Please enter your auth token above.
+        <div class="controls">
+          <label class="muted" style="font-size:var(--font-sm);">Router base:</label>
+          <input id="router-base" type="text" value="" />
+          <input id="auth-token" type="password" placeholder="Optional ROUTER_AUTH_TOKEN" />
+          <button id="save-auth-token-btn" type="button" title="Save auth token to config.yaml and restart router">Save
+            Token</button>
+          <button id="refresh-btn" type="button">Refresh</button>
+          <!-- Auth token warning banner -->
+          <div id="auth-token-warning"
+            style="display:none; margin-top:0.5rem; padding:0.75rem; background:rgba(250, 204, 21, 0.15); border:1px solid var(--status-warning); border-radius:0.5rem; color:var(--status-warning); font-size:var(--font-sm);">
+            <strong>⚠️ Authentication Required:</strong> Router authentication is enabled but no token is set. Some
+            features may not work. Please enter your auth token above.
+          </div>
+          <button id="reload-btn" type="button" title="POST /admin/reload (requires token if enabled)">Reload
+            providers</button>
+          <button id="clear-cache-btn" type="button" title="POST /admin/cache/clear (requires token if enabled)">Clear
+            cache</button>
+          <button id="start-agent-btn" type="button" title="POST /admin/start-agent (requires token if enabled)"
+            style="display:none;">Start agent</button>
+          <button id="stop-agent-btn" type="button" title="POST /admin/stop-agent (requires token if enabled)"
+            style="display:none;">Stop agent</button>
+          <button id="restart-agent-btn" type="button" title="POST /admin/restart-agent (requires token if enabled)"
+            style="display:none;">Restart agent</button>
+          <button id="restart-router-btn" type="button" title="POST /admin/restart-router (requires token if enabled)"
+            style="display:none;">Restart router</button>
+          <button id="restart-all-btn" type="button" title="POST /admin/restart-all (requires token if enabled)"
+            style="display:none;">Restart all</button>
+          <button id="open-docs-btn" type="button" title="Open router API docs"
+            onclick="window.open(window.location.origin + '/docs', '_blank')">API Docs</button>
         </div>
-          <button id="reload-btn" type="button" title="POST /admin/reload (requires token if enabled)">Reload providers</button>
-          <button id="clear-cache-btn" type="button" title="POST /admin/cache/clear (requires token if enabled)">Clear cache</button>
-          <button id="start-agent-btn" type="button" title="POST /admin/start-agent (requires token if enabled)" style="display:none;">Start agent</button>
-          <button id="stop-agent-btn" type="button" title="POST /admin/stop-agent (requires token if enabled)" style="display:none;">Stop agent</button>
-          <button id="restart-agent-btn" type="button" title="POST /admin/restart-agent (requires token if enabled)" style="display:none;">Restart agent</button>
-          <button id="restart-router-btn" type="button" title="POST /admin/restart-router (requires token if enabled)" style="display:none;">Restart router</button>
-          <button id="restart-all-btn" type="button" title="POST /admin/restart-all (requires token if enabled)" style="display:none;">Restart all</button>
-          <button id="launch-librechat-btn" type="button" title="Open LibreChat in a new tab" onclick="window.open('http://localhost:3080', '_blank')">Launch LibreChat</button>
-          <button id="open-docs-btn" type="button" title="Open router API docs" onclick="window.open(window.location.origin + '/docs', '_blank')">API Docs</button>
-      </div>
 
-      <div class="section-title" style="margin-top:1rem; margin-bottom:0.5rem;">Service Status</div>
-      <div class="grid">
-        <div class="kpi">
-          <div class="kpi-label">Router</div>
-          <div class="kpi-value" id="router-ok">—</div>
-          <div class="kpi-small" id="router-version"></div>
-        </div>
-        <div class="kpi">
+        <div class="section-title" style="margin-top:1rem; margin-bottom:0.5rem;">Service Status</div>
+        <div class="grid">
+          <div class="kpi">
+            <div class="kpi-label">Router</div>
+            <div class="kpi-value" id="router-ok">—</div>
+            <div class="kpi-small" id="router-version"></div>
+          </div>
+          <div class="kpi">
             <div class="kpi-label">Agent-Runner</div>
-          <div class="kpi-value" id="agent-ok">—</div>
-          <div class="kpi-small" id="agent-model"></div>
+            <div class="kpi-value" id="agent-ok">—</div>
+            <div class="kpi-small" id="agent-model"></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Dashboard Health</div>
+            <div class="kpi-value" id="dashboard-health">OK</div>
+            <div class="kpi-small" id="dashboard-details">Connected locally</div>
+          </div>
         </div>
-        <div class="kpi">
-          <div class="kpi-label">Dashboard Health</div>
-          <div class="kpi-value" id="dashboard-health">OK</div>
-          <div class="kpi-small" id="dashboard-details">Connected locally</div>
-        </div>
-      </div>
 
-      <div class="section-title" style="margin-top:1rem; margin-bottom:0.5rem;">Model Configuration</div>
-      <div class="grid">
+        <div class="section-title" style="margin-top:1rem; margin-bottom:0.5rem;">Model Configuration</div>
+        <div class="grid">
           <div class="kpi">
             <div class="kpi-label">MCP/Tool Access</div>
             <div class="kpi-value" id="mcp-toggle-status" style="font-size:var(--font-sm);">Disabled</div>
             <div class="kpi-small" id="mcp-toggle-details">Direct model access (no tools)</div>
-            <label style="margin-top:0.3rem; display:flex; align-items:center; gap:0.5rem; cursor:pointer; padding:0.3rem; border-radius:0.3rem; background:var(--panel); border:1px solid var(--border);">
+            <label
+              style="margin-top:0.3rem; display:flex; align-items:center; gap:0.5rem; cursor:pointer; padding:0.3rem; border-radius:0.3rem; background:var(--panel); border:1px solid var(--border);">
               <input type="checkbox" id="mcp-toggle" style="width:1.2rem; height:1.2rem; cursor:pointer;">
               <span style="font-size:var(--font-sm); color:var(--text);">Enable MCP/Tool Access</span>
             </label>
-            <div class="muted" style="margin-top:0.3rem; font-size:var(--font-xs); padding:0.3rem; background:var(--bg); border-radius:0.3rem;">
-              When enabled, requests route through agent-runner with full tool access (files, MCP servers, memory). When disabled, requests go directly to the model for faster responses.
+            <div class="muted"
+              style="margin-top:0.3rem; font-size:var(--font-xs); padding:0.3rem; background:var(--bg); border-radius:0.3rem;">
+              When enabled, requests route through agent-runner with full tool access (files, MCP servers, memory). When
+              disabled, requests go directly to the model for faster responses.
             </div>
           </div>
           <div class="kpi">
@@ -593,8 +650,8 @@
           </div>
         </div>
 
-      <div class="section-title" style="margin-top:1rem; margin-bottom:0.5rem;">System Health</div>
-      <div class="grid">
+        <div class="section-title" style="margin-top:1rem; margin-bottom:0.5rem;">System Health</div>
+        <div class="grid">
           <div class="kpi">
             <div class="kpi-label">Database Status</div>
             <div class="kpi-value" id="database-status" style="color:var(--muted);">—</div>
@@ -622,19 +679,19 @@
           </div>
         </div>
 
-      <div class="section-title" style="margin-top:1rem; margin-bottom:0.5rem;">Router Configuration</div>
-      <div class="grid">
-        <div class="kpi">
-          <div class="kpi-label">Providers loaded</div>
-          <div class="kpi-value" id="providers-count">—</div>
-          <div class="kpi-small" id="providers-list"></div>
+        <div class="section-title" style="margin-top:1rem; margin-bottom:0.5rem;">Router Configuration</div>
+        <div class="grid">
+          <div class="kpi">
+            <div class="kpi-label">Providers loaded</div>
+            <div class="kpi-value" id="providers-count">—</div>
+            <div class="kpi-small" id="providers-list"></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Auth &amp; Concurrency</div>
+            <div class="kpi-value" id="auth-info">—</div>
+            <div class="kpi-small" id="concurrency-info"></div>
+          </div>
         </div>
-        <div class="kpi">
-          <div class="kpi-label">Auth &amp; Concurrency</div>
-          <div class="kpi-value" id="auth-info">—</div>
-          <div class="kpi-small" id="concurrency-info"></div>
-        </div>
-      </div>
 
       </section>
     </div>
@@ -646,7 +703,8 @@
         <div class="card-header">
           <div class="card-title">Model-to-Service Mapping</div>
         </div>
-        <div class="muted" style="margin-bottom:1rem;">Shows which models are configured for each service in the system.</div>
+        <div class="muted" style="margin-bottom:1rem;">Shows which models are configured for each service in the system.
+        </div>
         <div id="model-services-content" style="font-size:var(--font-base); line-height:1.8;">
           <div class="muted">Loading model service mappings...</div>
         </div>
@@ -663,7 +721,8 @@
         <div id="mcp-badges" style="margin-bottom:1rem;"></div>
         <div id="circuit-breaker-status" style="margin-bottom:1rem; font-size:var(--font-base);"></div>
         <div id="tool-usage-breakdown" style="font-size:var(--font-base); line-height:1.6; margin-bottom:1rem;">—</div>
-        <div id="tool-performance-chart" style="min-height:200px; padding:1rem; background:rgba(15,23,42,0.5); border-radius:0.5rem; border:1px solid var(--border);">
+        <div id="tool-performance-chart"
+          style="min-height:200px; padding:1rem; background:rgba(15,23,42,0.5); border-radius:0.5rem; border:1px solid var(--border);">
           <div class="muted">Tool performance visualization will appear here after tool usage.</div>
         </div>
       </section>
@@ -676,7 +735,8 @@
           <div class="muted" style="padding:0.5rem; text-align:center;">Loading...</div>
         </div>
         <div class="muted" style="margin-top:0.5rem; font-size:var(--font-sm);">
-          These servers are disabled due to circuit breaker failures. They will automatically retry after the timeout period.
+          These servers are disabled due to circuit breaker failures. They will automatically retry after the timeout
+          period.
         </div>
       </section>
 
@@ -684,21 +744,24 @@
         <div class="card-header">
           <div class="card-title">MCP Server Management</div>
         </div>
-        <div class="muted" style="margin-bottom:1rem;">Upload MCP server configuration files (JSON, YAML, or text). The LLM will analyze and add them automatically.</div>
-        
-        <div style="margin-bottom:1rem; padding:1rem; background:rgba(15,23,42,0.5); border-radius:0.5rem; border:1px solid var(--border);">
-          <label for="mcp-config-file" style="display:block; margin-bottom:0.5rem; font-weight:bold;">Upload MCP Config File:</label>
-          <input type="file" id="mcp-config-file" accept=".json,.yaml,.yml,.txt,.text" style="width:100%; padding:0.5rem; border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text); font-size:var(--font-sm); margin-bottom:0.5rem;">
-          <button onclick="uploadMCPConfig()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Upload & Add Servers</button>
-          <div id="mcp-upload-status" style="margin-top:0.5rem; font-size:0.85rem; padding:0.75rem; background:rgba(15,23,42,0.3); border-radius:0.4rem; border:1px solid var(--border); min-height:2rem; max-height:20rem; overflow-y:auto;"></div>
+        <div class="muted" style="margin-bottom:1rem;">Upload MCP server configuration files (JSON, YAML, or text). The
+          LLM will analyze and add them automatically.</div>
+
+        <div style="margin-bottom:1rem; display:flex; gap:1rem;">
+          <button onclick="window.open('v2/mcp_wizard.html', '_blank')" class="tag"
+            style="cursor:pointer; background:var(--accent); color:white; border:none; padding: 0.6rem 1.2rem; font-size: 0.9rem;">✨
+            Open Smart Import Wizard</button>
         </div>
-        
-        <div class="muted" style="margin-bottom:1rem;">Reload MCP servers and rediscover tools without restarting the agent-runner.</div>
+
+        <div class="muted" style="margin-bottom:1rem;">Reload MCP servers and rediscover tools without restarting the
+          agent-runner.</div>
         <div class="controls">
-          <button onclick="reloadMCPServers()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Reload MCP Servers</button>
+          <button onclick="reloadMCPServers()" class="tag"
+            style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Reload MCP
+            Servers</button>
         </div>
         <div id="mcp-reload-status" style="margin-top:0.5rem; font-size:0.85rem;"></div>
-    </section>
+      </section>
     </div>
   </div>
 
@@ -708,13 +771,16 @@
         <div class="card-header">
           <div class="card-title">Recent Activity</div>
           <div class="controls">
-            <input type="text" id="activity-search" placeholder="Search activity..." style="padding:0.3rem 0.5rem; font-size:var(--font-sm); border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text); width:200px;" />
-            <select id="activity-filter" style="padding:0.3rem 0.5rem; font-size:var(--font-sm); border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text);">
+            <input type="text" id="activity-search" placeholder="Search activity..."
+              style="padding:0.3rem 0.5rem; font-size:var(--font-sm); border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text); width:200px;" />
+            <select id="activity-filter"
+              style="padding:0.3rem 0.5rem; font-size:var(--font-sm); border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text);">
               <option value="all">All</option>
               <option value="success">Success only</option>
               <option value="error">Errors only</option>
             </select>
-            <button onclick="exportActivity()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Export</button>
+            <button onclick="exportActivity()" class="tag"
+              style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Export</button>
           </div>
         </div>
         <div id="recent-activity" class="scrollbox" style="max-height:500px; font-size:0.85rem;">
@@ -743,13 +809,20 @@
       <div class="card-header">
         <div class="card-title">Current Agent System Prompt</div>
         <div class="controls">
-          <button onclick="refreshSystemPrompt()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh Prompt</button>
-          <button onclick="copySystemPrompt()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Copy Prompt</button>
-          <button onclick="togglePromptSections()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);" id="toggle-sections-btn">Show Sections</button>
+          <button onclick="refreshSystemPrompt()" class="tag"
+            style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh Prompt</button>
+          <button onclick="copySystemPrompt()" class="tag"
+            style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Copy Prompt</button>
+          <button onclick="togglePromptSections()" class="tag"
+            style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);"
+            id="toggle-sections-btn">Show Sections</button>
         </div>
       </div>
-      <div class="muted" style="margin-bottom:1rem;">This is the dynamic prompt currently being injected into every agent request. It updates based on active persona, recalled memories, and system state.</div>
-      <div id="current-system-prompt" class="prompt-box" style="white-space: pre-wrap; font-family: var(--mono); font-size: var(--font-base); line-height: 1.5;">Loading prompt...</div>
+      <div class="muted" style="margin-bottom:1rem;">This is the dynamic prompt currently being injected into every
+        agent request. It updates based on active persona, recalled memories, and system state.</div>
+      <div id="current-system-prompt" class="prompt-box"
+        style="white-space: pre-wrap; font-family: var(--mono); font-size: var(--font-base); line-height: 1.5;">Loading
+        prompt...</div>
     </section>
   </div>
 
@@ -763,15 +836,21 @@
               <span class="tag-dot"></span>
               <span id="memory-health-text">Status...</span>
             </div>
-            <input type="text" id="memory-search" placeholder="Search facts..." style="padding:0.3rem 0.5rem; font-size:var(--font-sm); border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text); width:200px;" />
-            <select id="memory-filter" style="padding:0.3rem 0.5rem; font-size:var(--font-sm); border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text);">
+            <input type="text" id="memory-search" placeholder="Search facts..."
+              style="padding:0.3rem 0.5rem; font-size:var(--font-sm); border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text); width:200px;" />
+            <select id="memory-filter"
+              style="padding:0.3rem 0.5rem; font-size:var(--font-sm); border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text);">
               <option value="all">All facts</option>
               <option value="entity">By entity</option>
               <option value="relation">By relation</option>
             </select>
-            <button onclick="indexArchitecture()" class="tag" style="cursor:pointer; background:rgba(148,163,184,0.1); border-color:var(--accent); color:var(--accent);">Index Architecture</button>
-            <button onclick="refreshMemory()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh Memory</button>
-            <button onclick="exportMemory()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Export</button>
+            <button onclick="indexArchitecture()" class="tag"
+              style="cursor:pointer; background:rgba(148,163,184,0.1); border-color:var(--accent); color:var(--accent);">Index
+              Architecture</button>
+            <button onclick="refreshMemory()" class="tag"
+              style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh Memory</button>
+            <button onclick="exportMemory()" class="tag"
+              style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Export</button>
           </div>
         </div>
         <div class="muted" style="margin-bottom:1rem;">This is the persistent knowledge graph stored in SurrealDB.</div>
@@ -788,10 +867,12 @@
         <div class="card-header">
           <div class="card-title">Task Scheduler</div>
           <div class="controls">
-            <button onclick="refreshScheduler()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh</button>
+            <button onclick="refreshScheduler()" class="tag"
+              style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh</button>
           </div>
         </div>
-        <div class="muted" style="margin-bottom:1rem;">Tasks are organized by priority and scheduled execution time. Critical tasks notify on failure.</div>
+        <div class="muted" style="margin-bottom:1rem;">Tasks are organized by priority and scheduled execution time.
+          Critical tasks notify on failure.</div>
       </section>
 
       <section class="card">
@@ -846,10 +927,12 @@
         <div class="card-header">
           <div class="card-title">Background Tasks</div>
           <div class="controls">
-            <button onclick="refreshTasks()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh</button>
+            <button onclick="refreshTasks()" class="tag"
+              style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh</button>
           </div>
         </div>
-        <div class="muted" style="margin-bottom:1rem;">Manage and monitor background tasks. You can trigger tasks manually or view their status.</div>
+        <div class="muted" style="margin-bottom:1rem;">Manage and monitor background tasks. You can trigger tasks
+          manually or view their status.</div>
         <div id="tasks-list" class="grid" style="grid-template-columns: 1fr; gap: 1rem;">
           Loading tasks...
         </div>
@@ -867,7 +950,8 @@
         <div class="controls" style="display:flex; flex-direction:column; gap:0.5rem;">
           <div style="display:flex; gap:0.5rem; align-items:center;">
             <label for="file-selector" style="font-size:var(--font-sm); color:var(--muted);">File:</label>
-            <select id="file-selector" style="flex:1; padding:0.4rem; border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text); font-size:var(--font-sm);">
+            <select id="file-selector"
+              style="flex:1; padding:0.4rem; border-radius:0.3rem; border:1px solid var(--border); background:var(--panel); color:var(--text); font-size:var(--font-sm);">
               <option value="config/config.yaml">config.yaml</option>
               <option value="providers.yaml">providers.yaml</option>
               <option value="config/mcp_manifests/mcp_servers.json">mcp_servers.json</option>
@@ -887,8 +971,10 @@
         <div class="card-header">
           <div class="card-title">Model Intelligence &amp; Qualities</div>
         </div>
-        <div class="muted" style="margin-bottom:1rem;">Specialized skills and strengths for each model in your fleet.</div>
-        <div id="model-skills-list" class="grid" style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">
+        <div class="muted" style="margin-bottom:1rem;">Specialized skills and strengths for each model in your fleet.
+        </div>
+        <div id="model-skills-list" class="grid"
+          style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">
           Loading qualities...
         </div>
       </section>
@@ -900,26 +986,24 @@
       <section class="card" style="grid-column: 1 / -1;">
         <div class="card-header">
           <div class="card-title">Documentation</div>
-          <button onclick="refreshDocumentation()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh</button>
+          <button onclick="refreshDocumentation()" class="tag"
+            style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh</button>
         </div>
         <div class="muted" style="margin-bottom:1rem;">Browse all available documentation files.</div>
         <div style="display: grid; grid-template-columns: 300px 1fr; gap: 1rem; min-height: 600px;">
           <div style="border-right: 1px solid var(--border); padding-right: 1rem;">
             <div style="margin-bottom: 1rem;">
-              <input 
-                type="text" 
-                id="doc-search" 
-                placeholder="Search docs..." 
+              <input type="text" id="doc-search" placeholder="Search docs..."
                 style="width: 100%; padding: 0.5rem; border: 1px solid var(--border); border-radius: 0.25rem;"
-                oninput="filterDocumentation()"
-              />
+                oninput="filterDocumentation()" />
             </div>
             <div id="docs-list" class="scrollbox" style="max-height: 550px; font-size: 0.9rem;">
               Loading documentation...
             </div>
           </div>
           <div>
-            <div id="doc-content" class="scrollbox" style="max-height: 600px; padding: 1rem; background: var(--bg-soft); border-radius: 0.25rem; font-family: 'Monaco', 'Menlo', monospace; font-size: 0.9rem; line-height: 1.6;">
+            <div id="doc-content" class="scrollbox"
+              style="max-height: 600px; padding: 1rem; background: var(--bg-soft); border-radius: 0.25rem; font-family: 'Monaco', 'Menlo', monospace; font-size: 0.9rem; line-height: 1.6;">
               <div class="muted" style="text-align: center; padding: 2rem;">
                 Select a document from the list to view its contents
               </div>
@@ -936,38 +1020,45 @@
         <div class="card-header">
           <div class="card-title">🐛 Dashboard Debug & Insights</div>
           <div style="display:flex; gap:0.5rem; align-items:center;">
-            <button onclick="refreshDebugInfo()" class="tag" style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh</button>
+            <button onclick="refreshDebugInfo()" class="tag"
+              style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent);">Refresh</button>
             <label style="display:flex; align-items:center; gap:0.3rem; cursor:pointer; font-size:0.85rem;">
-              <input type="checkbox" id="debug-mode-toggle" onchange="toggleDebugMode()" style="width:1rem; height:1rem; cursor:pointer;">
+              <input type="checkbox" id="debug-mode-toggle" onchange="toggleDebugMode()"
+                style="width:1rem; height:1rem; cursor:pointer;">
               <span>Debug Mode</span>
             </label>
           </div>
         </div>
-        <div class="muted" style="margin-bottom:1rem;">View dashboard errors, patterns, and insights for troubleshooting.</div>
-        
+        <div class="muted" style="margin-bottom:1rem;">View dashboard errors, patterns, and insights for
+          troubleshooting.</div>
+
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
           <div>
             <h3 style="margin-bottom: 0.5rem; font-size: 1rem;">📊 Insights</h3>
-            <div id="debug-insights" class="scrollbox" style="max-height: 400px; padding: 1rem; background: var(--bg-soft); border-radius: 0.25rem; font-size: 0.85rem;">
+            <div id="debug-insights" class="scrollbox"
+              style="max-height: 400px; padding: 1rem; background: var(--bg-soft); border-radius: 0.25rem; font-size: 0.85rem;">
               Loading insights...
             </div>
           </div>
           <div>
             <h3 style="margin-bottom: 0.5rem; font-size: 1rem;">🔴 Recent Errors (Last 24h)</h3>
-            <div id="debug-errors" class="scrollbox" style="max-height: 400px; padding: 1rem; background: var(--bg-soft); border-radius: 0.25rem; font-size: 0.85rem;">
+            <div id="debug-errors" class="scrollbox"
+              style="max-height: 400px; padding: 1rem; background: var(--bg-soft); border-radius: 0.25rem; font-size: 0.85rem;">
               Loading errors...
             </div>
           </div>
         </div>
-        
+
         <div>
           <h3 style="margin-bottom: 0.5rem; font-size: 1rem;">📈 Error Patterns</h3>
-          <div id="debug-patterns" class="scrollbox" style="max-height: 300px; padding: 1rem; background: var(--bg-soft); border-radius: 0.25rem; font-size: 0.85rem;">
+          <div id="debug-patterns" class="scrollbox"
+            style="max-height: 300px; padding: 1rem; background: var(--bg-soft); border-radius: 0.25rem; font-size: 0.85rem;">
             Loading patterns...
           </div>
         </div>
-        
-        <div id="debug-trends" style="margin-top:1rem; padding:1rem; background:var(--bg-soft); border-radius:0.25rem; font-size:0.85rem; display:none;">
+
+        <div id="debug-trends"
+          style="margin-top:1rem; padding:1rem; background:var(--bg-soft); border-radius:0.25rem; font-size:0.85rem; display:none;">
           <strong>Error Trends (Last 24h):</strong>
           <div id="trend-chart" style="margin-top:0.5rem; min-height:100px;"></div>
         </div>
@@ -982,12 +1073,12 @@
     // Debug mode state
     let debugMode = localStorage.getItem("dashboard_debug_mode") === "true";
     let lastRequestId = null;
-    
+
     const PORTS = {
       ROUTER: 5455,
       AGENT: 5460
     };
-    
+
     const CSS_VARS = {
       OK: "var(--ok)",
       ERROR: "var(--error)",
@@ -996,7 +1087,7 @@
       MUTED: "var(--muted)",
       TEXT: "var(--text)"
     };
-    
+
     const CLASS_NAMES = {
       TAG_OK: "tag-ok",
       TAG_ERROR: "tag-error",
@@ -1004,19 +1095,19 @@
       KPI_VALUE_STRONG: "kpi-value-strong",
       KPI_VALUE: "kpi-value"
     };
-    
+
     const STORAGE_KEYS = {
       MANUALLY_SET_ACTIVE_LLM: "manuallySetActiveLLM"
     };
-    
+
     const REFRESH_INTERVAL = 10000; // 10 seconds
     const SYSTEM_PROMPT_REFRESH_INTERVAL = 5000; // 5 seconds
-    
+
     // ============================================================================
     // UTILITY FUNCTIONS
     // ============================================================================
     const $ = (id) => document.getElementById(id);
-    
+
     /**
      * Safely set text content of an element
      */
@@ -1024,7 +1115,7 @@
       const el = $(id);
       if (el) el.textContent = text || "";
     }
-    
+
     /**
      * Safely set innerHTML of an element
      */
@@ -1032,7 +1123,7 @@
       const el = $(id);
       if (el) el.innerHTML = html || "";
     }
-    
+
     /**
      * Safely set style property of an element
      */
@@ -1040,7 +1131,7 @@
       const el = $(id);
       if (el) el.style[property] = value;
     }
-    
+
     /**
      * Safely add/remove classes from an element
      */
@@ -1054,7 +1145,7 @@
         }
       }
     }
-    
+
     /**
      * Get router base URL from input field
      */
@@ -1079,20 +1170,20 @@
       }
       return base.replace(/\/+$/, "");
     }
-    
+
     /**
      * Get agent base URL from router base
      */
     function getAgentBase(base) {
       if (!base) base = getRouterBase();
       if (!base) return "";
-      
+
       // Handle URL with port (e.g., http://127.0.0.1:5455)
       const routerPort = `:${PORTS.ROUTER}`;
       if (base.includes(routerPort)) {
         return base.replace(routerPort, `:${PORTS.AGENT}`);
       }
-      
+
       // Handle URL without port or with trailing slash
       const cleanBase = base.replace(/\/+$/, "");
       // If it already has a port, don't add another
@@ -1107,11 +1198,11 @@
         const path = urlMatch[2] || "";
         return `${protocolHost}:${PORTS.AGENT}${path}`;
       }
-      
+
       // Fallback: just append port
       return `${cleanBase}:${PORTS.AGENT}`;
     }
-    
+
     /**
      * Get auth token from input field
      */
@@ -1128,7 +1219,7 @@
       }
       return token || localStorage.getItem("router_auth_token") || "";
     }
-    
+
     /**
      * Build headers object for API requests
      */
@@ -1207,16 +1298,16 @@
         }
       }
     };
-    
+
     function showTab(tabId) {
       // Hide all tabs
       document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      
+
       // Show selected tab content
       const content = $(tabId);
       if (content) content.classList.add('active');
-      
+
       // Find and activate tab button - use exact onclick match
       const tabs = document.querySelectorAll('.tab');
       for (const tab of tabs) {
@@ -1226,14 +1317,14 @@
           break;
         }
       }
-      
+
       // Handle tab-specific logic via registry
       Object.keys(TAB_REGISTRY).forEach(key => {
         if (key !== tabId && TAB_REGISTRY[key].onHide) {
           TAB_REGISTRY[key].onHide();
         }
       });
-      
+
       if (TAB_REGISTRY[tabId] && TAB_REGISTRY[tabId].onShow) {
         TAB_REGISTRY[tabId].onShow();
       }
@@ -1242,7 +1333,7 @@
     async function uploadMCPConfig() {
       const fileInput = $("mcp-config-file");
       const statusEl = $("mcp-upload-status");
-      
+
       if (!fileInput || !fileInput.files || !fileInput.files[0]) {
         if (statusEl) {
           safeSetText("mcp-upload-status", "Please select a file first");
@@ -1250,40 +1341,40 @@
         }
         return;
       }
-      
+
       const file = fileInput.files[0];
       const agentBase = getAgentBase();
       const token = getAuthToken();
       const headers = {};
       if (token) headers["Authorization"] = "Bearer " + token;
-      
+
       if (statusEl) {
         safeSetText("mcp-upload-status", "Uploading and analyzing file...");
         safeSetStyle("mcp-upload-status", "color", CSS_VARS.ACCENT);
       }
-      
+
       try {
         const formData = new FormData();
         formData.append("file", file);
-        
+
         const response = await fetch(agentBase + "/admin/mcp/upload-config", {
           method: "POST",
           headers: headers,
           body: formData,
           credentials: "same-origin"
         });
-        
+
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
           throw new Error(errorData.error || `HTTP ${response.status}`);
         }
-        
+
         const result = await response.json();
-        
+
         if (result.ok) {
           // Build detailed success message with clear formatting
           let message = `✓ Successfully processed ${file.name}\n\n`;
-          
+
           if (result.added && result.added.length > 0) {
             message += `✅ Added ${result.added.length} server(s): ${result.added.join(", ")}\n`;
           }
@@ -1299,17 +1390,17 @@
           if (result.warnings && result.warnings.length > 0) {
             message += `\n\n⚠️ Warnings:\n${result.warnings.map(w => `  • ${w}`).join("\n")}`;
           }
-          
+
           if (statusEl) {
             safeSetText("mcp-upload-status", message);
             safeSetStyle("mcp-upload-status", "color", CSS_VARS.OK);
             safeSetStyle("mcp-upload-status", "white-space", "pre-wrap");
             safeSetStyle("mcp-upload-status", "line-height", "1.6");
           }
-          
+
           // Clear file input
           if (fileInput) fileInput.value = "";
-          
+
           // Auto-reload MCP servers to pick up changes
           setTimeout(() => reloadMCPServers(), 1000);
         } else {
@@ -1336,15 +1427,15 @@
         console.error("MCP config upload error:", e);
       }
     }
-    
+
     async function reloadMCPServers() {
       const agentBase = getAgentBase();
       const statusEl = $("mcp-reload-status");
       if (!statusEl) return;
-      
+
       safeSetText("mcp-reload-status", "Reloading MCP servers...");
       safeSetStyle("mcp-reload-status", "color", CSS_VARS.ACCENT);
-      
+
       try {
         const headers = getHeaders(getAuthToken());
         const res = await postJson(agentBase + "/admin/reload-mcp", headers, {});
@@ -1383,23 +1474,23 @@
         const agentBase = getAgentBase();
         const token = getAuthToken();
         const headers = getHeaders(token);
-        
+
         const docsRes = await fetchJson(agentBase + "/admin/docs", headers).catch((e) => {
           console.warn("Documentation fetch failed:", e);
           return null;
         });
-        
+
         const docsListEl = $("docs-list");
         if (!docsListEl) return;
-        
+
         if (!docsRes || !docsRes.ok || !docsRes.docs) {
           docsListEl.innerHTML = '<div class="muted">Error loading documentation or no docs available.</div>';
           return;
         }
-        
+
         const docs = docsRes.docs;
         const categories = docsRes.categories || {};
-        
+
         // Group by category
         const grouped = {};
         for (const doc of docs) {
@@ -1407,10 +1498,10 @@
           if (!grouped[cat]) grouped[cat] = [];
           grouped[cat].push(doc);
         }
-        
+
         // File directory style with categorization and sorting
         let html = '<div style="display: flex; flex-direction: column; gap: 0.5rem;">';
-        
+
         // Category menu/filter
         const categoryList = Object.keys(grouped).sort();
         html += '<div style="margin-bottom: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">';
@@ -1421,7 +1512,7 @@
           html += `<button onclick="filterDocsByCategory('${cat}')" class="doc-category-btn" style="padding: 0.3rem 0.6rem; font-size: var(--font-xs); border-radius: 0.25rem; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer;">${catName}</button>`;
         });
         html += '</div>';
-        
+
         // Sort options
         html += '<div style="margin-bottom: 0.75rem; display: flex; gap: 0.5rem; align-items: center;">';
         html += '<span style="font-size: var(--font-sm); color: var(--muted);">Sort:</span>';
@@ -1431,7 +1522,7 @@
         html += '<option value="category">Category</option>';
         html += '</select>';
         html += '</div>';
-        
+
         // File list (compact, directory style)
         for (const [category, categoryDocs] of Object.entries(grouped)) {
           const catName = categories[category] || category;
@@ -1459,7 +1550,7 @@
           html += `</div>`;
         }
         html += '</div>';
-        
+
         docsListEl.innerHTML = html;
       } catch (e) {
         console.error("Error loading documentation:", e);
@@ -1469,10 +1560,10 @@
         }
       }
     }
-    
+
     let currentDocCategory = null;
     let currentDocSort = 'name';
-    
+
     function filterDocsByCategory(category) {
       currentDocCategory = category;
       document.querySelectorAll('.doc-category-btn').forEach(btn => {
@@ -1486,7 +1577,7 @@
         clickedBtn.style.background = 'var(--accent-soft)';
         clickedBtn.style.color = 'var(--accent)';
       }
-      
+
       document.querySelectorAll('.doc-category-section').forEach(section => {
         if (!category || section.dataset.category === category) {
           section.style.display = 'block';
@@ -1495,12 +1586,12 @@
         }
       });
     }
-    
+
     function sortDocumentation() {
       const sortSelect = $("doc-sort");
       if (!sortSelect) return;
       currentDocSort = sortSelect.value;
-      
+
       document.querySelectorAll('.doc-category-section').forEach(section => {
         const items = Array.from(section.querySelectorAll('.doc-item'));
         items.sort((a, b) => {
@@ -1515,26 +1606,26 @@
         items.forEach(item => section.appendChild(item));
       });
     }
-    
+
     async function loadDocument(docPath) {
       try {
         const agentBase = getAgentBase();
         const token = getAuthToken();
         const headers = getHeaders(token);
-        
+
         const docRes = await fetchJson(agentBase + `/admin/docs/${docPath}`, headers).catch((e) => {
           console.warn("Document fetch failed:", e);
           return null;
         });
-        
+
         const docContentEl = $("doc-content");
         if (!docContentEl) return;
-        
+
         if (!docRes || !docRes.ok || !docRes.content) {
           docContentEl.innerHTML = '<div class="muted">Error loading document or document not found.</div>';
           return;
         }
-        
+
         // Highlight active doc in list
         document.querySelectorAll('.doc-item').forEach(el => {
           el.style.background = '';
@@ -1545,7 +1636,7 @@
           clickedItem.style.background = 'var(--accent-soft)';
           clickedItem.style.borderColor = 'var(--accent)';
         }
-        
+
         // Convert markdown to HTML (simple conversion)
         let content = docRes.content;
         // Basic markdown to HTML conversion
@@ -1561,9 +1652,9 @@
           .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
           .replace(/\n\n/g, '</p><p>')
           .replace(/\n/g, '<br>');
-        
+
         content = '<p>' + content + '</p>';
-        
+
         docContentEl.innerHTML = `
           <div style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border);">
             <strong style="font-size: 1.1rem;">${docPath}</strong>
@@ -1578,7 +1669,7 @@
         }
       }
     }
-    
+
     function filterDocumentation() {
       const searchTerm = ($("doc-search")?.value || "").toLowerCase();
       const docItems = document.querySelectorAll('.doc-item');
@@ -1587,25 +1678,25 @@
         item.style.display = text.includes(searchTerm) ? 'block' : 'none';
       });
     }
-    
+
     async function loadInfoContent() {
       // Legacy function - redirect to documentation
       await refreshDocumentation();
     }
-    
+
     // Dashboard error tracking and learning
     function trackError(error, component, context) {
       try {
         const errorType = error instanceof TypeError ? "javascript_error" :
-                         error instanceof SyntaxError ? "javascript_error" :
-                         error.message?.includes("401") ? "auth_error" :
-                         error.message?.includes("timeout") ? "timeout" :
-                         error.message?.includes("network") ? "network_error" :
-                         "unknown";
-        
+          error instanceof SyntaxError ? "javascript_error" :
+            error.message?.includes("401") ? "auth_error" :
+              error.message?.includes("timeout") ? "timeout" :
+                error.message?.includes("network") ? "network_error" :
+                  "unknown";
+
         const agentBase = getAgentBase();
         const headers = getHeaders(getAuthToken());
-        
+
         fetch(agentBase + "/admin/dashboard/track-error", {
           method: "POST",
           headers: { ...headers, "Content-Type": "application/json" },
@@ -1626,12 +1717,12 @@
         if (debugMode) console.warn("Error tracking failed:", e);
       }
     }
-    
+
     function trackInteraction(action, target, success, durationMs, context) {
       try {
         const agentBase = getAgentBase();
         const headers = getHeaders(getAuthToken());
-        
+
         fetch(agentBase + "/admin/dashboard/track-interaction", {
           method: "POST",
           headers: { ...headers, "Content-Type": "application/json" },
@@ -1650,7 +1741,7 @@
         // Silently fail
       }
     }
-    
+
     // Global error handler to catch unhandled errors
     window.addEventListener("error", (event) => {
       trackError(event.error || event, "global", {
@@ -1659,14 +1750,14 @@
         colno: event.colno
       });
     });
-    
+
     // Catch unhandled promise rejections
     window.addEventListener("unhandledrejection", (event) => {
       trackError(event.reason, "promise_rejection", {
         promise: event.promise
       });
     });
-    
+
     // Toggle debug mode
     function toggleDebugMode() {
       debugMode = $("debug-mode-toggle").checked;
@@ -1680,33 +1771,33 @@
         console.log("Debug mode disabled");
       }
     }
-    
+
     async function refreshDebugInfo() {
       try {
         const agentBase = getAgentBase();
         const token = getAuthToken();
         const headers = getHeaders(token);
-        
+
         const insightsEl = $("debug-insights");
         const errorsEl = $("debug-errors");
         const patternsEl = $("debug-patterns");
         if (!insightsEl || !errorsEl || !patternsEl) return;
-        
+
         insightsEl.textContent = "Loading insights...";
         errorsEl.textContent = "Loading errors...";
         patternsEl.textContent = "Loading patterns...";
-        
+
         const [insightsRes, errorsRes, trendsRes] = await Promise.all([
           fetchJson(agentBase + "/admin/dashboard/insights", headers).catch(() => null),
           fetchJson(agentBase + "/admin/dashboard/errors?hours=24&limit=10", headers).catch(() => null),
           debugMode ? fetchJson(agentBase + "/admin/dashboard/errors?hours=24&limit=100", headers).catch(() => null) : Promise.resolve(null)
         ]);
-        
+
         let insightsHtml = "";
         if (insightsRes && insightsRes.ok && insightsRes.insights) {
           const i = insightsRes.insights;
           insightsHtml += `<div style="margin-bottom:0.75rem;"><strong>Summary:</strong> ${i.total_errors || 0} errors, ${i.total_interactions || 0} interactions</div>`;
-          
+
           if (i.most_problematic_components && i.most_problematic_components.length > 0) {
             insightsHtml += `<div style="margin-bottom:0.75rem;"><strong>Problem Areas:</strong><br>`;
             i.most_problematic_components.slice(0, 3).forEach(([component, count]) => {
@@ -1714,7 +1805,7 @@
             });
             insightsHtml += `</div>`;
           }
-          
+
           if (i.top_error_patterns && i.top_error_patterns.length > 0) {
             insightsHtml += `<div><strong>Top Error Pattern:</strong><br>`;
             const pattern = i.top_error_patterns[0];
@@ -1726,7 +1817,7 @@
           insightsHtml = `<div class="muted">Unable to load insights. Check agent-runner connection.</div>`;
         }
         insightsEl.innerHTML = insightsHtml;
-        
+
         let errorsHtml = "";
         if (errorsRes && errorsRes.ok && errorsRes.errors && errorsRes.errors.length > 0) {
           errorsRes.errors.slice(0, 10).forEach((err, idx) => {
@@ -1739,7 +1830,7 @@
           errorsHtml = '<div class="muted">No errors in the last 24 hours. ✓</div>';
         }
         errorsEl.innerHTML = errorsHtml;
-        
+
         let patternsHtml = "";
         if (errorsRes && errorsRes.ok && errorsRes.patterns) {
           const patterns = errorsRes.patterns;
@@ -1761,7 +1852,7 @@
           patternsHtml = '<div class="muted">Unable to load patterns.</div>';
         }
         patternsEl.innerHTML = patternsHtml;
-        
+
         // Render trend chart if debug mode is enabled
         if (debugMode && trendsRes && trendsRes.ok && trendsRes.errors) {
           renderErrorTrends(trendsRes.errors);
@@ -1777,46 +1868,46 @@
         if (patternsEl) patternsEl.innerHTML = '<div class="muted">Error loading patterns.</div>';
       }
     }
-    
+
     function renderErrorTrends(errors) {
       const chartEl = $("trend-chart");
       if (!chartEl || !errors || errors.length === 0) {
         if (chartEl) chartEl.innerHTML = '<div class="muted">No error data for trends.</div>';
         return;
       }
-      
+
       // Group errors by hour
       const now = Date.now() / 1000;
       const hours = 24;
       const buckets = Array(hours).fill(0);
       const labels = [];
-      
+
       for (let i = 0; i < hours; i++) {
         const hourStart = now - (hours - i) * 3600;
         const hourEnd = hourStart + 3600;
         const hourErrors = errors.filter(e => e.timestamp >= hourStart && e.timestamp < hourEnd);
         buckets[i] = hourErrors.length;
-        
+
         const date = new Date(hourStart * 1000);
         labels.push(date.getHours() + ":00");
       }
-      
+
       const maxErrors = Math.max(...buckets, 1);
       const barHeight = 80;
-      
+
       let chartHtml = '<div style="display:flex; align-items:flex-end; gap:2px; height:' + barHeight + 'px;">';
       buckets.forEach((count, idx) => {
         const height = maxErrors > 0 ? (count / maxErrors * barHeight) : 0;
-        const color = count === 0 ? "rgba(148,163,184,0.2)" : 
-                     count < 3 ? "rgba(250,204,21,0.6)" : 
-                     count < 10 ? "rgba(250,204,21,0.8)" : "rgba(255,107,129,0.8)";
+        const color = count === 0 ? "rgba(148,163,184,0.2)" :
+          count < 3 ? "rgba(250,204,21,0.6)" :
+            count < 10 ? "rgba(250,204,21,0.8)" : "rgba(255,107,129,0.8)";
         chartHtml += `<div style="flex:1; background:${color}; height:${height}px; min-height:${count > 0 ? '2px' : '0'}; border-radius:1px 1px 0 0;" title="${labels[idx]}: ${count} errors"></div>`;
       });
       chartHtml += '</div>';
       chartHtml += '<div style="display:flex; justify-content:space-between; margin-top:0.25rem; font-size:0.7rem; color:var(--muted);">';
       chartHtml += `<span>${labels[0]}</span><span>Now</span>`;
       chartHtml += '</div>';
-      
+
       chartEl.innerHTML = chartHtml;
     }
 
@@ -1825,21 +1916,21 @@
       if (!error || typeof error !== 'object') {
         return `<div class="muted">Error: ${String(error)}</div>`;
       }
-      
+
       // Check if it's a structured error response
       if (error.error && typeof error.error === 'object') {
         const err = error.error;
         let html = `<div style="padding: 1rem; background: rgba(239, 68, 68, 0.1); border: 1px solid var(--error); border-radius: 0.5rem; margin: 1rem 0;">`;
         html += `<div style="color: var(--error); font-weight: bold; margin-bottom: 0.5rem;">${escapeHtml(err.message || 'Error')}</div>`;
-        
+
         if (err.code) {
           html += `<div style="font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem;">Code: ${escapeHtml(err.code)}</div>`;
         }
-        
+
         if (err.details && Object.keys(err.details).length > 0) {
           html += `<div style="font-size: 0.85rem; margin-top: 0.5rem;"><strong>Details:</strong><pre style="background: rgba(0,0,0,0.1); padding: 0.5rem; border-radius: 0.3rem; overflow-x: auto; font-size: 0.8rem;">${escapeHtml(JSON.stringify(err.details, null, 2))}</pre></div>`;
         }
-        
+
         if (err.suggestions && Array.isArray(err.suggestions) && err.suggestions.length > 0) {
           html += `<div style="font-size: 0.85rem; margin-top: 0.5rem;"><strong>Suggestions:</strong><ul style="margin: 0.5rem 0; padding-left: 1.5rem;">`;
           err.suggestions.forEach(suggestion => {
@@ -1847,23 +1938,23 @@
           });
           html += `</ul></div>`;
         }
-        
+
         html += `</div>`;
         return html;
       }
-      
+
       // Fallback for simple error objects
       if (error.error && typeof error.error === 'string') {
         return `<div class="muted">Error: ${escapeHtml(error.error)}</div>`;
       }
-      
+
       return `<div class="muted">Error: ${escapeHtml(JSON.stringify(error))}</div>`;
     }
 
 
     // Store raw memory facts for filtering
     let rawMemoryFacts = [];
-    
+
     // Task server status check function
     async function updateTaskServerStatus() {
       try {
@@ -1874,17 +1965,17 @@
           console.warn("Health check failed:", e);
           return null;
         });
-        
+
         const taskStatusEl = $("task-server-status");
         const taskDetailsEl = $("task-server-details");
         if (!taskStatusEl || !taskDetailsEl) {
           return;
         }
-        
+
         if (healthRes && healthRes.components && healthRes.components.task_server) {
           const taskStatus = healthRes.components.task_server;
           const status = taskStatus.status; // "healthy", "unhealthy", "unknown"
-          
+
           if (status === "healthy") {
             taskStatusEl.textContent = "HEALTHY";
             taskStatusEl.style.color = CSS_VARS.OK;
@@ -1914,7 +2005,7 @@
         }
       }
     }
-    
+
     // Database status check function
     async function updateDatabaseStatus() {
       try {
@@ -1926,18 +2017,18 @@
           console.warn("Health check failed:", e);
           return null;
         });
-        
+
         const dbStatusEl = $("database-status");
         const dbDetailsEl = $("database-details");
         if (!dbStatusEl || !dbDetailsEl) {
           console.warn("Database status elements not found");
           return;
         }
-        
+
         if (healthRes && healthRes.components && healthRes.components.memory) {
           const memoryStatus = healthRes.components.memory;
           const status = memoryStatus.status; // "healthy", "unhealthy", "unknown"
-          
+
           if (status === "healthy") {
             dbStatusEl.textContent = "Connected";
             dbStatusEl.style.color = "var(--ok)";
@@ -1992,24 +2083,24 @@
         }
       }
     }
-    
+
     async function refreshMemory() {
       const agentBase = getAgentBase();
       const token = getAuthToken();
       const headers = getHeaders(token);
       const memoryListEl = $("memory-list");
-      
+
       try {
         // Show loading state
         if (memoryListEl) {
           memoryListEl.textContent = "Loading memory...";
         }
-        
+
         const res = await fetchJson(agentBase + "/admin/memory", headers).catch((e) => {
           console.error("Memory fetch error:", e);
           return { ok: false, error: e.message || "Failed to connect to agent-runner" };
         });
-        
+
         // Update memory health tag
         const healthTag = $("memory-health-tag");
         const healthText = $("memory-health-text");
@@ -2019,9 +2110,9 @@
             safeSetText("memory-health-text", "DATABASE CONNECTED");
           } else {
             healthTag.className = "tag " + CLASS_NAMES.TAG_ERROR;
-            const errorMsg = (res && res.memory_health && res.memory_health.error) || 
-                           (res && res.error) || 
-                           "DATABASE DISCONNECTED";
+            const errorMsg = (res && res.memory_health && res.memory_health.error) ||
+              (res && res.error) ||
+              "DATABASE DISCONNECTED";
             safeSetText("memory-health-text", errorMsg);
           }
         }
@@ -2029,10 +2120,10 @@
         // Always show facts if database is connected, even if empty
         if (res && res.ok !== false) {
           rawMemoryFacts = res.facts || [];
-          
+
           // Check if database is actually connected (not just a successful response)
           const dbConnected = res.memory_health?.ok === true || res.memory_health?.status === "healthy";
-          
+
           if (rawMemoryFacts.length > 0) {
             renderMemoryFacts(rawMemoryFacts);
           } else if (dbConnected) {
@@ -2059,7 +2150,7 @@
           memoryListEl.textContent = "Error loading memory: " + (e.message || "Unknown error");
         }
         rawMemoryFacts = [];
-        
+
         // Update health tag to show error
         const healthTag = $("memory-health-tag");
         const healthText = $("memory-health-text");
@@ -2073,20 +2164,20 @@
         }
       }
     }
-    
+
     function renderMemoryFacts(facts) {
       if (!facts || facts.length === 0) {
         safeSetHTML("memory-list", '<div class="muted">No facts stored in memory.</div>');
         return;
       }
-      
+
       const html = facts.map(f => {
         try {
           if (!f || typeof f !== 'object') return '';
           const factType = f.relation || 'unknown';
-          const typeColor = factType.includes('has') || factType.includes('uses') ? CSS_VARS.ACCENT : 
-                           factType.includes('error') || factType.includes('failed') ? CSS_VARS.ERROR :
-                           factType.includes('success') || factType.includes('ok') ? CSS_VARS.OK : CSS_VARS.MUTED;
+          const typeColor = factType.includes('has') || factType.includes('uses') ? CSS_VARS.ACCENT :
+            factType.includes('error') || factType.includes('failed') ? CSS_VARS.ERROR :
+              factType.includes('success') || factType.includes('ok') ? CSS_VARS.OK : CSS_VARS.MUTED;
           const entity = (f.entity || 'unknown').toString().replace(/['"]/g, '');
           const target = (f.target || 'unknown').toString().replace(/['"]/g, '');
           const factId = (f.fact_id || f.id || 'unknown').toString().replace(/['"]/g, '');
@@ -2116,22 +2207,22 @@
       }).filter(h => h).join("");
       safeSetHTML("memory-list", html);
     }
-    
+
     function filterMemoryFacts() {
       const searchTerm = ($("memory-search")?.value || "").toLowerCase();
       const filterType = $("memory-filter")?.value || "all";
-      
+
       let filtered = rawMemoryFacts || [];
-      
+
       if (searchTerm) {
-        filtered = filtered.filter(f => 
+        filtered = filtered.filter(f =>
           (f.entity || "").toLowerCase().includes(searchTerm) ||
           (f.relation || "").toLowerCase().includes(searchTerm) ||
           (f.target || "").toLowerCase().includes(searchTerm) ||
           (f.context || "").toLowerCase().includes(searchTerm)
         );
       }
-      
+
       if (filterType === "entity") {
         // Group by entity
         const grouped = {};
@@ -2151,10 +2242,10 @@
         });
         filtered = Object.values(grouped).flat();
       }
-      
+
       renderMemoryFacts(filtered);
     }
-    
+
     function exportMemory() {
       if (!rawMemoryFacts || rawMemoryFacts.length === 0) {
         alert("No memory facts to export.");
@@ -2172,7 +2263,7 @@
 
     async function deleteFact(id) {
       if (!confirm("Are you sure you want to delete this fact?")) return;
-      
+
       const agentBase = getAgentBase();
       try {
         await postJson(agentBase + "/admin/memory/delete", { "Content-Type": "application/json" }, { fact_id: id });
@@ -2191,11 +2282,11 @@
           tool: "index_own_architecture",
           arguments: {}
         });
-        
+
         // Parse nested MCP response: res.result.content[0].text contains JSON string
         let resultText = "✓ Indexing completed successfully";
         let indexedCount = null;
-        
+
         // Extract the JSON string from the nested structure
         if (res && res.result && res.result.content && Array.isArray(res.result.content)) {
           for (const item of res.result.content) {
@@ -2223,7 +2314,7 @@
             }
           }
         }
-        
+
         // Show clean message, never raw JSON
         alert(resultText);
         refreshMemory();
@@ -2236,12 +2327,12 @@
 
     let rawSystemPrompt = "";
     let promptSectionsVisible = false;
-    
+
     async function refreshSystemPrompt() {
       const agentBase = getAgentBase();
       const promptBox = $("current-system-prompt");
       if (!promptBox) return;
-      
+
       safeSetText("current-system-prompt", "Loading prompt...");
       try {
         const res = await fetchJson(agentBase + "/admin/system-prompt", {});
@@ -2264,12 +2355,12 @@
       const token = getAuthToken();
       const headers = getHeaders(token);
       const contentEl = $("model-services-content");
-      
+
       if (!contentEl) return;
-      
+
       try {
         contentEl.innerHTML = '<div class="muted">Loading model service mappings...</div>';
-        
+
         // Fetch available models with timeout
         const modelsRes = await Promise.race([
           fetchJson(routerBase + "/v1/models", headers),
@@ -2277,14 +2368,14 @@
         ]).catch(() => ({ data: [] }));
         const availableModels = modelsRes?.data || [];
         const modelIds = availableModels.map(m => m.id || "").filter(Boolean).sort();
-        
+
         // Fetch agent-runner model info with timeout
         const agentRes = await Promise.race([
           fetchJson(agentBase + "/", headers),
           new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000))
         ]).catch(() => ({ ok: false }));
         const agentModels = agentRes?.models || {};
-        
+
         // Models are now included in the root endpoint response
         // Fallback values for backward compatibility
         let summarizationModel = agentModels.summarization_model || "Not configured";
@@ -2292,7 +2383,7 @@
         if (agentModels.fallback_enabled === false) {
           fallbackModel += " (disabled)";
         }
-        
+
         // Get current active LLM (from localStorage or agent model)
         // Note: We don't fetch metrics here to avoid blocking - metrics are fetched in main refresh()
         let activeLLM = localStorage.getItem("manuallySetActiveLLM") || null;
@@ -2303,7 +2394,7 @@
         if (!activeLLM) {
           activeLLM = "Auto-detect";
         }
-        
+
         // Build service-to-model mapping with selectors
         const services = [
           {
@@ -2363,19 +2454,19 @@
             editable: false  // Router model is configured via config.yaml
           }
         ];
-        
+
         // Build HTML with model selectors
         let html = '<div style="display: grid; gap: 1rem;">';
         services.forEach(service => {
           const modelStr = String(service.model || "");
           const isLocal = modelStr.startsWith("ollama:");
-          const isRemote = modelStr.startsWith("openai:") || modelStr.startsWith("claude-") || 
-                          modelStr.startsWith("gemini-") || modelStr.startsWith("grok-") ||
-                          modelStr.startsWith("perplexity:");
+          const isRemote = modelStr.startsWith("openai:") || modelStr.startsWith("claude-") ||
+            modelStr.startsWith("gemini-") || modelStr.startsWith("grok-") ||
+            modelStr.startsWith("perplexity:");
           let modelClass = "";
           if (isLocal) modelClass = "tag-ok";
           else if (isRemote) modelClass = "tag-warn";
-          
+
           // Build model selector dropdown
           let selectorHtml = "";
           if (service.editable && modelIds.length > 0) {
@@ -2388,7 +2479,7 @@
               </select>
             `;
           }
-          
+
           html += `
             <div style="padding: 1rem; background: rgba(15, 23, 42, 0.5); border-radius: 0.5rem; border: 1px solid var(--border);">
               <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
@@ -2410,7 +2501,7 @@
           `;
         });
         html += '</div>';
-        
+
         contentEl.innerHTML = html;
       } catch (e) {
         const errorMsg = e?.message || "Unknown error";
@@ -2425,20 +2516,20 @@
         });
       }
     }
-    
+
     // Make changeServiceModel globally accessible for inline onclick handlers
-    window.changeServiceModel = async function(serviceId, modelId) {
+    window.changeServiceModel = async function (serviceId, modelId) {
       if (!modelId || modelId === "") {
         console.warn("changeServiceModel: No model selected");
         return;
       }
-      
+
       const agentBase = getAgentBase();
       const routerBase = getRouterBase();
       const token = getAuthToken();
       const headers = { "Content-Type": "application/json", "Accept": "application/json" };
       if (token) headers["Authorization"] = "Bearer " + token;
-      
+
       // Special handling for Active LLM (router-level setting)
       if (serviceId === "active") {
         try {
@@ -2448,7 +2539,7 @@
           if (result.ok) {
             // Store in localStorage for persistence
             localStorage.setItem("manuallySetActiveLLM", modelId);
-            
+
             // If MCP toggle is enabled, also sync agent-runner's model
             const mcpToggle = $("mcp-toggle");
             if (mcpToggle && mcpToggle.checked) {
@@ -2458,7 +2549,7 @@
                 console.warn("Failed to sync agent-runner model:", e);
               }
             }
-            
+
             // Visual feedback: briefly highlight the model tag
             const selectEl = $("model-select-active");
             if (selectEl) {
@@ -2469,7 +2560,7 @@
                 selectEl.style.boxShadow = "";
               }, 1000);
             }
-            
+
             // Refresh to show updated model
             refreshModelServices();
             refresh(); // Also refresh main dashboard
@@ -2493,7 +2584,7 @@
         }
         return;
       }
-      
+
       // Map service IDs to API endpoints (agent-runner endpoints)
       const endpointMap = {
         "agent": "/admin/set-model",
@@ -2502,17 +2593,17 @@
         "summarization": "/admin/set-summarization-model",
         "fallback": "/admin/set-fallback-model"
       };
-      
+
       const endpoint = endpointMap[serviceId];
-        if (!endpoint) {
-          console.warn(`Model selection for ${serviceId} is not yet supported via API`);
-          return;
-        }
-      
+      if (!endpoint) {
+        console.warn(`Model selection for ${serviceId} is not yet supported via API`);
+        return;
+      }
+
       // Store original value to revert on error
       const selectEl = $(`model-select-${serviceId}`);
       const originalValue = selectEl ? selectEl.value : null;
-      
+
       try {
         console.log("Setting model:", { serviceId, agentBase, endpoint, modelId, url: agentBase + endpoint });
         const result = await postJson(agentBase + endpoint, headers, { model: modelId });
@@ -2526,7 +2617,7 @@
               selectEl.style.boxShadow = "";
             }, 1000);
           }
-          
+
           // Refresh to show updated model
           refreshModelServices();
           refresh(); // Also refresh main dashboard
@@ -2547,11 +2638,11 @@
         trackError(e, serviceId, { url: agentBase + endpoint, model: modelId });
       }
     };
-    
+
     function renderSystemPrompt(prompt) {
       const promptBox = $("current-system-prompt");
       if (!promptBox) return;
-      
+
       if (promptSectionsVisible) {
         // Parse prompt into sections
         const sections = {
@@ -2561,7 +2652,7 @@
           "Instructions": prompt.match(/## Instructions:.*?(?=##|$)/s)?.[0] || "",
           "Other": prompt
         };
-        
+
         let html = "";
         Object.entries(sections).forEach(([title, content]) => {
           if (content && content.trim()) {
@@ -2577,20 +2668,20 @@
       }
       safeSetStyle("current-system-prompt", "color", CSS_VARS.TEXT);
     }
-    
+
     function escapeHtml(text) {
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
     }
-    
+
     function togglePromptSections() {
       promptSectionsVisible = !promptSectionsVisible;
       const btn = $("toggle-sections-btn");
       if (btn) btn.textContent = promptSectionsVisible ? "Hide Sections" : "Show Sections";
       if (rawSystemPrompt) renderSystemPrompt(rawSystemPrompt);
     }
-    
+
     function copySystemPrompt() {
       if (!rawSystemPrompt) {
         alert("No prompt loaded.");
@@ -2602,21 +2693,21 @@
         alert("Failed to copy prompt.");
       });
     }
-    
+
     // Store raw activity data for filtering
     let rawActivityData = [];
-    
+
     function filterActivity() {
       // filterActivity now uses renderActivity which handles filtering internally
       renderActivity(rawActivityData || []);
     }
-    
+
     function renderActivity(activities) {
       const searchTerm = ($("activity-search")?.value || "").toLowerCase();
       const filterType = $("activity-filter")?.value || "all";
-      
+
       let filtered = activities || [];
-      
+
       // Apply search filter
       if (searchTerm) {
         filtered = filtered.filter(a => {
@@ -2624,11 +2715,11 @@
           const provider = (a.provider || "").toLowerCase();
           const status = String(a.status_code || "").toLowerCase();
           const requestId = (a.request_id || "").toLowerCase();
-          return model.includes(searchTerm) || provider.includes(searchTerm) || 
-                 status.includes(searchTerm) || requestId.includes(searchTerm);
+          return model.includes(searchTerm) || provider.includes(searchTerm) ||
+            status.includes(searchTerm) || requestId.includes(searchTerm);
         });
       }
-      
+
       // Apply status filter
       if (filterType === "success") {
         filtered = filtered.filter(a => {
@@ -2641,21 +2732,21 @@
           return !success;
         });
       }
-      
+
       const container = $("recent-activity");
       if (!container) return;
-      
+
       if (filtered.length === 0) {
-        const emptyMsg = (activities || []).length === 0 
+        const emptyMsg = (activities || []).length === 0
           ? '<div class="muted">No requests yet.</div>'
           : '<div class="muted">No requests match the current filters.</div>';
         safeSetHTML("recent-activity", emptyMsg);
         return;
       }
-      
+
       // Sort by timestamp (newest first)
       filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-      
+
       const html = filtered.slice(0, 100).map(r => {
         try {
           if (!r || typeof r !== 'object') return '';
@@ -2670,7 +2761,7 @@
           const cost = r.cost_usd || 0.0;
           const costStr = cost > 0 ? `$${cost.toFixed(4)}` : "";
           const elapsed = r.elapsed_ms !== undefined ? `${r.elapsed_ms.toFixed(0)}ms` : '';
-          
+
           return `<div style="margin-bottom:0.5rem; padding:0.6rem; border-radius:0.4rem; border:1px solid var(--border); background:rgba(15,23,42,0.3); transition:all 0.2s;" onmouseover="this.style.background='rgba(15,23,42,0.5)'; this.style.borderColor='var(--accent)'" onmouseout="this.style.background='rgba(15,23,42,0.3)'; this.style.borderColor='var(--border)'">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
               <div style="display:flex; align-items:center; gap:0.5rem;">
@@ -2693,7 +2784,7 @@
       }).filter(h => h).join("");
       safeSetHTML("recent-activity", html);
     }
-    
+
     function exportActivity() {
       if (!rawActivityData || rawActivityData.length === 0) {
         alert("No activity data to export.");
@@ -2708,23 +2799,23 @@
       a.click();
       URL.revokeObjectURL(url);
     }
-    
+
     function renderModelPerformanceChart(metrics) {
       const container = $("model-performance-chart");
       if (!container || !metrics || !metrics.usage || !metrics.usage.by_model) {
         return;
       }
-      
+
       const byModel = metrics.usage.by_model || {};
       const modelEntries = Object.entries(byModel)
         .sort((a, b) => (b[1].requests || 0) - (a[1].requests || 0))
         .slice(0, 10);
-      
+
       if (modelEntries.length === 0) {
         safeSetHTML("model-performance-chart", '<div class="muted">No performance data yet.</div>');
         return;
       }
-      
+
       const maxRequests = Math.max(...modelEntries.map(([_, stats]) => stats.requests || 0));
       const html = modelEntries.map(([model, stats]) => {
         const requests = stats.requests || 0;
@@ -2749,23 +2840,23 @@
       }).join("");
       safeSetHTML("model-performance-chart", html);
     }
-    
+
     function renderToolPerformanceChart(toolMetrics) {
       const container = $("tool-performance-chart");
       if (!container || !toolMetrics || !toolMetrics.by_tool) {
         return;
       }
-      
+
       const byTool = toolMetrics.by_tool || {};
       const toolEntries = Object.entries(byTool)
         .sort((a, b) => (b[1].calls || 0) - (a[1].calls || 0))
         .slice(0, 8);
-      
+
       if (toolEntries.length === 0) {
         safeSetHTML("tool-performance-chart", '<div class="muted">No tool performance data yet.</div>');
         return;
       }
-      
+
       const maxCalls = Math.max(...toolEntries.map(([_, stats]) => stats.calls || 0));
       const html = toolEntries.map(([tool, stats]) => {
         const calls = stats.calls || 0;
@@ -2789,7 +2880,7 @@
       }).join("");
       safeSetHTML("tool-performance-chart", html);
     }
-    
+
     function formatTimeUntil(seconds) {
       if (seconds < 60) return `${Math.floor(seconds)}s`;
       if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
@@ -2820,7 +2911,7 @@
       const timeUntil = task.seconds_until !== null ? formatTimeUntil(task.seconds_until) : '';
       const nextRunTime = task.next_run ? new Date(task.next_run * 1000).toLocaleString() : '';
       const estimatedDuration = task.estimated_duration ? formatDuration(task.estimated_duration) : '';
-      
+
       return `
         <div style="margin-bottom:0.75rem; padding:0.6rem; border-radius:0.4rem; background:rgba(15,23,42,0.3); border:1px solid rgba(148,163,184,0.2); border-left:3px solid ${priorityColor};">
           <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:0.4rem;">
@@ -2849,28 +2940,28 @@
         const agentBase = getAgentBase();
         const token = getAuthToken();
         const headers = getHeaders(token);
-        
+
         const tasksRes = await fetchJson(agentBase + "/admin/background-tasks", headers).catch((e) => {
           console.warn("Background tasks fetch failed:", e);
           return null;
         });
-        
+
         const tasksListEl = $("tasks-list");
         if (!tasksListEl) return;
-        
+
         if (!tasksRes || !tasksRes.ok || !tasksRes.tasks) {
           tasksListEl.innerHTML = '<div class="muted">Error loading tasks or no tasks configured.</div>';
           return;
         }
-        
+
         const tasks = tasksRes.tasks;
         const taskNames = Object.keys(tasks).sort();
-        
+
         if (taskNames.length === 0) {
           tasksListEl.innerHTML = '<div class="muted">No tasks configured.</div>';
           return;
         }
-        
+
         let html = '';
         for (const taskName of taskNames) {
           const task = tasks[taskName];
@@ -2886,15 +2977,15 @@
           const lastError = task.last_error;
           const schedule = task.schedule; // Cron expression or schedule info
           const lastRun = task.last_run ? new Date(task.last_run * 1000).toLocaleString() : null;
-          
+
           // Format next run time - be more intelligent about showing scheduling info
           let nextRunText = 'Not scheduled';
           let scheduleInfo = '';
-          
+
           if (schedule) {
             scheduleInfo = `Schedule: ${schedule}`;
           }
-          
+
           if (secondsUntil !== null && secondsUntil !== undefined && secondsUntil >= 0) {
             if (secondsUntil < 60) {
               nextRunText = `In ${Math.round(secondsUntil)}s`;
@@ -2919,12 +3010,12 @@
           } else if (!isEnabled) {
             nextRunText = 'Disabled';
           }
-          
+
           // Show last run if available
           if (lastRun && !isRunning) {
             scheduleInfo = scheduleInfo ? `${scheduleInfo} • Last: ${lastRun}` : `Last run: ${lastRun}`;
           }
-          
+
           // Priority color
           const priorityColors = {
             critical: 'var(--error)',
@@ -2933,7 +3024,7 @@
             low: 'var(--muted)',
             background: 'var(--muted)'
           };
-          
+
           html += `
             <div class="card" style="border-left: 3px solid ${priorityColors[priority] || priorityColors.medium};">
               <div class="card-header" style="padding: 0.75rem;">
@@ -2969,7 +3060,7 @@
             </div>
           `;
         }
-        
+
         tasksListEl.innerHTML = html;
       } catch (e) {
         console.error("Error loading tasks:", e);
@@ -2979,15 +3070,15 @@
         }
       }
     }
-    
+
     async function triggerTask(taskName) {
       try {
         const agentBase = getAgentBase();
         const token = getAuthToken();
         const headers = getHeaders(token);
-        
+
         const result = await postJson(agentBase + `/admin/background-tasks/${taskName}/trigger`, headers, {});
-        
+
         if (result.ok) {
           alert(`✓ Task '${taskName}' triggered successfully`);
           // Refresh tasks list after a short delay to show running status
@@ -2999,7 +3090,7 @@
         alert(`✗ Error triggering task: ${e.message || 'Unknown error'}`);
       }
     }
-    
+
     async function refreshScheduler() {
       const agentBase = getAgentBase();
       const token = getAuthToken();
@@ -3008,39 +3099,39 @@
         const res = await fetchJson(agentBase + "/admin/background-tasks", headers);
         if (res && res.ok) {
           const upcoming = res.upcoming || {};
-          
+
           // Next up (next minute)
           const nextUp = upcoming.next_up || [];
           safeSetText("next-up-count", nextUp.length.toString());
-          safeSetHTML("next-up-tasks", 
-            nextUp.length > 0 
+          safeSetHTML("next-up-tasks",
+            nextUp.length > 0
               ? nextUp.map(renderTaskCard).join("")
               : '<div class="muted" style="text-align:center; padding:2rem;">No tasks in the next minute</div>'
           );
-          
+
           // Next hour
           const nextHour = upcoming.next_hour || [];
           safeSetText("next-hour-count", nextHour.length.toString());
-          safeSetHTML("next-hour-tasks", 
-            nextHour.length > 0 
+          safeSetHTML("next-hour-tasks",
+            nextHour.length > 0
               ? nextHour.map(renderTaskCard).join("")
               : '<div class="muted" style="text-align:center; padding:2rem;">No tasks in the next hour</div>'
           );
-          
+
           // Next week
           const nextWeek = upcoming.next_week || [];
           safeSetText("next-week-count", nextWeek.length.toString());
-          safeSetHTML("next-week-tasks", 
-            nextWeek.length > 0 
+          safeSetHTML("next-week-tasks",
+            nextWeek.length > 0
               ? nextWeek.map(renderTaskCard).join("")
               : '<div class="muted" style="text-align:center; padding:2rem;">No tasks this week</div>'
           );
-          
+
           // Long term
           const longTerm = upcoming.long_term || [];
           safeSetText("long-term-count", longTerm.length.toString());
-          safeSetHTML("long-term-tasks", 
-            longTerm.length > 0 
+          safeSetHTML("long-term-tasks",
+            longTerm.length > 0
               ? longTerm.map(renderTaskCard).join("")
               : '<div class="muted" style="text-align:center; padding:2rem;">No long-term tasks</div>'
           );
@@ -3075,18 +3166,18 @@
         safeSetHTML("task-history-list", `<div class="muted">Error loading history: ${e.message}</div>`);
       }
     }
-    
+
     function filterManual() {
       const searchTerm = ($("manual-search")?.value || "").toLowerCase();
       const contentEl = $("info-content");
       if (!contentEl) return;
-      
+
       const text = contentEl.textContent || "";
       if (!searchTerm) {
         contentEl.innerHTML = escapeHtml(text);
         return;
       }
-      
+
       // Highlight search term
       const regex = new RegExp(`(${searchTerm})`, 'gi');
       const highlighted = text.replace(regex, '<mark style="background:var(--warn); color:var(--bg); padding:0.1rem 0.2rem; border-radius:0.2rem;">$1</mark>');
@@ -3098,13 +3189,13 @@
       const h = Math.floor((seconds % (3600 * 24)) / 3600);
       const m = Math.floor((seconds % 3600) / 60);
       const s = Math.floor(seconds % 60);
-      
+
       const parts = [];
       if (d > 0) parts.push(`${d}d`);
       if (h > 0) parts.push(`${h}h`);
       if (m > 0) parts.push(`${m}m`);
       if (parts.length === 0) parts.push(`${s}s`);
-      
+
       return parts.join(" ");
     }
 
@@ -3112,7 +3203,7 @@
       const tag = $("status-tag");
       const text = $("status-text");
       if (!tag || !text) return;
-      
+
       if (okRouter && okAgent) {
         tag.classList.remove(CLASS_NAMES.TAG_ERROR, CLASS_NAMES.TAG_WARN);
         tag.classList.add(CLASS_NAMES.TAG_OK);
@@ -3138,20 +3229,20 @@
       // Include credentials to send HTTP-only cookies (secure authentication)
       const startTime = performance.now();
       try {
-        const res = await fetch(url, { 
+        const res = await fetch(url, {
           headers,
           credentials: "same-origin"  // Send cookies automatically
         });
-        
+
         // Capture request ID from response header
         const requestId = res.headers.get("X-Request-ID");
         if (requestId) {
           lastRequestId = requestId;
           if (debugMode) console.log(`[${requestId}] ${url}`);
         }
-        
+
         const duration = performance.now() - startTime;
-        
+
         // Track API interactions
         const component = url.split("/").pop() || "unknown";
         trackInteraction("api_call", component, res.ok, duration, {
@@ -3159,17 +3250,17 @@
           status: res.status,
           request_id: requestId
         });
-        
+
         if (!res.ok) {
           const error = new Error(`HTTP ${res.status}`);
           trackError(error, component, { url: url, status: res.status, request_id: requestId });
           throw error;
         }
-        
+
         if (debugMode && duration > 1000) {
           console.warn(`Slow API call: ${url} took ${duration.toFixed(0)}ms`);
         }
-        
+
         return res.json();
       } catch (e) {
         const duration = performance.now() - startTime;
@@ -3218,11 +3309,11 @@
     let mcpToolAccessEnabled = false;
     let refreshSuspended = false;
     let refreshIntervalId = null;
-    
+
     // ============================================================================
     // REFRESH HELPER FUNCTIONS
     // ============================================================================
-    
+
     /**
      * Update health bar with issues
      */
@@ -3230,19 +3321,19 @@
       const healthIssues = [];
       if (!routerRoot) healthIssues.push({ type: 'error', msg: 'Router service is DOWN' });
       if (!agentRoot) healthIssues.push({ type: 'error', msg: 'Agent-runner service is DOWN' });
-      
+
       if (agentRoot) {
         // Health check issues are already shown via individual component statuses
         // No need to duplicate them here
 
         const mcpErrors = agentRoot.mcp_initialization_errors || {};
         const mcpDiagnoses = agentRoot.mcp_diagnoses || {};
-        
+
         Object.entries(mcpErrors).forEach(([server, err]) => {
           const diagnosis = mcpDiagnoses[server] ? `<br><small style="opacity:0.8;">Diagnosis: ${mcpDiagnoses[server]}</small>` : '';
           healthIssues.push({ type: 'error', msg: `MCP <strong>${server}</strong> initialization failed: ${err}${diagnosis}` });
         });
-        
+
         if (agentRoot.circuit_breaker && agentRoot.circuit_breaker.disabled_servers.length > 0) {
           agentRoot.circuit_breaker.disabled_servers.forEach(server => {
             const diagnosis = mcpDiagnoses[server] ? `<br><small style="opacity:0.8;">Diagnosis: ${mcpDiagnoses[server]}</small>` : '';
@@ -3254,7 +3345,7 @@
       const healthBar = $("health-bar");
       const healthList = $("health-message-list");
       if (!healthBar || !healthList) return;
-      
+
       if (healthIssues.length > 0) {
         healthBar.style.display = "flex";
         healthBar.className = "health-bar " + (healthIssues.some(i => i.type === 'error') ? "has-errors" : "has-issues");
@@ -3268,7 +3359,7 @@
         healthBar.style.display = "none";
       }
     }
-    
+
     /**
      * Update router status display
      */
@@ -3296,7 +3387,7 @@
         return false;
       }
     }
-    
+
     /**
      * Update agent-runner status display
      */
@@ -3332,12 +3423,12 @@
     async function refresh() {
       // Track refresh start time for performance monitoring (before any early returns)
       const refreshStartTime = performance.now();
-      
+
       // Don't refresh if suspended (e.g., during model changes)
       if (refreshSuspended) {
         return;
       }
-      
+
       // Throttle refreshes to prevent excessive calls
       const now = Date.now();
       if (now - lastRefreshTime < MIN_REFRESH_INTERVAL) {
@@ -3356,7 +3447,7 @@
       if (storedActiveLLM !== manuallySetActiveLLM) {
         manuallySetActiveLLM = storedActiveLLM || null;
       }
-      
+
       const base = getRouterBase();
       // Ensure token is loaded from localStorage if input field is empty
       const tokenEl = $("auth-token");
@@ -3382,27 +3473,27 @@
         const [routerRoot, agentRoot, models, metrics, agentMetrics, systemStatus] = await Promise.all([
           fetchJson(base + "/", headers).catch((e) => { console.warn("Router root failed:", e); return null; }),
           fetchJson(agentBase + "/", headers).catch((e) => { console.warn("Agent root failed:", e); return null; }),
-          fetchJson(base + "/v1/models" + (showAll ? "?all=true" : ""), headers).catch((e) => { 
+          fetchJson(base + "/v1/models" + (showAll ? "?all=true" : ""), headers).catch((e) => {
             // Check if it's a 401 error - auth required
             if (e && e.message && e.message.includes("401")) {
               console.warn("Models failed: Authentication required (401)");
             } else {
               console.warn("Models failed:", e);
             }
-            return null; 
+            return null;
           }),
           fetchJson(base + "/metrics", headers).catch((e) => { console.warn("Router metrics failed:", e); return null; }),
           fetchJson(agentBase + "/metrics", headers).catch((e) => { console.warn("Agent metrics failed:", e); return null; }),
           fetchJson(agentBase + "/admin/system-status", headers).catch((e) => { console.warn("System status failed:", e); return null; }),
         ]);
-        
+
         // Check if auth is required but failing
         // Note: With HTTP-only cookies, JavaScript can't check if cookie is set (by design for security)
         // So we check if auth is enabled AND we're getting 401 errors
         const authWarningEl = $("auth-token-warning");
         const has401Error = !models && routerRoot && routerRoot.auth_enabled;
         const currentToken = getAuthToken(); // For manual bearer token entry (fallback)
-        
+
         if (routerRoot && routerRoot.auth_enabled) {
           // Auth is enabled - check if we're getting 401 errors
           if (has401Error && !currentToken) {
@@ -3422,7 +3513,7 @@
           // Auth not enabled - hide warning
           authWarningEl.style.display = "none";
         }
-        
+
         // Update MCP toggle state from router metrics
         if (metrics && metrics.ok && typeof metrics.mcp_tool_access_enabled === "boolean") {
           mcpToolAccessEnabled = metrics.mcp_tool_access_enabled;
@@ -3432,7 +3523,7 @@
           }
           updateMCPToggleUI();
         }
-        
+
         // Update router's active_model from metrics (if available)
         if (metrics && metrics.ok && metrics.active_model) {
           // Sync router's active_model with dashboard's manuallySetActiveLLM if not set
@@ -3441,7 +3532,7 @@
             localStorage.setItem("manuallySetActiveLLM", metrics.active_model);
           }
         }
-        
+
         // Update database status from memory health (if available)
         // Do this asynchronously so it doesn't block the main refresh
         updateDatabaseStatus();
@@ -3458,14 +3549,14 @@
 
         // Update agent status
         agentOk = updateAgentStatus(agentRoot);
-        
+
         // Debug: Log agentRoot if it exists but doesn't have ok
         if (agentRoot && !agentRoot.ok) {
           console.warn("Agent root response received but not OK:", agentRoot);
         } else if (!agentRoot) {
           console.warn("Agent root request failed - agent-runner may not be responding");
         }
-        
+
         if (agentRoot && agentRoot.ok) {
 
           const tools = agentRoot.tools || [];
@@ -3485,32 +3576,32 @@
               span.textContent = `MCP: ${name} (Error: ${err})`;
               span.title = err;
             } else {
-            span.textContent = `MCP: ${name}`;
+              span.textContent = `MCP: ${name}`;
             }
             badges.push(span);
           });
           const badgeContainer = $("mcp-badges");
           if (badgeContainer) {
-          badgeContainer.innerHTML = "";
-          if (badges.length) {
-            badges.forEach((b) => badgeContainer.appendChild(b));
-          } else {
-            badgeContainer.innerHTML = '<span class="muted" style="font-size:0.78rem;">No MCP servers configured (set MCP_SERVERS in agent_runner.env).</span>';
+            badgeContainer.innerHTML = "";
+            if (badges.length) {
+              badges.forEach((b) => badgeContainer.appendChild(b));
+            } else {
+              badgeContainer.innerHTML = '<span class="muted" style="font-size:0.78rem;">No MCP servers configured (set MCP_SERVERS in agent_runner.env).</span>';
+            }
           }
-          }
-          
+
           // Circuit breaker status
           const cb = agentRoot.circuit_breaker || {};
           const disabled = cb.disabled_servers || [];
           const failures = cb.failure_counts || {};
-          
+
           // Display disabled servers card (fetch detailed status)
           const disabledCard = $("disabled-mcp-servers-card");
           const disabledList = $("disabled-servers-list");
           if (disabledCard && disabledList) {
             if (disabled.length > 0) {
               disabledList.innerHTML = '<div class="muted" style="padding:0.5rem; text-align:center;">Loading details...</div>';
-              
+
               // Fetch detailed circuit breaker status
               (async () => {
                 try {
@@ -3518,37 +3609,37 @@
                   const token = getAuthToken();
                   const headers = {};
                   if (token) headers["Authorization"] = "Bearer " + token;
-                  
+
                   const res = await fetch(`${agentBase}/admin/circuit-breaker/status`, {
                     headers: headers,
                     credentials: "same-origin"
                   });
-                  
+
                   if (res.ok) {
                     const cbStatus = await res.json();
                     const circuitBreakers = cbStatus.circuit_breakers || {};
-                    
+
                     disabledList.innerHTML = "";
-                    
+
                     disabled.forEach((server) => {
                       const cb = circuitBreakers[server] || {};
                       const failureCount = cb.failures || failures[server] || 0;
                       const timeUntil = cb.time_until_recovery_seconds || 0;
                       const message = cb.message || `Disabled due to ${failureCount} failure${failureCount !== 1 ? 's' : ''}`;
-                      
+
                       const serverDiv = document.createElement("div");
                       serverDiv.style.cssText = "padding:0.75rem; margin-bottom:0.5rem; background:var(--state-down-bg); border:1px solid var(--error); border-radius:0.4rem; display:flex; justify-content:space-between; align-items:center;";
-                      
+
                       const serverInfo = document.createElement("div");
                       serverInfo.style.cssText = "flex:1;";
-                      
+
                       const serverName = document.createElement("div");
                       serverName.style.cssText = "font-weight:bold; color:var(--error); margin-bottom:0.25rem;";
                       serverName.textContent = server;
-                      
+
                       const failureInfo = document.createElement("div");
                       failureInfo.style.cssText = "font-size:var(--font-sm); color:var(--muted);";
-                      
+
                       if (timeUntil > 0) {
                         const minutes = Math.floor(timeUntil / 60);
                         const seconds = Math.floor(timeUntil % 60);
@@ -3556,10 +3647,10 @@
                       } else {
                         failureInfo.textContent = message;
                       }
-                      
+
                       serverInfo.appendChild(serverName);
                       serverInfo.appendChild(failureInfo);
-                      
+
                       const resetBtn = document.createElement("button");
                       resetBtn.textContent = "Reset";
                       resetBtn.className = "tag";
@@ -3570,14 +3661,14 @@
                           const token = getAuthToken();
                           const headers = { "Content-Type": "application/json" };
                           if (token) headers["Authorization"] = "Bearer " + token;
-                          
+
                           const res = await fetch(`${agentBase}/admin/circuit-breaker/reset`, {
                             method: "POST",
                             headers: headers,
                             body: JSON.stringify({ server: server }),
                             credentials: "same-origin"
                           });
-                          
+
                           if (res.ok) {
                             console.log(`Circuit breaker reset for ${server}`);
                             refresh(); // Refresh dashboard to update status
@@ -3589,7 +3680,7 @@
                           console.error(`Error resetting circuit breaker: ${e.message}`);
                         }
                       };
-                      
+
                       serverDiv.appendChild(serverInfo);
                       serverDiv.appendChild(resetBtn);
                       disabledList.appendChild(serverDiv);
@@ -3600,22 +3691,22 @@
                     disabled.forEach((server) => {
                       const serverDiv = document.createElement("div");
                       serverDiv.style.cssText = "padding:0.75rem; margin-bottom:0.5rem; background:var(--state-down-bg); border:1px solid var(--error); border-radius:0.4rem; display:flex; justify-content:space-between; align-items:center;";
-                      
+
                       const serverInfo = document.createElement("div");
                       serverInfo.style.cssText = "flex:1;";
-                      
+
                       const serverName = document.createElement("div");
                       serverName.style.cssText = "font-weight:bold; color:var(--error); margin-bottom:0.25rem;";
                       serverName.textContent = server;
-                      
+
                       const failureCount = failures[server] || 0;
                       const failureInfo = document.createElement("div");
                       failureInfo.style.cssText = "font-size:var(--font-sm); color:var(--muted);";
                       failureInfo.textContent = `${failureCount} failure${failureCount !== 1 ? 's' : ''} recorded`;
-                      
+
                       serverInfo.appendChild(serverName);
                       serverInfo.appendChild(failureInfo);
-                      
+
                       const resetBtn = document.createElement("button");
                       resetBtn.textContent = "Reset";
                       resetBtn.className = "tag";
@@ -3626,14 +3717,14 @@
                           const token = getAuthToken();
                           const headers = { "Content-Type": "application/json" };
                           if (token) headers["Authorization"] = "Bearer " + token;
-                          
+
                           const res = await fetch(`${agentBase}/admin/circuit-breaker/reset`, {
                             method: "POST",
                             headers: headers,
                             body: JSON.stringify({ server: server }),
                             credentials: "same-origin"
                           });
-                          
+
                           if (res.ok) {
                             console.log(`Circuit breaker reset for ${server}`);
                             refresh();
@@ -3645,7 +3736,7 @@
                           console.error(`Error resetting circuit breaker: ${e.message}`);
                         }
                       };
-                      
+
                       serverDiv.appendChild(serverInfo);
                       serverDiv.appendChild(resetBtn);
                       disabledList.appendChild(serverDiv);
@@ -3661,7 +3752,7 @@
               disabledList.innerHTML = '<div class="muted" style="padding:0.5rem; text-align:center; color:var(--ok);">✓ All MCP servers are healthy</div>';
             }
           }
-          
+
           if (disabled.length > 0 || Object.keys(failures).length > 0) {
             let cbText = "";
             if (disabled.length > 0) {
@@ -3676,7 +3767,7 @@
             }
             safeSetText("circuit-breaker-status", cbText);
             safeSetStyle("circuit-breaker-status", "color", CSS_VARS.WARN);
-        } else {
+          } else {
             safeSetText("circuit-breaker-status", "✓ All MCP servers healthy");
             safeSetStyle("circuit-breaker-status", "color", CSS_VARS.OK);
           }
@@ -3726,8 +3817,8 @@
           const personaTag = $("persona-switching-tag");
           if (personaTag) {
             personaTag.className = "tag " + (personaSwitching ? CLASS_NAMES.TAG_OK : CLASS_NAMES.TAG_WARN);
-            personaTag.title = personaSwitching 
-              ? "Orchestrator will automatically switch models based on active persona" 
+            personaTag.title = personaSwitching
+              ? "Orchestrator will automatically switch models based on active persona"
               : "Orchestrator will use your manually selected model (no automatic switching)";
           }
 
@@ -3737,7 +3828,7 @@
             $("hardware-limits").textContent = "ACTIVE";
             $("hardware-limits").classList.add("kpi-value-strong");
             const ctx = window.routerNumCtx || '—';
-            $("hardware-details").innerHTML = 
+            $("hardware-details").innerHTML =
               `Context: ${ctx}<br>` +
               `Summarize: ${hl.summarize_threshold}<br>` +
               `Max Result: ${hl.max_tool_result_chars}`;
@@ -3750,7 +3841,7 @@
           if (systemStatus && systemStatus.ok) {
             const idle = systemStatus.is_idle;
             const fullThrottle = systemStatus.full_throttle;
-            
+
             if (fullThrottle) {
               // Use consistent state color pairs - UNATTENDED is a warning state
               safeSetText("system-mode", "UNATTENDED");
@@ -3760,7 +3851,7 @@
               safeSetText("system-mode", idle ? "IDLE" : "ACTIVE");
               // System Mode should be green when it has a value
               safeSetStyle("system-mode", "color", CSS_VARS.OK);
-              safeSetHTML("system-mode-details", 
+              safeSetHTML("system-mode-details",
                 `Load: ${systemStatus.load_percent}%<br>` +
                 `Active Req: ${systemStatus.active_requests}`);
             }
@@ -3846,13 +3937,13 @@
           const internetDetailsEl = $("internet-details");
           if (internetDetailsEl) internetDetailsEl.textContent = "";
         }
-        
+
         // Tool Usage Analytics (for Tools & MCP tab)
         if (agentMetrics && agentMetrics.ok && agentMetrics.tool_metrics) {
           const tm = agentMetrics.tool_metrics;
           const byTool = tm.by_tool || {};
           const byMCP = tm.by_mcp_server || {};
-          
+
           // Top 5 tools by usage
           const toolEntries = Object.entries(byTool)
             .sort((a, b) => (b[1].calls || 0) - (a[1].calls || 0))
@@ -3865,13 +3956,13 @@
           } else {
             safeSetText("tool-usage-breakdown", "No tool usage data yet.");
           }
-          
+
           // Render tool performance chart
           renderToolPerformanceChart(tm);
         } else {
           safeSetText("tool-usage-breakdown", "—");
         }
-        
+
         // Store activity data and render charts
         if (metrics && metrics.ok) {
           try {
@@ -3887,7 +3978,7 @@
           rawActivityData = [];
           renderActivity([]);
         }
-        
+
         // Alerts
         if (agentMetrics && agentMetrics.ok && agentMetrics.alerts && agentMetrics.alerts.length > 0) {
           const alertsHtml = agentMetrics.alerts.slice().reverse().map(alert => {
@@ -3914,7 +4005,7 @@
         // Model configuration moved to Model Services tab - no longer displayed in Overview
 
         // Active LLM logic moved to Model Services tab - no longer displayed in Overview
-        
+
         // Costs / Usage
         if (metrics && metrics.ok && metrics.usage && metrics.usage.total) {
           const t = metrics.usage.total;
@@ -3943,7 +4034,7 @@
               return `<div style="margin-bottom:0.3rem; color:${statusColor};">${status} <span style="color:var(--text);">${time}</span> ${model} <span style="color:var(--muted);">${r.elapsed_ms}ms${tokens}${costStr}</span></div>`;
             }).join("");
             // Activity is now rendered by renderActivity() function
-        } else {
+          } else {
             rawActivityData = [];
             renderActivity([]);
           }
@@ -3979,7 +4070,7 @@
             const costStr = totalCost > 0 ? ` • Cost: $${totalCost.toFixed(4)}` : '';
             const perfStatsEl = $("performance-stats");
             if (perfStatsEl) {
-              perfStatsEl.innerHTML = 
+              perfStatsEl.innerHTML =
                 `<strong>Success Rate:</strong> ${successRate}% (${successful}✓ / ${failed}✗) • ` +
                 `<strong>Response Time:</strong> ${avgTime.toFixed(0)}ms avg (${minTime.toFixed(0)}-${maxTime.toFixed(0)}ms) • ` +
                 `<strong>Total:</strong> ${recent.length} requests • ${totalTokens} tokens${costStr}`;
@@ -4022,7 +4113,7 @@
                 const nextRun = info.next_run ? ` • Next: ${new Date(info.next_run * 1000).toLocaleTimeString()}` : '';
                 const isPending = info.enabled && !info.last_error && info.next_run && info.next_run > now;
                 const isActive = info.enabled && !info.last_error && (!info.next_run || info.next_run <= now);
-                const statusText = info.enabled 
+                const statusText = info.enabled
                   ? (info.last_error ? "ERROR" : (isPending ? "PENDING" : (isActive ? "ACTIVE" : "READY")))
                   : "DISABLED";
                 const runCount = info.run_count || 0;
@@ -4036,10 +4127,10 @@
                       </div>
                       <div style="display:flex; align-items:center; gap:0.5rem;">
                         <span style="color:${statusColor}; font-size:0.7rem; font-weight:bold;">${statusText}</span>
-                        ${info.enabled 
-                          ? `<button onclick="toggleBackgroundTask('${name}', false)" class="tag" style="cursor:pointer; background:rgba(255,107,129,0.1); border-color:var(--error); color:var(--error); padding:0.1rem 0.4rem; font-size:0.65rem;">Disable</button>`
-                          : `<button onclick="toggleBackgroundTask('${name}', true)" class="tag" style="cursor:pointer; background:rgba(74,222,128,0.1); border-color:var(--ok); color:var(--ok); padding:0.1rem 0.4rem; font-size:0.65rem;">Enable</button>`
-                        }
+                        ${info.enabled
+                    ? `<button onclick="toggleBackgroundTask('${name}', false)" class="tag" style="cursor:pointer; background:rgba(255,107,129,0.1); border-color:var(--error); color:var(--error); padding:0.1rem 0.4rem; font-size:0.65rem;">Disable</button>`
+                    : `<button onclick="toggleBackgroundTask('${name}', true)" class="tag" style="cursor:pointer; background:rgba(74,222,128,0.1); border-color:var(--ok); color:var(--ok); padding:0.1rem 0.4rem; font-size:0.65rem;">Enable</button>`
+                  }
                       </div>
                     </div>
                     <div style="font-size:0.75rem; color:var(--muted);">
@@ -4101,8 +4192,8 @@
         statusEl.style.color = mcpToolAccessEnabled ? "var(--ok)" : "var(--muted)";
       }
       if (detailsEl) {
-        detailsEl.textContent = mcpToolAccessEnabled 
-          ? "Routing through agent-runner with tools" 
+        detailsEl.textContent = mcpToolAccessEnabled
+          ? "Routing through agent-runner with tools"
           : "Direct model access (no tools)";
       }
     }
@@ -4110,7 +4201,7 @@
     document.addEventListener("DOMContentLoaded", () => {
       // Debug: Log that DOMContentLoaded fired
       console.log("Dashboard: DOMContentLoaded fired");
-      
+
       // Initialize router base URL from localStorage or default
       const routerBaseEl = $("router-base");
       if (routerBaseEl) {
@@ -4140,19 +4231,19 @@
       } else {
         console.error("Dashboard: router-base element not found!");
       }
-      
+
       // Initialize manually set Active LLM from localStorage on page load
       // (variable is already declared at module scope, just load the value)
       manuallySetActiveLLM = localStorage.getItem("manuallySetActiveLLM") || null;
       manuallySetAgentModel = localStorage.getItem("manuallySetAgentModel") || null;
-      
+
       // Initialize debug mode toggle
       const debugToggle = $("debug-mode-toggle");
       if (debugToggle) {
         debugToggle.checked = debugMode;
         toggleDebugMode(); // Apply initial state
       }
-      
+
       // Initialize MCP toggle UI - load from router API
       const mcpToggle = $("mcp-toggle");
       if (mcpToggle) {
@@ -4163,12 +4254,12 @@
           const token = $("auth-token").value.trim();
           const headers = { "Content-Type": "application/json", "Accept": "application/json" };
           if (token) headers["Authorization"] = "Bearer " + token;
-          
+
           try {
             const result = await postJson(base + "/admin/mcp-toggle", headers, { enabled });
             mcpToolAccessEnabled = result.mcp_tool_access_enabled;
             updateMCPToggleUI();
-            
+
             // When enabling MCP toggle, sync router's active_model to agent-runner
             if (enabled && manuallySetActiveLLM) {
               const agentBase = base.includes(":5455") ? base.replace(":5455", ":5460") : base.replace(/\/+$/, "") + ":5460";
@@ -4178,7 +4269,7 @@
                 console.warn("Failed to sync agent-runner model when enabling MCP:", e);
               }
             }
-            
+
             refresh();
           } catch (e) {
             alert(`✗ Failed to update MCP toggle: ${e.message}`);
@@ -4187,7 +4278,7 @@
           }
         });
       }
-      
+
       // Auto-detect router base URL from current page location
       const routerBaseInput = $("router-base");
       if (!routerBaseInput.value) {
@@ -4209,29 +4300,29 @@
             alert("Please enter an auth token first");
             return;
           }
-          
+
           const confirmed = confirm(
             "This will update the auth token in config.yaml and restart the router.\n\n" +
             "You will need to re-enter the token after restart.\n\n" +
             "Continue?"
           );
-          
+
           if (!confirmed) return;
-          
+
           const base = getRouterBase();
           const currentToken = getAuthToken();
           const headers = getHeaders(currentToken);
-          
+
           try {
             saveAuthTokenBtn.disabled = true;
             saveAuthTokenBtn.textContent = "Saving...";
-            
+
             const result = await postJson(
               base + "/admin/auth-token",
               headers,
               { auth_token: token, restart: true }
             );
-            
+
             if (result && result.ok) {
               alert(`✓ ${result.message || "Auth token saved successfully"}\n\nRouter restart initiated.`);
               // Clear the field since router will restart
@@ -4249,7 +4340,7 @@
           }
         });
       }
-      
+
       const refreshBtn = $("refresh-btn");
       if (refreshBtn) {
         refreshBtn.addEventListener("click", () => {
@@ -4430,7 +4521,7 @@
           window.open(`${agentBase}/editor?${params.toString()}`, "_blank");
         });
       }
-      
+
       // Search/filter event listeners
       const activitySearch = $("activity-search");
       const activityFilter = $("activity-filter");
@@ -4446,7 +4537,7 @@
       if (activityFilter) {
         activityFilter.addEventListener("change", filterActivity);
       }
-      
+
       const memorySearch = $("memory-search");
       const memoryFilter = $("memory-filter");
       if (memorySearch) {
@@ -4461,7 +4552,7 @@
       if (memoryFilter) {
         memoryFilter.addEventListener("change", filterMemoryFacts);
       }
-      
+
       const manualSearch = $("manual-search");
       if (manualSearch) {
         manualSearch.addEventListener("input", filterManual);
@@ -4472,7 +4563,7 @@
           }
         });
       }
-      
+
       // Keyboard shortcuts
       document.addEventListener("keydown", (e) => {
         // Ctrl/Cmd + K: Focus search in current tab
@@ -4575,7 +4666,7 @@
         localStorage.removeItem("manuallySetActiveLLM");
         refresh(); // Refresh to show actual metrics-based value
       }
-      
+
       // Also check database status on initial load
       updateDatabaseStatus();
       updateTaskServerStatus();
@@ -4589,9 +4680,9 @@
         if (savedToken && !authTokenInput.value.trim()) {
           authTokenInput.value = savedToken;
         }
-        
+
         // Save token to localStorage when user types in the field
-        authTokenInput.addEventListener("input", function() {
+        authTokenInput.addEventListener("input", function () {
           if (this.value.trim()) {
             localStorage.setItem("router_auth_token", this.value.trim());
             // Hide warning when token is entered
@@ -4602,7 +4693,7 @@
           }
         });
       }
-      
+
       // Initial load (token should now be loaded)
       console.log("Dashboard: Starting initial refresh");
       try {
@@ -4614,14 +4705,14 @@
         console.error("Dashboard: Error during initial refresh:", e);
         alert("Dashboard initialization error: " + e.message);
       }
-      
+
       // Auto-refresh every 10 seconds (only if not suspended)
       refreshIntervalId = setInterval(() => {
         if (!refreshSuspended) {
           refresh();
         }
       }, 10000);
-      
+
       // Check database status on initial load and periodically
       updateDatabaseStatus();
       updateTaskServerStatus();
@@ -4629,4 +4720,5 @@
     });
   </script>
 </body>
+
 </html>
