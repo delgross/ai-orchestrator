@@ -74,6 +74,8 @@ async def graph_optimization_task(state: AgentState):
             logger.info(f"Graph Result: {result}")
         else:
             logger.warning("Modal not active. Skipping.")
+    except Exception as e:
+        logger.error(f"Graph optimization failed: {e}")
 
 
 async def visual_sentry_task(state: AgentState):
