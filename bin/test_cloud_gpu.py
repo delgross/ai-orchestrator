@@ -25,13 +25,15 @@ def test_gpu_connection():
     edges = [(1,2), (2,3), (3,1), (4,5)] 
     # This should find two communities: {1,2,3} and {4,5}
 
-    print("   Sending data to Cloud...")
+    print("   Sending data to Cloud...", flush=True)
     try:
         # call .remote() inside app context for ephemeral run
-        with app.run():
+        # show_progress=True ensures we see the progress bar/logs in terminal
+        with app.run(show_progress=True):
+            print("   (Connected to Modal App Context)", flush=True)
             result = graph_community_detection.remote(nodes, edges)
         
-        print("\n✅ SUCCESS: Received response from Cloud!")
+        print("\n✅ SUCCESS: Received response from Cloud!", flush=True)
         print(f"   Result: {result}")
         print("   (Note: If you see {1: 0, 2: 0, 3: 0, 4: 1, 5: 1}, the math is correct.)")
         
