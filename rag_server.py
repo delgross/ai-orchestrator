@@ -160,11 +160,23 @@ class RAGServer:
             if isinstance(results, list) and len(results) > 0:
                 # Last statement result
                 data = results[-1].get("result", [])
-                # Normalize results
+                
+                # Normalize results and calculate confidence
                 cleaned = []
+                scores = []
                 for row in data:
+                    score = row.get("score", 2.0)
+                    # For Euclidean in Surreal, 0.0 is perfect, > 1.0 is getting vague
+                    if score > 1.2: continue # Accuracy Filter: Drop low-confidence matches
+                    
+                    scores.append(score)
                     row.pop("embedding", None)
                     cleaned.append(row)
+                
+                if scores:
+                    avg_score = sum(scores) / len(scores)
+                    logger.info(f"SEARCH QUALITY: Best Score: {min(scores):.4f}, Avg: {avg_score:.4f} ({len(cleaned)} matches kept)")
+                
                 return cleaned
             return []
         except Exception as e:
@@ -176,18 +188,29 @@ rag_backend = RAGServer()
 
 @app.post("/ingest")
 async def ingest(req: IngestRequest):
-    # Simple chunker (by paragraph for now)
-    paragraphs = [p.strip() for p in req.content.split("\n\n") if p.strip()]
-    if not paragraphs:
-        paragraphs = [req.content]
+    # ACCURACY UPGRADE: Sliding Window Chunking
+    # instead of just paragraph split, we use overlapping windows to ensure context isn't cut off
+    text = req.content
+    window_size = 1000 # chars
+    overlap = 200 # chars
+    
+    chunks = []
+    if len(text) <= window_size:
+        chunks = [text]
+    else:
+        start = 0
+        while start < len(text):
+            end = start + window_size
+            chunks.append(text[start:end])
+            start += (window_size - overlap)
         
     success_count = 0
-    logger.info(f"INGEST: Received {len(req.content)} chars for KB '{req.kb_id}' from file '{req.filename}'")
-    for p in paragraphs:
+    logger.info(f"INGEST: Received {len(req.content)} chars. Accuracy-friendly chunking produced {len(chunks)} overlapping windows.")
+    for p in chunks:
         if await rag_backend.add_chunk(p, req.kb_id, req.filename, req.metadata):
             success_count += 1
             
-    logger.info(f"INGEST COMPLETE: Created {success_count} chunks in SurrealDB")
+    logger.info(f"INGEST COMPLETE: {success_count} chunks stored in SurrealDB.")
     return {"ok": True, "chunks_ingested": success_count}
 
 @app.post("/query")
