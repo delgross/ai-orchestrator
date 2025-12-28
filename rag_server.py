@@ -542,7 +542,7 @@ async def graph_snapshot(limit: int = 1000):
     
     sql = f"""
     USE NS {SURREAL_NS} DB {SURREAL_DB};
-    SELECT * FROM entity LIMIT {limit};
+    SELECT id, name, type FROM entity LIMIT {limit};
     SELECT * FROM relates LIMIT {limit};
     """
     
