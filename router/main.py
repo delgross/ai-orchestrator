@@ -73,6 +73,9 @@ async def run_environment_watchdog():
                 r = await state.client.get(f"{AGENT_RUNNER_URL}/health", timeout=1.0)
                 if r.status_code != 200:
                     logger.warning(f"⚠️ Watchdog: Agent Runner returned {r.status_code}")
+            except Exception as e:
+                pass # Agent runner offline, logged elsewhere or just retry
+
             # 3. Check RAG Server
             try:
                 r = await state.client.get(f"{RAG_BASE}/health", timeout=1.0)
