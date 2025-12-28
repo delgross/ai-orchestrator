@@ -51,8 +51,18 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
     # --- NIGHT SHIFT LOGIC ---
     import datetime
     current_hour = datetime.datetime.now().hour
-    is_night_shift = NIGHT_SHIFT_START <= current_hour < NIGHT_SHIFT_END
+    is_night = (1 <= current_hour < 5) # Night shift is 1 AM to 5 AM
     
+    trigger_file = INGEST_DIR / ".trigger_now"
+    force_run = trigger_file.exists()
+
+    if force_run:
+        logger.warning("⚡ TURBO MODE: Forced ingestion triggered by user!")
+        try:
+            trigger_file.unlink()
+        except Exception as e:
+            logger.error(f"Failed to unlink .trigger_now file: {e}")
+
     # Files to process in this run
     batch_files = []
 
