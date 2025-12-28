@@ -651,6 +651,11 @@ class AgentEngine:
 
                 return response
             
+            elif name == "ingest_knowledge":
+                return await self.tool_ingest_knowledge(state, **args)
+            elif name == "ingest_file":
+                return await self.tool_ingest_file(state, **args)
+            
             # Helper for tool execution loop
             if message.get("tool_calls"):
                 for tool_call in message["tool_calls"]:
@@ -751,6 +756,43 @@ class AgentEngine:
             return {"ok": True, "message": "No relevant info found in facts or documents."}
             
         return {"ok": True, "search_results": combined_context}
+
+    async def tool_ingest_knowledge(self, state: AgentState, text: str, kb_id: str = "default", source_name: str = "Chat") -> Dict[str, Any]:
+        """Manually push text into RAG."""
+        rag_url = "http://127.0.0.1:5555/ingest"
+        try:
+            payload = {
+                "content": text,
+                "kb_id": kb_id,
+                "filename": source_name,
+                "metadata": {"type": "manual_ingest", "timestamp": time.time()}
+            }
+            async with httpx.AsyncClient() as client:
+                r = await client.post(rag_url, json=payload, timeout=30.0)
+                if r.status_code == 200:
+                    return {"ok": True, "message": f"Successfully ingested {len(text)} chars into KB '{kb_id}'"}
+                return {"ok": False, "error": f"RAG server error: {r.status_code}"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def tool_ingest_file(self, state: AgentState, path: str, kb_id: str = "default") -> Dict[str, Any]:
+        """Ingest a file from the local filesystem (sandbox) into RAG."""
+        full_path = os.path.join(state.agent_fs_root, path)
+        if not os.path.exists(full_path):
+            return {"ok": False, "error": f"File not found: {path}"}
+        
+        try:
+            # Check extension
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in ['.txt', '.md', '.csv']:
+                return {"ok": False, "error": f"Unsupported file type for direct ingestion: {ext}. Currently only text-based files are supported."}
+            
+            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            
+            return await self.tool_ingest_knowledge(state, content, kb_id, source_name=os.path.basename(path))
+        except Exception as e:
+            return {"ok": False, "error": f"Ingestion failed: {str(e)}"}
 
     async def _handle_fallback(self, messages, active_tools, worker_draft):
         """Centralized fallback logic when primary/finalizer models fail."""
