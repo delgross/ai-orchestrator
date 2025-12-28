@@ -517,7 +517,7 @@ class AgentEngine:
                         files_info = (
                             "\n### UPLOADED FILES (Ready for processing):\n"
                             "The following files were uploaded via the chat interface and are available in your sandbox.\n"
-                            "To read them, use the full path: " + upload_dir + "/{ID}_{FILENAME}\n"
+                            "To read them, use the relative path: uploads/{ID}_{FILENAME}\n"
                             + "\n".join(file_summaries)
                         )
             except Exception as e:
