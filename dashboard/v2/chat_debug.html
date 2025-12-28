@@ -352,21 +352,23 @@
                 // If loading for first time, clear container
                 if (!graphInstance) container.innerHTML = '';
 
-                // Color by Type
-                const typeColors = {};
+                // Curated Colors for known types
+                const typeColors = {
+                    'Person': '#ff6b6b',      // Red
+                    'Location': '#4ecdc4',    // Teal
+                    'Technology': '#ffe66d',  // Yellow
+                    'AI': '#1a535c',          // Dark Blue/Green
+                    'Software': '#f7fff7',    // White/Mint
+                    'Organization': '#ff9f1c' // Orange
+                };
+
                 const getColor = (type) => {
-                    const palette = [
-                        '#ff4d4d', '#ff944d', '#ffff4d', '#4dff4d', '#4dffff',
-                        '#4d94ff', '#944dff', '#ff4dff', '#ff4d94', '#ffffff'
-                    ];
-                    if (!typeColors[type]) {
-                        // Hash the type string to pick a color deterministically
-                        let hash = 0;
-                        for (let i = 0; i < type.length; i++) hash = type.charCodeAt(i) + ((hash << 5) - hash);
-                        const index = Math.abs(hash) % palette.length;
-                        typeColors[type] = palette[index];
-                    }
-                    return typeColors[type];
+                    if (typeColors[type]) return typeColors[type];
+                    // Hash fallback
+                    let hash = 0;
+                    for (let i = 0; i < type.length; i++) hash = type.charCodeAt(i) + ((hash << 5) - hash);
+                    const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+                    return '#' + "00000".substring(0, 6 - c.length) + c;
                 };
 
                 // Initialize or Update Graph
@@ -374,37 +376,45 @@
                     graphInstance = ForceGraph3D()
                         (container)
                         .graphData(data)
-                        .nodeLabel('label')
+                        .nodeId('id')
+                        .linkSource('source')
+                        .linkTarget('target')
+                        .nodeLabel(node => `${node.label} (${node.group})`)
                         .nodeColor(node => getColor(node.group))
-                        .linkWidth(1)
-                        .linkOpacity(0.5)
-                        .linkDirectionalParticles(2)
-                        .linkDirectionalParticleSpeed(d => 0.005)
                         .nodeResolution(16)
-                        .backgroundColor('#000000') // Pure black for high contrast
+                        .nodeOpacity(0.9)
+                        .linkWidth(1.5) // Slightly thicker
+                        .linkOpacity(0.6)
+                        .linkDirectionalParticles(2)
+                        .linkDirectionalParticleSpeed(0.005)
+                        .backgroundColor('#000000') // Pure black
+                        .cooldownTicks(100)
                         .onNodeHover(node => {
                             container.style.cursor = node ? 'pointer' : null;
                             if (node) {
                                 tooltip.style.display = 'block';
-                                tooltip.innerHTML = `<strong style="color: #4da6ff; font-size: 1.1em">${node.label}</strong><br><span style="color: #aaa">${node.group}</span>`;
-                                // track mouse
-                                // (We can't easily track 3D mouse pos to 2D screen here without raycaster, simplified to top-left overlay)
+                                tooltip.innerHTML = `<strong style="color: ${getColor(node.group)}; font-size: 1.1em">${node.label}</strong><br><span style="color: #aaa">${node.group}</span>`;
                             } else {
                                 tooltip.style.display = 'none';
                             }
                         })
                         .onNodeClick(node => {
-                            // Fly to node
-                            const distance = 60;
+                            const distance = 80;
                             const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
                             graphInstance.cameraPosition(
-                                { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }, // new position
-                                node, // lookAt ({ x, y, z })
-                                2000  // ms transition duration
+                                { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+                                node,
+                                2000
                             );
                         });
+
+                    // Tune Physics to fix layout
+                    graphInstance.d3Force('charge').strength(-300);
+                    graphInstance.d3Force('link').distance(100);
+
                 } else {
                     graphInstance.graphData(data);
+                    graphInstance.numDimensions(3); // Re-heat simulation
                 }
 
                 window.graphLoaded = true;

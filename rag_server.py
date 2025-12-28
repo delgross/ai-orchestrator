@@ -155,33 +155,40 @@ class RAGServer:
         # Initialize schema
         setup_sql = f"""
         USE NS {SURREAL_NS} DB {SURREAL_DB};
-        DEFINE TABLE chunk SCHEMAFULL;
-        DEFINE FIELD content ON TABLE chunk TYPE string;
-        DEFINE FIELD kb_id ON TABLE chunk TYPE string;
-        DEFINE FIELD filename ON TABLE chunk TYPE string;
-        DEFINE FIELD metadata ON TABLE chunk TYPE object;
-        DEFINE FIELD embedding ON TABLE chunk TYPE array<float, 1024>;
-        DEFINE FIELD authority ON TABLE chunk TYPE number DEFAULT 1.0;
-        DEFINE FIELD timestamp ON TABLE chunk TYPE datetime DEFAULT time::now();
+
+        -- 1. Define Analyzers (Linguistic Lemmatization)
+        DEFINE ANALYZER IF NOT EXISTS en_lemma TOKENIZERS class FILTERS lowercase, snowball(english);
+
+        -- 2. Define Tables
+        DEFINE TABLE IF NOT EXISTS chunk SCHEMAFULL;
+        
+        -- 3. Define Fields safely
+        DEFINE FIELD IF NOT EXISTS content ON TABLE chunk TYPE string ANALYZER en_lemma;
+        DEFINE FIELD IF NOT EXISTS kb_id ON TABLE chunk TYPE string;
+        DEFINE FIELD IF NOT EXISTS filename ON TABLE chunk TYPE string;
+        DEFINE FIELD IF NOT EXISTS metadata ON TABLE chunk TYPE object;
+        DEFINE FIELD IF NOT EXISTS embedding ON TABLE chunk TYPE array<float, 1024>;
+        DEFINE FIELD IF NOT EXISTS authority ON TABLE chunk TYPE number DEFAULT 1.0;
+        DEFINE FIELD IF NOT EXISTS timestamp ON TABLE chunk TYPE datetime DEFAULT time::now();
         
         -- Remove legacy MTREE index if it exists (for migration to HNSW)
         REMOVE INDEX IF EXISTS chunk_embedding_index ON TABLE chunk;
 
-        DEFINE INDEX chunk_embedding_index ON TABLE chunk FIELDS embedding HNSW DIMENSION 1024 DIST EUCLIDEAN TYPE F32;
+        DEFINE INDEX IF NOT EXISTS chunk_embedding_index ON TABLE chunk FIELDS embedding HNSW DIMENSION 1024 DIST EUCLIDEAN TYPE F32;
 
         -- Graph Schema
-        DEFINE TABLE entity SCHEMAFULL;
-        DEFINE FIELD name ON TABLE entity TYPE string;
-        DEFINE FIELD type ON TABLE entity TYPE string;
-        DEFINE FIELD description ON TABLE entity TYPE string;
-        DEFINE FIELD metadata ON TABLE entity TYPE object;
-        DEFINE FIELD last_updated ON TABLE entity TYPE datetime DEFAULT time::now();
+        DEFINE TABLE IF NOT EXISTS entity SCHEMAFULL;
+        DEFINE FIELD IF NOT EXISTS name ON TABLE entity TYPE string ANALYZER en_lemma;
+        DEFINE FIELD IF NOT EXISTS type ON TABLE entity TYPE string;
+        DEFINE FIELD IF NOT EXISTS description ON TABLE entity TYPE string ANALYZER en_lemma;
+        DEFINE FIELD IF NOT EXISTS metadata ON TABLE entity TYPE object;
+        DEFINE FIELD IF NOT EXISTS last_updated ON TABLE entity TYPE datetime DEFAULT time::now();
         
-        DEFINE TABLE relates SCHEMAFULL TYPE RELATION;
-        DEFINE FIELD type ON TABLE relates TYPE string;
-        DEFINE FIELD description ON TABLE relates TYPE string;
-        DEFINE FIELD origin ON TABLE relates TYPE string;
-        DEFINE FIELD timestamp ON TABLE relates TYPE datetime DEFAULT time::now();
+        DEFINE TABLE IF NOT EXISTS relates SCHEMAFULL TYPE RELATION;
+        DEFINE FIELD IF NOT EXISTS type ON TABLE relates TYPE string;
+        DEFINE FIELD IF NOT EXISTS description ON TABLE relates TYPE string ANALYZER en_lemma;
+        DEFINE FIELD IF NOT EXISTS origin ON TABLE relates TYPE string;
+        DEFINE FIELD IF NOT EXISTS timestamp ON TABLE relates TYPE datetime DEFAULT time::now();
         """
         try:
             await self.execute_surreal_query(setup_sql)
@@ -413,16 +420,20 @@ async def stats():
                     return val if val is not None else []
                 return []
 
-            chunk_data = get_res(0)
+            chunk_data = get_res(1)
             
             # Entities/Edges typically return [{count: N}]
-            ent_res = get_res(1)
+            ent_res = get_res(2)
+            logger.info(f"STATS_DEBUG: ent_res raw: {ent_res}")
             entity_count = ent_res[0].get("count", 0) if ent_res else 0
             
-            edge_res = get_res(2)
+            edge_res = get_res(3)
+            logger.info(f"STATS_DEBUG: edge_res raw: {edge_res}")
             edge_count = edge_res[0].get("count", 0) if edge_res else 0
             
             total = sum(d.get("count", 0) for d in chunk_data)
+            logger.info(f"STATS_DEBUG: Total Chunks: {total}, Entities: {entity_count}, Edges: {edge_count}")
+            
             return {
                 "total_chunks": total,
                 "total_entities": entity_count,
@@ -430,7 +441,7 @@ async def stats():
                 "knowledge_bases": {d.get("kb_id"): d.get("count") for d in chunk_data},
                 "embedding_model": EMBED_MODEL,
                 "performance": rag_backend.metrics,
-                "status": "online" if total > 0 else "empty"
+                "status": "online" if (total > 0 or entity_count > 0) else "empty"
             }
     except Exception as e:
         logger.error(f"Stats check failed: {e}")
