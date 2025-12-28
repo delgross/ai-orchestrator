@@ -40,6 +40,15 @@ if state.max_concurrency > 0:
 
 logger = setup_logger("router")
 
+@asynccontextmanager
+async def log_time(operation_name: str, level=logging.DEBUG):
+    t0 = time.time()
+    try:
+        yield
+    finally:
+        duration = time.time() - t0
+        logger.log(level, f"PERF: {operation_name} completed in {duration:.4f}s")
+
 async def run_environment_watchdog():
     """Continuously check critical dependencies."""
     logger.info("🛡️ Starting Environment Watchdog...")
@@ -407,31 +416,31 @@ async def chat_completions(request: Request):
 
     body = await request.json()
     model = body.get("model", "")
-    print(f"DEBUG: ROUTER Received Chat Request for Model: '{model}'")
+    request_id = request.state.request_id
+    
+    logger.info(f"REQ [{request_id}] Chat Completion: Model='{model}'")
     
     if not model or model == "agent" or " " in model: 
-        print(f"DEBUG: Unknown/Invalid model name '{model}', defaulting to {MODEL_AGENT_MCP}")
+        logger.warning(f"REQ [{request_id}] Invalid/Unknown model '{model}', defaulting to {MODEL_AGENT_MCP}")
         model = MODEL_AGENT_MCP
-
-
     
     # Resolve alias
     if model == MODEL_ROUTER:
         model = state.system_router_model
         
     prefix, model_id = parse_model_string(model)
+    logger.debug(f"REQ [{request_id}] Parsed Target: Prefix='{prefix}', ID='{model_id}'")
     
     msgs = body.get("messages", [])
     body["messages"] = sanitize_messages(msgs)
     
-    request_id = request.state.request_id
-    
     # Concurrency limit
-    if semaphore:
-        async with semaphore:
+    async with log_time(f"Chat Request [{request_id}]", level=logging.INFO):
+        if semaphore:
+            async with semaphore:
+                return await _handle_chat(request, body, prefix, model_id)
+        else:
             return await _handle_chat(request, body, prefix, model_id)
-    else:
-        return await _handle_chat(request, body, prefix, model_id)
 
 async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, model_id: str):
     request_id = request.state.request_id

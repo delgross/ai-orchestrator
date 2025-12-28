@@ -59,17 +59,23 @@ def setup_logger(
             encoding="utf-8"
         )
         file_handler.setFormatter(
-            logging.Formatter(f"%(asctime)s %(levelname)s {name} %(message)s")
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
         )
         logger.addHandler(file_handler)
         
         # Console handler for development
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(
-            logging.Formatter(f"%(asctime)s %(levelname)s {name} %(message)s")
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
         )
         logger.addHandler(console_handler)
     
+    # Configure Third-Party Noise
+    # This ensures that even if other modules behave badly, we squash the noise
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("multipart").setLevel(logging.WARNING)
+
     # Set log level
     if log_level is None:
         log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -82,6 +88,7 @@ def setup_logger(
         "CRITICAL": logging.CRITICAL,
     }
     logger.setLevel(log_level_map.get(log_level, logging.INFO))
+    # logger.propagate = False # Actually, we might want propagation for Uvicorn to see it? Standardizing on False for now as per legacy code.
     logger.propagate = False
     
     return logger

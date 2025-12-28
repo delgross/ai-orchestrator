@@ -26,7 +26,18 @@ from common.constants import (
 )
 from common.logging_setup import setup_logger
 
+from contextlib import asynccontextmanager
+
 logger = logging.getLogger("agent_runner")
+
+@asynccontextmanager
+async def log_time(operation_name: str, level=logging.DEBUG):
+    t0 = time.time()
+    try:
+        yield
+    finally:
+        duration = time.time() - t0
+        logger.log(level, f"PERF: {operation_name} completed in {duration:.4f}s")
 
 app = FastAPI(title="Agent Runner (Modularized)")
 
@@ -201,21 +212,29 @@ async def chat_completions(body: Dict[str, Any], request: Request):
     state.active_requests += 1
     state.last_interaction_time = time.time()
     
-    start_time = time.time()
+    # Timer for stats endpoint (distinct from log_time)
+    t0_stats = time.time()
+    
     try:
         requested_model = body.get(OBJ_MODEL)
+        
+        logger.info(f"REQ [{request_id}] Agent Execution: Model='{requested_model}'")
+
         # Prevent infinite recursion / invalid model names
-        # usage: if client requests "agent:mcp" or some random name like "Questionable Insight",
-        # ignore it and use our configured backend.
         if requested_model == "agent:mcp" or not requested_model or ":" not in requested_model:
             requested_model = None
             
         completion = {}
-        completion = await engine.agent_loop(messages, model=requested_model, request_id=request_id)
-        duration_ms = (time.time() - start_time) * 1000
+        async with log_time(f"Agent Loop [{request_id}]", level=logging.INFO):
+            completion = await engine.agent_loop(messages, model=requested_model, request_id=request_id)
+        
+        # Update Stats
+        duration_ms = (time.time() - t0_stats) * 1000
         state.request_count += 1
         state.total_response_time_ms += duration_ms
+
     except Exception as e:
+        logger.error(f"Agent Execution Failed [{request_id}]: {e}", exc_info=True)
         state.error_count += 1
         state.last_error = str(e)
         raise e
