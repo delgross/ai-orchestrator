@@ -43,6 +43,8 @@ class AgentEngine:
             "mcp_proxy": mcp_tools.tool_mcp_proxy,
             "knowledge_search": self.tool_knowledge_search,
             "search": self.tool_unified_search,
+            "ingest_knowledge": self.tool_ingest_knowledge,
+            "ingest_file": self.tool_ingest_file,
         }
         return impls
 
@@ -683,10 +685,7 @@ class AgentEngine:
 
                 return response
             
-            elif name == "ingest_knowledge":
-                return await self.tool_ingest_knowledge(state, **args)
-            elif name == "ingest_file":
-                return await self.tool_ingest_file(state, **args)
+
             
             # Helper for tool execution loop
             if message.get("tool_calls"):
