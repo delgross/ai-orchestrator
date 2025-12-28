@@ -706,3 +706,10 @@ async def stop_process():
     logger.warning("Agent Runner process termination requested.")
     return {"ok": True, "message": "Agent Runner stopping in 1s..."}
 
+
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    port = int(os.getenv("PORT", 5460))
+    # Run uvicorn programmatically
+    uvicorn.run("agent_runner.main:app", host="0.0.0.0", port=port, reload=True)
