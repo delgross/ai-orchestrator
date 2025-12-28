@@ -95,22 +95,40 @@ if has_modal:
 
     # 4. Heavy Image Analysis (Cloud Offload)
     # Uses a vision model (or strong cloud CPU logic) to describe images cheaply
+    # 4. Heavy Image Analysis (Cloud Offload)
+    # Uses a vision model to describe images with structured metadata
     @app.function(image=image, timeout=300)
-    def cloud_process_image(image_bytes: bytes, prompt: str = "Describe this image in detail."):
+    def cloud_process_image(image_bytes: bytes, prompt: str = None):
         """
         Analyzes an image in the cloud.
+        Returns JSON-formatted string with:
+        - description: Detailed narrative.
+        - objects: List of detected objects.
+        - animals: List of animals.
+        - people: Count/Description.
         """
+        if prompt is None:
+            prompt = (
+                "Analyze this image. Return a JSON object with: "
+                "'description' (detailed text), "
+                "'objects' (list of items), "
+                "'animals' (list), "
+                "'people' (list/count), "
+                "'camera_data' (inferred EXIF/type)."
+            )
+            
         import base64
-        # In a real Modal setup using GPUs, you would load a local model here 
-        # (e.g. Llava or internal API proxy). 
-        # For now, we stub it to prove the plumbing or return a placeholder 
-        # that confirms it ran in the cloud.
+        # Real GPU Logic would go here (e.g. Qwen-VL or LLaVA with json enforcement)
         
-        # Valid logic would comprise:
-        # model = load_model("llava-v1.5-7b")
-        # result = model.generate(image_bytes, prompt)
-        
-        return f"[CLOUD VISION RESULT] Processed {len(image_bytes)} bytes. Analysis: Image content analyzed securely in cloud."
+        # Mock Response for now (until you deploy with actual model code)
+        import json
+        return json.dumps({
+            "description": "Image analysis running in cloud.",
+            "objects": ["detected_item_1", "detected_item_2"],
+            "animals": [],
+            "people": [],
+            "camera_data": "Unknown"
+        })
 
     # 5. Search Re-Ranking (GPU/CPU)
     # Uses a Cross-Encoder to rank search results better than vector similarity
