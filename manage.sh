@@ -575,6 +575,8 @@ Commands:
   restart-rag   Restart only RAG Server
   sync          Sync all code changes to Git
   backup        Trigger a manual memory backup
+  pack          Full Brain Backup (DB + Files) to Sync Folder
+  unpack        Full Brain Restore from Sync Folder
 EOF
 }
 
@@ -586,6 +588,8 @@ case "${1:-status}" in
   restart) restart_all ;;
   ensure) ensure_running ;;
   logs) logs "${2:-all}" ;;
+  pack) ./bin/backup_brain.sh ;;
+  unpack) ./bin/restore_brain.sh "${2:-}" ;;
   start-router) start_router; show_status ;;
   stop-router) stop_router; show_status ;;
   restart-router) 
