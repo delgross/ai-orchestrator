@@ -100,7 +100,10 @@ class AgentState:
 
     async def get_http_client(self) -> httpx.AsyncClient:
         if self.http_client is None:
-            self.http_client = httpx.AsyncClient(timeout=self.http_timeout)
+            headers = {}
+            if self.router_auth_token:
+                headers["Authorization"] = f"Bearer {self.router_auth_token}"
+            self.http_client = httpx.AsyncClient(timeout=self.http_timeout, headers=headers)
         return self.http_client
 
     async def close_http_client(self):
