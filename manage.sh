@@ -538,6 +538,19 @@ run_backup() {
   ./bin/backup_memory.sh
 }
 
+# Tail logs
+logs() {
+  local service=${1:-all}
+  case "$service" in
+    router) tail -f "$ROOT_DIR/logs/router.log" ;;
+    agent) tail -f "$ROOT_DIR/logs/agent_runner.log" ;;
+    rag) tail -f "$ROOT_DIR/logs/rag.log" ;;
+    surreal) tail -f "$ROOT_DIR/logs/surreal.log" ;;
+    all) tail -f "$ROOT_DIR/logs/"*.log ;;
+    *) echo "Unknown log service: $service. Options: router, agent, rag, surreal, all" ;;
+  esac
+}
+
 # Usage
 usage() {
   cat <<EOF
@@ -548,6 +561,7 @@ Commands:
   stop          Stop all services
   restart       Restart all services
   ensure        Start any missing services (keeps running services running)
+  logs [svc]    Tail logs for a service (router, agent, rag, surreal, all)
   start-router  Start only the router
   stop-router   Stop only the router
   restart-router Restart only the router
@@ -571,6 +585,7 @@ case "${1:-status}" in
   stop) stop_all ;;
   restart) restart_all ;;
   ensure) ensure_running ;;
+  logs) logs "${2:-all}" ;;
   start-router) start_router; show_status ;;
   stop-router) stop_router; show_status ;;
   restart-router) 
