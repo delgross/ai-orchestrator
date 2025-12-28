@@ -600,11 +600,7 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
 
             state.provider_requests[prefix] = state.provider_requests.get(prefix, 0) + 1
             
-            # BUDGET CHECK
-            from common.budget import get_budget_tracker
-            budget = get_budget_tracker()
-            if not budget.check_budget():
-                raise HTTPException(status_code=429, detail="Daily Budget Exceeded (Antigravity Cost Control)")
+
 
             url = join_url(prov.base_url, prov.chat_path)
             
@@ -625,13 +621,7 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                             
                             async for chunk in r.aiter_bytes():
                                 yield chunk
-                                # Try to sniff usage from chunk if possible? 
-                                # Hard with raw bytes pass-through. 
-                                # We'll estimate cost on input (pre-flight) for now to be safe?
-                                # No, let's just not block functionality. Budget check happens at start.
-                                
-                        # Post-flight recording is hard in passthrough. 
-                        # We will rely on Pre-Check mostly.
+
                     except Exception as e:
                         state.circuit_breakers.record_failure(prefix)
                         logger.error(f"Provider {prefix} call failed: {e}")
@@ -647,19 +637,7 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                         raise HTTPException(status_code=r.status_code, detail=r.text)
                     
                     state.circuit_breakers.record_success(prefix)
-                    data = r.json()
-                    
-                    # BUDGET RECORDING
-                    try:
-                        usage = data.get("usage", {})
-                        in_tok = usage.get("prompt_tokens", 0)
-                        out_tok = usage.get("completion_tokens", 0)
-                        cost = budget.estimate_cost(body.get("model", ""), in_tok, out_tok)
-                        if cost > 0:
-                            budget.record_usage(prefix, cost)
-                    except: pass
-                    
-                    return JSONResponse(data)
+                    return JSONResponse(r.json())
                 except Exception as e:
                     state.circuit_breakers.record_failure(prefix)
                     logger.error(f"Provider {prefix} non-streaming call failed: {e}")
