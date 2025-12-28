@@ -419,9 +419,12 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             try:
                 extraction_prompt = (
                     f"Analyze this file: {file_path.name} for the Knowledge Graph.\n\nContent:\n{content[:4000]}\n\n"
-                    "Task: Identify the core ENTITIES (Classes, Functions, Systems, Concepts, People) and RELATIONSHIPS (imports, definitions, calls, documents, authors).\n"
-                    "1. Define entities with a 'type' (e.g., 'Python Class', 'System', 'API').\n"
-                    "2. Define relationships (e.g., 'AgentRunner' -> 'imports' -> 'contextlib').\n"
+                    "Task: Identify core ENTITIES (Systems, Objects, Concepts, People) and RELATIONSHIPS.\n"
+                    "Focus specifically on:\n"
+                    "1. Dependencies & Prerequisites (A requires B, A depends on B)\n"
+                    "2. Maintenance & Actionable Requirements (A needs Service, A needs Update)\n"
+                    "3. Temporal Events (A happened on Date, A is scheduled for Date)\n"
+                    "4. Structural Links (A contains B, A is part of B)\n\n"
                     "Return JSON: {'entities': [{'name': '...', 'type': '...', 'description': '...'}], 'relations': [{'source': '...', 'target': '...', 'relation': '...', 'description': '...'}]}"
                 )
                 
