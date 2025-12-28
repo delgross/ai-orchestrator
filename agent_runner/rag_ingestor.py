@@ -141,29 +141,45 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             elif ext in ('.png', '.jpg', '.jpeg'):
                 # MULTIMODAL PARSING (Vision-to-Text)
                 logger.info(f"MULTIMODAL: Analyzing image {file_path.name}...")
-                import base64
-                img_data = base64.b64encode(file_path.read_bytes()).decode('utf-8')
                 
-                vision_payload = {
-                    "model": state.vision_model, # Use configured vision model (Local or Cloud)
-                    "messages": [
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "Describe this image in extreme detail for a knowledge base. If it's a document/diagram/label, transcribe all text and describe relationships. Focus on technical accuracy."},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_data}"}}
-                        ]}
-                    ]
-                }
+                content = ""
                 try:
-                    v_url = f"{state.gateway_base}/v1/chat/completions"
-                    v_res = await http_client.post(v_url, json=vision_payload, timeout=60.0)
-                    v_res.raise_for_status()
-                    content = v_res.json()["choices"][0]["message"]["content"]
-                    logger.info(f"MULTIMODAL SUCCESS: Transcribed {len(content)} chars from {file_path.name}")
-                except Exception as e:
-                    logger.error(f"Vision analysis failed for {file_path.name}: {e}")
-                    notify_error(f"Ingestion Error: {file_path.name}", f"Image analysis failed: {e}. Moved to review folder.")
-                    file_path.rename(REVIEW_DIR / file_path.name)
-                    continue
+                    # CLOUD OFFLOAD STRATEGY
+                    from agent_runner.modal_tasks import cloud_process_image, has_modal
+                    if has_modal:
+                        logger.info(f"CLOUD GPU: Offloading Image {file_path.name} to Modal...")
+                        content = cloud_process_image.remote(file_path.read_bytes(), "Describe this image in extreme detail for a knowledge base.")
+                        logger.info(f"CLOUD SUCCESS: Received analysis from Modal.")
+                    else:
+                        raise ImportError("Modal not configured")
+                        
+                except Exception as cloud_err:
+                    if "Modal not configured" not in str(cloud_err):
+                        logger.warning(f"Modal Image Cloud processing failed: {cloud_err}. Falling back to local/Router.")
+                    
+                    # FALLBACK: Router API
+                    import base64
+                    img_data = base64.b64encode(file_path.read_bytes()).decode('utf-8')
+                    vision_payload = {
+                        "model": state.vision_model, 
+                        "messages": [
+                            {"role": "user", "content": [
+                                {"type": "text", "text": "Describe this image in extreme detail for a knowledge base. If it's a document/diagram/label, transcribe all text and describe relationships. Focus on technical accuracy."},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_data}"}}
+                            ]}
+                        ]
+                    }
+                    try:
+                        v_url = f"{state.gateway_base}/v1/chat/completions"
+                        v_res = await http_client.post(v_url, json=vision_payload, timeout=60.0)
+                        v_res.raise_for_status()
+                        content = v_res.json()["choices"][0]["message"]["content"]
+                        logger.info(f"MULTIMODAL SUCCESS (Router): Transcribed {len(content)} chars")
+                    except Exception as e:
+                        logger.error(f"Vision analysis failed for {file_path.name}: {e}")
+                        notify_error(f"Ingestion Error: {file_path.name}", f"Image analysis failed: {e}. Moved to review folder.")
+                        file_path.rename(REVIEW_DIR / file_path.name)
+                        continue
             elif ext in ('.mp3', '.m4a', '.mp4'):
                 # AUDIO TRANSCRIPTION (Whisper via Router)
                 logger.info(f"AUDIO: Transcribing {file_path.name}...")
