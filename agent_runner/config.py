@@ -68,13 +68,21 @@ async def load_mcp_servers(state: AgentState) -> None:
                             github_url = f"https://www.npmjs.com/package/{arg}"
                             break
                             
-                await tool_mcp_proxy(state, "project-memory", "store_mcp_intel", {
+                res = await tool_mcp_proxy(state, "project-memory", "store_mcp_intel", {
                     "name": name,
                     "github_url": github_url,
                     "newsletter": "Auto-Synced",
                     "similar_servers": []
                 }, bypass_circuit_breaker=True)
+                
+                if not res.get("ok"):
+                     print(f"DEBUG: Sync failed for {name}: {res.get('error')}")
+                     logger.warning(f"Sync mcp intel failed for {name}: {res.get('error')}")
+                else:
+                     print(f"DEBUG: Sync success for {name}")
+
             except Exception as e:
+                print(f"DEBUG: Sync Exception for {name}: {e}")
                 logger.warning(f"Failed to sync MCP server '{name}' to memory: {e}")
 
 def load_agent_runner_limits(state: AgentState) -> None:
