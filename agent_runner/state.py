@@ -33,7 +33,7 @@ class AgentState:
         self.fallback_enabled = os.getenv("FALLBACK_ENABLED", "true").lower() == "true"
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "ollama:mxbai-embed-large:latest")
         
-        self.agent_fs_root = "/Users/bee/Sync/Antigravity/ai"
+        self.agent_fs_root = os.getenv("FS_ROOT", os.path.expanduser("~/ai/agent_fs_root"))
         self.max_read_bytes = int(os.getenv("AGENT_MAX_READ_BYTES", "50_000_000"))
         self.max_list_entries = int(os.getenv("AGENT_MAX_LIST_ENTRIES", "5000"))
         self.max_tool_steps = int(os.getenv("AGENT_MAX_TOOL_STEPS", "20"))

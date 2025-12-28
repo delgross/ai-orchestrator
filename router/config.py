@@ -39,6 +39,7 @@ MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", "5_000_000"))
 DEFAULT_UPSTREAM_HEADERS = os.getenv("DEFAULT_UPSTREAM_HEADERS", "")
 ROUTER_AUTH_TOKEN = os.getenv("ROUTER_AUTH_TOKEN") or ""; print(f"DEBUG: Router Token Loaded: {ROUTER_AUTH_TOKEN}")
 ROUTER_MAX_CONCURRENCY = int(os.getenv("ROUTER_MAX_CONCURRENCY", "0"))
+FS_ROOT = os.getenv("FS_ROOT", os.path.expanduser("~/ai/agent_fs_root"))
 
 @dataclass
 class Provider:

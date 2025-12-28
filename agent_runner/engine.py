@@ -493,8 +493,35 @@ class AgentEngine:
         if memory_status_msg:
              service_alerts += f"\n{memory_status_msg}"
 
-        import datetime
-        current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Files Context: Surface recently uploaded files from Chatbox
+        upload_dir = os.path.join(self.state.agent_fs_root, "uploads")
+        files_info = ""
+        if os.path.exists(upload_dir):
+            try:
+                files = [f for f in os.listdir(upload_dir) if not f.startswith('.')]
+                if files:
+                    # Sort by modification time
+                    files.sort(key=lambda x: os.path.getmtime(os.path.join(upload_dir, x)), reverse=True)
+                    file_summaries = []
+                    for f in files[:10]:
+                        if "_" in f:
+                            try:
+                                f_id, f_name = f.split("_", 1)
+                                file_summaries.append(f"- {f_name} [ID: {f_id}]")
+                            except ValueError:
+                                file_summaries.append(f"- {f}")
+                        else:
+                            file_summaries.append(f"- {f}")
+                    
+                    if file_summaries:
+                        files_info = (
+                            "\n### UPLOADED FILES (Ready for processing):\n"
+                            "The following files were uploaded via the chat interface and are available in your sandbox.\n"
+                            "To read them, use the full path: " + upload_dir + "/{ID}_{FILENAME}\n"
+                            + "\n".join(file_summaries)
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to list uploads for prompt: {e}")
 
         prompt = (
             "You are Antigravity, a powerful agentic AI assistant running inside the Orchestrator.\n"
@@ -503,6 +530,7 @@ class AgentEngine:
             f"{service_alerts}\n"
             "Use the tools provided to you to be the most helpful assistant possible."
             f"{memory_facts}"
+            f"{files_info}"
         )
         return prompt
 

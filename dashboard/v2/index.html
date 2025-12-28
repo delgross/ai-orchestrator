@@ -126,10 +126,19 @@
                         style="flex-grow: 1; overflow-y: auto; padding: 20px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 20px;">
                         <div class="chat-message system">System: Ready to connect to Port 5455.</div>
                     </div>
-                    <div class="chat-input-area" style="display: flex; gap: 10px;">
-                        <textarea id="chat-input" class="code-editor" style="height: 60px; min-height: 60px;"
+                    <div class="chat-input-area" style="display: flex; gap: 10px; align-items: flex-end;">
+                        <button id="btn-chat-mic" class="action-btn sm"
+                            style="padding: 0 15px; height: 60px; background: #333;" title="Voice Input">🎤</button>
+                        <textarea id="chat-input" class="code-editor"
+                            style="height: 60px; min-height: 60px; flex-grow: 1;"
                             placeholder="Type your message... (Shift+Enter to send)"></textarea>
-                        <button id="btn-chat-send" class="action-btn primary">Send</button>
+                        <button id="btn-chat-send" class="action-btn primary" style="height: 60px;">Send</button>
+                    </div>
+                    <div style="margin-top: 10px; display: flex; gap: 15px; align-items: center;">
+                        <label
+                            style="color: #aaa; font-size: 0.8em; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                            <input type="checkbox" id="chat-tts-toggle"> 🔊 Read Responses Aloud
+                        </label>
                     </div>
                 </div>
             </div>

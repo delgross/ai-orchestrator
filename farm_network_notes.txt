@@ -1,0 +1,44 @@
+## Farm Network Notes
+
+### Current Network Topology
+- Dish → Starlink router → Omada router
+
+### Current LAN Info
+- Controller IP: 192.168.1.x
+
+### On-site Checklist
+1. **Omada Router Model**: 
+2. **Starlink WAN IP** (from Starlink) + LAN subnet (to confirm routing)
+3. **Which Device Runs DHCP**: (Starlink or Omada?)
+4. **Reolink Hub/NVR Model**: 
+5. **Camera Connections**: Are they plugged into LAN PoE switches or NVR PoE ports?
+6. **Building Interconnectivity**: (Wired/Fiber/Wireless Uplink)
+7. **Home Assistant Host Type**: (Wired/Wi-Fi)
+8. **YoLink Hub Model**: (Wi-Fi vs Ethernet)
+
+--- 
+
+## Local Network Updates
+
+### Current Network Base (to be changed)
+- Current Base: **192.168.8.0**
+- New Base (on router arrival): **192.168.11.0**
+
+### Nmap Results
+- The nmap command did not produce results.
+
+### nmap Troubleshooting on macOS Tahoe
+
+#### Commands to Try:
+1. **Check Current Local Network:**
+   ```bash
+   sudo nmap -sn 192.168.8.0/24
+   ```
+   This command performs a ping scan across the current local network.
+   
+2. **Future Command for New Network:**
+   ```bash
+   sudo nmap -sn 192.168.11.0/24
+   ```
+   Use this command after the new router is set up to scan the new network range.
+- The nmap command did not produce results.

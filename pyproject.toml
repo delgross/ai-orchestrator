@@ -13,5 +13,6 @@ dependencies = [
     "pytest-asyncio",
     "pytest-mock",
     "surrealdb>=1.0.7",
+    "python-multipart>=0.0.21",
 ]
 

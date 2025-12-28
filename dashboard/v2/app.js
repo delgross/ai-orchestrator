@@ -790,6 +790,9 @@ my-server-name:
                 statusSpan.textContent = "Ready";
                 statusSpan.className = "status-indicator";
 
+                // Speak completed response if enabled
+                speak(fullResponse);
+
             } catch (e) {
                 assistantDiv.textContent += `\n[Failed: ${e.message}]`;
                 statusSpan.textContent = "Error";
@@ -801,7 +804,56 @@ my-server-name:
             }
         }
 
+        // --- Audio Logic ---
+        const micBtn = document.getElementById('btn-chat-mic');
+        const ttsToggle = document.getElementById('chat-tts-toggle');
+        let recognition;
+
+        if ('webkitSpeechRecognition' in window) {
+            recognition = new webkitSpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onstart = () => {
+                micBtn.style.background = '#dd2222';
+                statusSpan.textContent = "Listening...";
+                statusSpan.className = "status-indicator warning";
+            };
+            recognition.onend = () => {
+                micBtn.style.background = '#333';
+                if (statusSpan.textContent === "Listening...") {
+                    statusSpan.textContent = "Ready";
+                    statusSpan.className = "status-indicator";
+                }
+            };
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                chatInput.value = transcript;
+                setTimeout(sendMessage, 200);
+            };
+        } else {
+            console.warn("Speech Recognition not supported.");
+            if (micBtn) micBtn.style.display = 'none';
+        }
+
+        function toggleRecording() {
+            if (!recognition) return showNotification("Browser does not support Speech API.");
+            try { recognition.start(); } catch (e) { recognition.stop(); }
+        }
+
+        function speak(text) {
+            if (!ttsToggle || !ttsToggle.checked || !text) return;
+            window.speechSynthesis.cancel();
+            const cleanText = text.replace(/[*#`_\[\]]/g, '').replace(/https?:\/\/\S+/g, 'link');
+            const u = new SpeechSynthesisUtterance(cleanText);
+            u.rate = 1.1;
+            window.speechSynthesis.speak(u);
+        }
+
         sendBtn.addEventListener('click', sendMessage);
+        if (micBtn) micBtn.addEventListener('click', toggleRecording);
+
         chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
