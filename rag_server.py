@@ -301,9 +301,37 @@ class RAGServer:
                 
                 # Calculate Audit Metrics
                 if data:
-                    # Ensure 'score' exists before trying to find max
+                    # Ensure 'score' exists before checking max
                     best_score = max([d.get("score", 0) for d in data]) if "score" in data[0] else 0
-                    logger.info(f"QUERY_STATS: Found {len(data)} chunks. Best Score: {best_score:.4f}")
+                    logger.info(f"QUERY_STATS: Found {len(data)} chunks. Best Vector Score: {best_score:.4f}")
+                    
+                    # --- CLOUD RE-RANKING (GPU) ---
+                    try:
+                        from agent_runner.modal_tasks import rerank_search_results, has_modal
+                        if has_modal and len(data) > 1:
+                            logger.info("RERANK: Sending candidates to Cloud GPU...")
+                            candidates = [d.get("content", "") for d in data]
+                            
+                            # Remote call
+                            ranked_indices = rerank_search_results.remote(query_text, candidates)
+                            # Returns list of (original_index, new_score)
+                            
+                            # Re-construct data in new order
+                            reranked_data = []
+                            for idx, score in ranked_indices:
+                                item = data[idx]
+                                item["score"] = score # Update score with cross-encoder score
+                                item["reranked"] = True
+                                reranked_data.append(item)
+                                
+                            data = reranked_data
+                            logger.info(f"RERANK: Successfully re-ordered {len(data)} results.")
+                    except Exception as re_err:
+                        if "Modal not configured" not in str(re_err) and "No module named" not in str(re_err):
+                            logger.warning(f"Re-ranking failed: {re_err}")
+                        pass
+                    # -----------------------------
+                    
                 else:
                     logger.info("QUERY_STATS: No relevant chunks found.")
 
