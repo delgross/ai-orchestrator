@@ -447,6 +447,9 @@ ensure_running() {
 
   local surreal_status=$(check_surreal)
   IFS='|' read -r surreal_port surreal_http surreal_launchd surreal_pid <<< "$surreal_status"
+
+  local rag_status=$(check_rag)
+  IFS='|' read -r rag_port rag_http rag_launchd rag_pid <<< "$rag_status"
   
   if [ "$surreal_http" != "true" ]; then
     echo "SurrealDB not running, starting..."
