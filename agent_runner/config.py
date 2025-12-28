@@ -51,9 +51,11 @@ async def load_mcp_servers(state: AgentState) -> None:
 
     # 3. Auto-Sync to Project Memory
     # This ensures the database always has the latest server list for RAG/Tools
+    print(f"DEBUG: MCP Servers Loaded: {list(state.mcp_servers.keys())}")
     if "project-memory" in state.mcp_servers:
         from agent_runner.tools.mcp import tool_mcp_proxy
         logger.info("Syncing MCP server definitions to Project Memory...")
+        print("DEBUG: Starting MCP Sync...")
         
         for name, cfg in state.mcp_servers.items():
             try:
