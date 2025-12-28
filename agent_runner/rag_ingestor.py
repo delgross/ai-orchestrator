@@ -138,6 +138,12 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             # Before we ingest, we ask the LLM to categorize the file
             kb_id = "default"
             authority = 0.7
+            window_size = 1000
+            overlap = 200
+            is_volatile = False
+            global_summary = ""
+            shadow_tags = []
+            
             try:
                 lib_prompt = (
                     f"You are Dr. Ed's Personal Knowledge Manager. Categorize this new entry for his library.\n"
