@@ -134,7 +134,13 @@ class MemoryServer:
 
 
 
-    async def store_fact(self, entity: str, relation: str, target: str, context: Any = ""):
+    async def store_fact(self, entity: str, relation: str, target: str, context: Any = "", confidence: float = 1.0):
+        """
+        Store or update a fact with a 'truth/confidence' score.
+        confidence 1.0 = User-provided / Ground Truth
+        confidence 0.5-0.8 = Agent-inferred
+        confidence < 0.4 = Vague/Suspect
+        """
         await self.ensure_connected()
         if not self.initialized: return {"ok": False, "error": "DB not connected"}
         
@@ -145,23 +151,29 @@ class MemoryServer:
             
             # Check if fact exists
             check_res = await self._execute_query(
-                "SELECT id FROM fact WHERE entity = $e AND relation = $r AND target = $t",
+                "SELECT id, confidence FROM fact WHERE entity = $e AND relation = $r AND target = $t",
                 {"e": str(entity), "r": str(relation), "t": str(target)}
             )
             
             update_res = None
             if check_res and len(check_res) > 0:
-                # Update existing
-                 update_res = await self._execute_query(
-                    "UPDATE fact SET context = $c, embedding = $emb, timestamp = time::now() WHERE entity = $e AND relation = $r AND target = $t",
-                    {"e": str(entity), "r": str(relation), "t": str(target), "c": context, "emb": embedding}
+                # Update existing: We use a 'Bayesian' update principle. 
+                # If we hear it again, confidence increases slightly, but stays capped at 1.0
+                old_conf = check_res[0].get("confidence", 0.5)
+                # If current input has higher confidence, we adopt it. If lower, we average.
+                new_conf = max(old_conf, confidence) if confidence >= 0.9 else (old_conf + confidence) / 2.0
+                new_conf = min(1.0, new_conf)
+
+                update_res = await self._execute_query(
+                    "UPDATE fact SET context = $c, embedding = $emb, confidence = $conf, timestamp = time::now() WHERE entity = $e AND relation = $r AND target = $t",
+                    {"e": str(entity), "r": str(relation), "t": str(target), "c": context, "emb": embedding, "conf": new_conf}
                 )
             
             # If no rows were updated, create new fact
             if not update_res:
                 await self._execute_query(
-                    "CREATE fact SET entity = $e, relation = $r, target = $t, context = $c, embedding = $emb",
-                    {"e": str(entity), "r": str(relation), "t": str(target), "c": context, "emb": embedding}
+                    "CREATE fact SET entity = $e, relation = $r, target = $t, context = $c, embedding = $emb, confidence = $conf",
+                    {"e": str(entity), "r": str(relation), "t": str(target), "c": context, "emb": embedding, "conf": confidence}
                 )
             log(f"Stored fact: {entity} {relation} {target} (context: {context})", "DEBUG")
             return {"ok": True}
@@ -209,8 +221,9 @@ class MemoryServer:
             # Try vector search with fallback
             try:
                 # Note: kwargs 'timeout' passed to _execute_query
+                # Vector search + Confidence weighting
                 res = await self._execute_query(
-                    "SELECT *, vector::distance::euclidean(embedding, $emb) AS dist FROM fact ORDER BY dist ASC LIMIT $limit",
+                    "SELECT *, vector::distance::euclidean(embedding, $emb) AS dist FROM fact WHERE confidence > 0.3 ORDER BY dist ASC LIMIT $limit",
                     {"emb": embedding, "limit": limit},
                     timeout=15.0
                 )
@@ -585,7 +598,7 @@ async def main():
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         return [
-            Tool(name="store_fact", description="Store fact.", inputSchema={"type":"object","properties":{"entity":{"type":"string"},"relation":{"type":"string"},"target":{"type":"string"},"context":{"type":"object"}},"required":["entity","relation","target"]}),
+            Tool(name="store_fact", description="Store a fact in long-term memory with an optional confidence score.", inputSchema={"type":"object","properties":{"entity":{"type":"string"},"relation":{"type":"string"},"target":{"type":"string"},"context":{"type":"object"},"confidence":{"type":"number", "description": "1.0 for user-confirmed ground truth, lower for agent-inferred guesses."}},"required":["entity","relation","target"]}),
             Tool(name="query_facts", description="Search facts.", inputSchema={"type":"object","properties":{"entity":{"type":"string"},"relation":{"type":"string"}}}),
             Tool(name="semantic_search", description="Search by meaning.", inputSchema={"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}),
             Tool(name="record_tool_result", description="Record tool result.", inputSchema={"type":"object","properties":{"model":{"type":"string"},"tool":{"type":"string"},"success":{"type":"boolean"},"latency_ms":{"type":"number"}},"required":["model","tool","success","latency_ms"]}),
