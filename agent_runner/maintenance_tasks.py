@@ -39,13 +39,13 @@ async def auto_tagger_task(state: AgentState):
     for img in images:
         try:
             logger.info(f"Auto-Tagging {img.name} via Cloud GPU...")
-            # Remote call
-            description = cloud_process_image.remote(img.read_bytes(), "Generate 5-10 keywords and a brief caption.")
+            # Remote call (no prompt -> structured JSON)
+            json_result = cloud_process_image.remote(img.read_bytes())
             
-            # Save sidecar
-            meta_path = img.with_name(f"{img.stem}_tags.txt")
-            meta_path.write_text(description)
-            logger.info(f"Tagged {img.name}")
+            # Save sidecar as JSON
+            meta_path = img.with_name(f"{img.stem}_tags.json")
+            meta_path.write_text(json_result)
+            logger.info(f"Tagged {img.name} (JSON)")
             
         except Exception as e:
             logger.error(f"Failed to tag {img.name}: {e}")
