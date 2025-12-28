@@ -47,6 +47,15 @@ logging.getLogger("multipart").setLevel(logging.WARNING)
 
 app = FastAPI(title="Antigravity RAG Server")
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # MiddleWare for performance tracking
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
@@ -396,10 +405,22 @@ async def stats():
         r = await rag_backend.client.post(rag_backend.sql_url, content=sql, auth=rag_backend.auth, headers=rag_backend.headers)
         if r.status_code == 200:
             res = r.json()
-            # Result 0 is chunks, Result 1 is entities, Result 2 is edges
-            chunk_data = res[0].get("result", []) if len(res) > 0 else []
-            entity_count = res[1].get("result", [{}])[0].get("count", 0) if len(res) > 1 and res[1]['result'] else 0
-            edge_count = res[2].get("result", [{}])[0].get("count", 0) if len(res) > 2 and res[2]['result'] else 0
+            
+            # Helper to safely get list from result
+            def get_res(idx):
+                if idx < len(res):
+                    val = res[idx].get("result")
+                    return val if val is not None else []
+                return []
+
+            chunk_data = get_res(0)
+            
+            # Entities/Edges typically return [{count: N}]
+            ent_res = get_res(1)
+            entity_count = ent_res[0].get("count", 0) if ent_res else 0
+            
+            edge_res = get_res(2)
+            edge_count = edge_res[0].get("count", 0) if edge_res else 0
             
             total = sum(d.get("count", 0) for d in chunk_data)
             return {
@@ -413,6 +434,8 @@ async def stats():
             }
     except Exception as e:
         logger.error(f"Stats check failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         
     return {"error": "Could not connect to knowledge database"}
 
@@ -508,6 +531,68 @@ async def ingest_graph(req: GraphIngestRequest):
     count = len(req.entities) + len(req.relations)
     logger.info(f"GRAPH INGEST: Processed {len(req.entities)} entities and {len(req.relations)} relations in {time.time()-start:.2f}s")
     return {"ok": True, "processed": count}
+
+@app.get("/graph/snapshot")
+async def graph_snapshot(limit: int = 1000):
+    """
+    Get a snapshot of the graph for visualization.
+    Returns nodes and links in D3/force-graph format.
+    """
+    await rag_backend.ensure_db()
+    
+    sql = f"""
+    SELECT * FROM entity LIMIT {limit};
+    SELECT * FROM relates LIMIT {limit};
+    """
+    
+    try:
+        r = await rag_backend.client.post(rag_backend.sql_url, content=sql, auth=rag_backend.auth, headers=rag_backend.headers)
+        if r.status_code == 200:
+            res = r.json()
+            
+            # Helper safely get list
+            def get_res(idx):
+                if idx < len(res):
+                    val = res[idx].get("result")
+                    return val if val is not None else []
+                return []
+            
+            entities = get_res(0)
+            relations = get_res(1)
+            
+            logger.info(f"GRAPH_SNAPSHOT: Fetched {len(entities)} entities and {len(relations)} relations.")
+            
+            # Format for Force Graph
+            nodes = []
+            for e in entities:
+                # Surreal ID is "entity:name", we just want the ID part or the full thing
+                # let's use the full ID as the unique key
+                nodes.append({
+                    "id": e.get("id"),
+                    "label": e.get("name", "Unknown"),
+                    "group": e.get("type", "Thing"),
+                    "val": 1 # size
+                })
+                
+            links = []
+            for r in relations:
+                links.append({
+                    "source": r.get("in"), # Surreal Relate uses 'in' for source
+                    "target": r.get("out"), # Surreal Relate uses 'out' for target
+                    "type": r.get("type", "relates"),
+                    "label": r.get("type", "relates")
+                })
+                
+            return {
+                "nodes": nodes,
+                "links": links
+            }
+            
+    except Exception as e:
+        logger.error(f"Graph snapshot failed: {e}")
+        return {"nodes": [], "links": []}
+    
+    return {"nodes": [], "links": []}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5555)

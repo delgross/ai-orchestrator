@@ -3,10 +3,12 @@
 
 <head>
     <title>Antigravity Direct Chat</title>
+    <!-- Graph Visualization Library (3D Force Graph) -->
+    <script src="//unpkg.com/3d-force-graph"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            max-width: 900px;
+            max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
             background: #0f1115;
@@ -30,12 +32,47 @@
             border: 1px solid #333;
         }
 
+        /* Tabs */
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #333;
+            margin-bottom: 20px;
+        }
+
+        .tab-btn {
+            padding: 10px 20px;
+            background: transparent;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 1.1em;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab-btn:hover {
+            color: #ccc;
+        }
+
+        .tab-btn.active {
+            color: #fff;
+            border-bottom: 2px solid #2b5c9c;
+        }
+
+        .tab-content {
+            display: none;
+            height: 650px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
         #chat-history {
-            height: 600px;
+            height: 100%;
             overflow-y: auto;
             border: 1px solid #333;
             padding: 20px;
-            margin-bottom: 20px;
             background: #16181d;
             border-radius: 8px;
             display: flex;
@@ -66,6 +103,7 @@
         .controls {
             display: flex;
             gap: 10px;
+            margin-top: 20px;
         }
 
         input[type="text"] {
@@ -112,7 +150,6 @@
             height: 20px;
         }
 
-        /* Loading Animation */
         .typing::after {
             content: '...';
             animation: ellipsis 1.5s infinite;
@@ -131,87 +168,253 @@
                 content: '...';
             }
         }
+
+        /* Graph Styles */
+        #graph-container {
+            width: 100%;
+            height: 100%;
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #graph-tooltip {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 4px;
+            pointer-events: none;
+            display: none;
+            border: 1px solid #444;
+            max-width: 300px;
+            z-index: 100;
+            color: #eee;
+        }
     </style>
 </head>
 
 <body>
     <h1>Antigravity Direct Link Debugger</h1>
 
-    <div class="config">
-        <label>Target Model:
-            <select id="model-select"
-                style="padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">
-                <option value="agent:mcp">Orchestrator (Agent Runner + Tools)</option>
-                <option value="router">Raw Router (Mistral/Ollama)</option>
-            </select>
-        </label>
-        <div style="font-size: 0.9em; color: #888;">Connecting to: http://localhost:5455 (Bypassing Docker)</div>
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('chat')">💬 Chat & Command</button>
+        <button class="tab-btn" onclick="showTab('graph')">🕸️ Knowledge Graph</button>
     </div>
 
-    <div id="chat-history">
-        <div class="message assistant">System initialized. Ready to test connectivity via port 5455.</div>
-    </div>
-
-    <div class="controls">
-        <button onclick="toggleRecording()" id="mic-btn" style="padding: 0 15px; background: #444; margin-right: 5px;"
-            title="Voice Input">🎤</button>
-        <input type="text" id="user-input" placeholder="Type or click mic..."
-            onkeydown="if(event.key==='Enter') sendMessage()" autofocus>
-        <button onclick="sendMessage()" id="send-btn">Send</button>
-    </div>
-    <div style="margin-top: 10px; display: flex; gap: 15px; align-items: center;">
-        <label style="color: #aaa; font-size: 0.9em; cursor: pointer; display: flex; align-items: center; gap: 6px;">
-            <input type="checkbox" id="tts-toggle"> 🔊 Read Responses Aloud
-        </label>
-        <div id="status">Ready</div>
-    </div>
-
-    <!-- System Configuration Section -->
-    <div style="margin-top: 20px; border-top: 1px solid #333; padding-top: 15px;">
-        <h3 style="margin: 0 0 10px 0; font-size: 1.1em; color: #ccc;">System Configuration</h3>
-        <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-end;">
-            <div>
-                <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Memory Indexer
-                    (Background)</label>
-                <select id="indexer-model"
-                    style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
-                    <option value="ollama:mistral:latest">Mistral (Local / Privacy)</option>
-                    <option value="openai:gpt-4o" selected>GPT-4o (Cloud / Smart)</option>
-                    <option value="openai:gpt-4o-mini">GPT-4o Mini (Cloud / Fast)</option>
+    <!-- CHAT TAB -->
+    <div id="tab-chat" class="tab-content active">
+        <div class="config">
+            <label>Target Model:
+                <select id="model-select"
+                    style="padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">
+                    <option value="agent:mcp">Orchestrator (Agent Runner + Tools)</option>
+                    <option value="router">Raw Router (Mistral/Ollama)</option>
                 </select>
-            </div>
-            <div>
-                <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Chat Agent
-                    (Foreground)</label>
-                <select id="agent-model"
-                    style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
-                    <option value="openai:gpt-4o" selected>GPT-4o (Cloud / Smart)</option>
-                    <option value="openai:gpt-4o-mini">GPT-4o Mini (Cloud / Fast)</option>
-                    <option value="ollama:mistral:latest">Mistral (Local / Privacy)</option>
-                </select>
-            </div>
-            <div>
-                <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Planner
-                    (Tasks)</label>
-                <select id="task-model"
-                    style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
-                    <option value="ollama:mistral:latest">Mistral (Local)</option>
-                    <option value="openai:gpt-4o">GPT-4o (Cloud)</option>
-                </select>
-            </div>
-            <button onclick="updateSystemConfig()"
-                style="padding: 7px 15px; background: #333; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer;">Update
-                System</button>
+            </label>
+            <div style="font-size: 0.9em; color: #888;">Connecting to: http://localhost:5455 (Bypassing Docker)</div>
         </div>
-        <div id="config-status"
-            style="font-size: 0.85em; color: #28a745; margin-top: 8px; opacity: 0; transition: opacity 0.5s;">
-            Configuration Updated</div>
+
+        <div id="chat-history">
+            <div class="message assistant">System initialized. Ready to test connectivity via port 5455.</div>
+        </div>
+
+        <div class="controls">
+            <button onclick="toggleRecording()" id="mic-btn"
+                style="padding: 0 15px; background: #444; margin-right: 5px;" title="Voice Input">🎤</button>
+            <input type="text" id="user-input" placeholder="Type or click mic..."
+                onkeydown="if(event.key==='Enter') sendMessage()" autofocus>
+            <button onclick="sendMessage()" id="send-btn">Send</button>
+        </div>
+        <div style="margin-top: 10px; display: flex; gap: 15px; align-items: center;">
+            <label
+                style="color: #aaa; font-size: 0.9em; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                <input type="checkbox" id="tts-toggle"> 🔊 Read Responses Aloud
+            </label>
+            <div id="status">Ready</div>
+        </div>
+
+        <!-- System Configuration Section -->
+        <div style="margin-top: 20px; border-top: 1px solid #333; padding-top: 15px;">
+            <h3 style="margin: 0 0 10px 0; font-size: 1.1em; color: #ccc;">System Configuration</h3>
+            <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-end;">
+                <div>
+                    <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Memory
+                        Indexer</label>
+                    <select id="indexer-model"
+                        style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
+                        <option value="ollama:mistral:latest">Mistral (Local)</option>
+                        <option value="openai:gpt-4o" selected>GPT-4o (Cloud)</option>
+                        <option value="openai:gpt-4o-mini">GPT-4o Mini (Cloud)</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Chat Agent</label>
+                    <select id="agent-model"
+                        style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
+                        <option value="openai:gpt-4o" selected>GPT-4o (Cloud)</option>
+                        <option value="openai:gpt-4o-mini">GPT-4o Mini (Cloud)</option>
+                        <option value="ollama:mistral:latest">Mistral (Local)</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="display: block; font-size: 0.8em; color: #888; margin-bottom: 4px;">Planner</label>
+                    <select id="task-model"
+                        style="padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; width: 220px;">
+                        <option value="ollama:mistral:latest">Mistral (Local)</option>
+                        <option value="openai:gpt-4o">GPT-4o (Cloud)</option>
+                    </select>
+                </div>
+                <button onclick="updateSystemConfig()"
+                    style="padding: 7px 15px; background: #333; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer;">Update
+                    System</button>
+            </div>
+            <div id="config-status"
+                style="font-size: 0.85em; color: #28a745; margin-top: 8px; opacity: 0; transition: opacity 0.5s;">
+                Configuration Updated</div>
+        </div>
     </div>
+
+    <!-- GRAPH TAB -->
+    <div id="tab-graph" class="tab-content" style="position: relative;">
+        <div style="position: absolute; top: 10px; right: 10px; z-index: 10; display: flex; gap: 10px;">
+            <!-- RAG Stats -->
+            <div id="graph-stats"
+                style="background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; border: 1px solid #444; font-size: 0.8em; color: #aaa;">
+                Nodes: 0 | Edges: 0
+            </div>
+            <button onclick="loadGraph()"
+                style="font-size: 0.8em; padding: 5px 15px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; cursor: pointer;">🔄
+                Refresh Graph</button>
+        </div>
+        <div id="graph-container"></div>
+        <div id="graph-tooltip"></div>
+    </div>
+
     <script>
-        // Token from Router Config (Hardcoded for debugging simplicity)
+        // Token from Router Config
         const API_KEY = "9sYBjBLjAHKG8g8ZzzsUeBOvtzgQFHmX7oIeygdpzic";
         const ROUTER_URL = "http://localhost:5455/v1/chat/completions";
+        const GRAPH_SNAP_URL = "http://localhost:5555/graph/snapshot";
+        const GRAPH_STATS_URL = "http://localhost:5555/stats";
 
+        // Tab Logic
+        function showTab(name) {
+            document.querySelectorAll('.tab-content').forEach(d => d.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+
+            document.getElementById(`tab-${name}`).classList.add('active');
+
+            // Highlight Tab Button
+            const btns = document.querySelectorAll('.tab-btn');
+            if (name === 'chat') btns[0].classList.add('active');
+            if (name === 'graph') {
+                btns[1].classList.add('active');
+                // Auto-load if not loaded
+                if (!window.graphLoaded) loadGraph();
+            }
+        }
+
+        // --- GRAPH LOGIC ---
+        let graphInstance = null;
+        window.graphLoaded = false;
+
+        async function loadGraph() {
+            const container = document.getElementById('graph-container');
+            const tooltip = document.getElementById('graph-tooltip');
+            const stats = document.getElementById('graph-stats');
+
+            // Only show loading if we don't have a graph yet
+            if (!graphInstance) {
+                container.innerHTML = '<div style="color: #666; padding: 20px;">Fetching Knowledge Graph...</div>';
+            }
+
+            try {
+                // Fetch Stats
+                fetch(GRAPH_STATS_URL).then(r => r.json()).then(d => {
+                    if (d.status === "online") {
+                        stats.innerHTML = `Nodes: ${d.total_entities} | Edges: ${d.total_relations}`;
+                    }
+                });
+
+                const res = await fetch(GRAPH_SNAP_URL + "?limit=5000");
+                const data = await res.json();
+
+                if (!data.nodes || data.nodes.length === 0) {
+                    container.innerHTML = '<div style="color: #666; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column;"><h3>The Brain is Empty</h3><p>Ingest some files to build the graph.</p></div>';
+                    window.graphLoaded = true;
+                    return;
+                }
+
+                // If loading for first time, clear container
+                if (!graphInstance) container.innerHTML = '';
+
+                // Color by Type
+                const typeColors = {};
+                const getColor = (type) => {
+                    const palette = [
+                        '#ff4d4d', '#ff944d', '#ffff4d', '#4dff4d', '#4dffff',
+                        '#4d94ff', '#944dff', '#ff4dff', '#ff4d94', '#ffffff'
+                    ];
+                    if (!typeColors[type]) {
+                        // Hash the type string to pick a color deterministically
+                        let hash = 0;
+                        for (let i = 0; i < type.length; i++) hash = type.charCodeAt(i) + ((hash << 5) - hash);
+                        const index = Math.abs(hash) % palette.length;
+                        typeColors[type] = palette[index];
+                    }
+                    return typeColors[type];
+                };
+
+                // Initialize or Update Graph
+                if (!graphInstance) {
+                    graphInstance = ForceGraph3D()
+                        (container)
+                        .graphData(data)
+                        .nodeLabel('label')
+                        .nodeColor(node => getColor(node.group))
+                        .linkWidth(1)
+                        .linkOpacity(0.5)
+                        .linkDirectionalParticles(2)
+                        .linkDirectionalParticleSpeed(d => 0.005)
+                        .nodeResolution(16)
+                        .backgroundColor('#000000') // Pure black for high contrast
+                        .onNodeHover(node => {
+                            container.style.cursor = node ? 'pointer' : null;
+                            if (node) {
+                                tooltip.style.display = 'block';
+                                tooltip.innerHTML = `<strong style="color: #4da6ff; font-size: 1.1em">${node.label}</strong><br><span style="color: #aaa">${node.group}</span>`;
+                                // track mouse
+                                // (We can't easily track 3D mouse pos to 2D screen here without raycaster, simplified to top-left overlay)
+                            } else {
+                                tooltip.style.display = 'none';
+                            }
+                        })
+                        .onNodeClick(node => {
+                            // Fly to node
+                            const distance = 60;
+                            const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+                            graphInstance.cameraPosition(
+                                { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }, // new position
+                                node, // lookAt ({ x, y, z })
+                                2000  // ms transition duration
+                            );
+                        });
+                } else {
+                    graphInstance.graphData(data);
+                }
+
+                window.graphLoaded = true;
+
+            } catch (e) {
+                container.innerHTML = `<div style="color: #ff5555; padding: 20px;">Failed to load graph: ${e}</div>`;
+            }
+        }
+
+        // --- CHAT LOGIC ---
         const historyDiv = document.getElementById('chat-history');
         const statusDiv = document.getElementById('status');
         const input = document.getElementById('user-input');
@@ -224,7 +427,6 @@
             const statusLabel = document.getElementById('config-status');
 
             try {
-                // Determine Agent URL (Port 5460)
                 const AGENT_URL = "http://localhost:5460/admin/config/models";
                 const resp = await fetch(AGENT_URL, {
                     method: "POST",
@@ -237,7 +439,7 @@
                 });
                 const data = await resp.json();
                 if (data.ok) {
-                    statusLabel.textContent = `System models updated!`;
+                    statusLabel.textContent = `Model changes applied.`;
                     statusLabel.style.opacity = 1;
                     setTimeout(() => statusLabel.style.opacity = 0, 3000);
                 } else {
@@ -252,7 +454,6 @@
             const text = input.value.trim();
             if (!text) return;
 
-            // UI Updates
             appendMessage('user', text);
             input.value = '';
             input.disabled = true;
@@ -261,12 +462,11 @@
 
             const model = document.getElementById('model-select').value;
             const assistantMsgDiv = appendMessage('assistant', '');
-            assistantMsgDiv.classList.add('typing'); // Add typing indicator
+            assistantMsgDiv.classList.add('typing');
 
             let fullResponse = "";
 
             try {
-                // Fetch with Streaming enabled
                 const response = await fetch(ROUTER_URL, {
                     method: 'POST',
                     headers: {
@@ -285,12 +485,11 @@
                     throw new Error(`HTTP Error ${response.status}: ${errorText}`);
                 }
 
-                // Setup Stream Reader
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder("utf-8");
 
-                statusDiv.textContent = "Connected. Waiting for token stream...";
-                assistantMsgDiv.classList.remove('typing'); // Remove typing dots once stream starts
+                statusDiv.textContent = "Connected. Receiving token stream...";
+                assistantMsgDiv.classList.remove('typing');
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -308,7 +507,6 @@
                             if (data === '[DONE]') break;
                             try {
                                 const json = JSON.parse(data);
-                                // Handle both standard delta and direct agent errors
                                 if (json.error) {
                                     fullResponse += `\n[Server Error: ${json.error}]`;
                                 } else {
@@ -317,11 +515,9 @@
                                 }
                                 assistantMsgDiv.textContent = fullResponse;
                                 historyDiv.scrollTop = historyDiv.scrollHeight;
-                            } catch (e) {
-                                console.warn("Skipping invalid JSON chunk:", data);
-                            }
+                            } catch (e) { }
                         } else if (trimmed.startsWith(': keep-alive')) {
-                            statusDiv.textContent = "Agent is Thinking... (Keep-Alive Packet Received)";
+                            statusDiv.textContent = "Agent is Thinking...";
                         }
                     }
                 }
@@ -365,11 +561,10 @@
             recognition.onresult = (event) => {
                 const transcript = event.results[0][0].transcript;
                 input.value = transcript;
-                setTimeout(sendMessage, 200); // Auto-send after brief pause
+                setTimeout(sendMessage, 200);
             };
         } else {
             micBtn.style.display = 'none';
-            console.warn("Speech Recognition not supported in this browser.");
         }
 
         function toggleRecording() {
@@ -380,7 +575,6 @@
         function speak(text) {
             if (!ttsToggle.checked || !text) return;
             window.speechSynthesis.cancel();
-            // Remove markdown bold/italic/code markers for smoother speech
             const cleanText = text.replace(/[*#`_\[\]]/g, '').replace(/https?:\/\/\S+/g, 'link');
             const u = new SpeechSynthesisUtterance(cleanText);
             u.rate = 1.1;
