@@ -12,7 +12,7 @@ from agent_runner.config import load_mcp_servers, load_agent_runner_limits
 from agent_runner.tasks import internet_check_task, stdio_process_health_monitor
 from agent_runner.background_tasks import get_task_manager, TaskPriority
 from agent_runner.health_monitor import initialize_health_monitor, health_check_task
-from agent_runner.memory_tasks import memory_consolidation_task, memory_backup_task, optimize_memory_task
+from agent_runner.memory_tasks import memory_consolidation_task, memory_backup_task, optimize_memory_task, memory_audit_task
 from agent_runner.dashboard_tracker import get_dashboard_tracker, DashboardErrorType
 from common.observability import ComponentType, get_observability
 from common.observability_middleware import ObservabilityMiddleware

@@ -129,3 +129,97 @@ async def optimize_memory_task(state: AgentState):
             logger.error(f"Memory optimization failed: {res.get('error')}")
     except Exception as e:
         logger.error(f"Memory optimization task error: {e}")
+
+async def memory_audit_task(state: AgentState):
+    """
+    Reflective task: Periodic review of known facts.
+    Cross-references existing facts with the deep knowledge base (RAG) to update confidence.
+    """
+    logger.info("Starting memory audit cycle")
+    try:
+        from agent_runner.tools.mcp import tool_mcp_proxy
+        from agent_runner.engine import AgentEngine
+        
+        # 1. Fetch facts that aren't yet 'Ground Truth' (confidence < 0.9)
+        # We fetch a small batch to avoid overloading
+        res = await tool_mcp_proxy(state, "project-memory", "query_facts", {"limit": 10})
+        if not res.get("ok"): return
+        
+        facts = []
+        try:
+            tool_res = res.get("result", {})
+            if "facts" in tool_res:
+                facts = tool_res["facts"]
+            elif "content" in tool_res:
+                text = tool_res["content"][0]["text"]
+                facts = json.loads(text).get("facts", [])
+        except: return
+        
+        if not facts: return
+        
+        engine = AgentEngine(state)
+        
+        for fact in facts:
+            fact_id = fact.get("id")
+            entity = fact.get("entity")
+            relation = fact.get("relation")
+            target = fact.get("target")
+            current_conf = fact.get("confidence", 0.5)
+            
+            # Skip ground truth
+            if current_conf >= 0.95: continue
+            
+            # 2. Cross-reference with RAG
+            query = f"Is it true that {entity} {relation} {target}?"
+            rag_res = await engine.tool_knowledge_search(state, query)
+            
+            if rag_res.get("ok") and rag_res.get("context_found"):
+                # Use LLM to judge the alignment
+                verification_prompt = (
+                    "Context from documents:\n" + rag_res["context_found"] + "\n\n"
+                    f"Proposition: {entity} {relation} {target}\n\n"
+                    "Based ON THE CONTEXT ONLY, is this proposition:\n"
+                    "1. SUPPORTED (Found direct evidence)\n"
+                    "2. CONTRADICTED (Found conflicting information)\n"
+                    "3. UNKNOWN (Not mentioned)\n\n"
+                    "Return ONLY a JSON object: {'judgment': 'SUPPORTED'|'CONTRADICTED'|'UNKNOWN', 'reasoning': '...'}"
+                )
+                
+                client = await state.get_http_client()
+                url = f"{state.gateway_base}/v1/chat/completions"
+                payload = {
+                    "model": state.summarization_model or "ollama:mistral:latest",
+                    "messages": [{"role": "user", "content": verification_prompt}],
+                    "response_format": {"type": "json_object"}
+                }
+                
+                try:
+                    v_resp = await client.post(url, json=payload, timeout=30.0)
+                    if v_resp.status_code == 200:
+                        v_data = v_resp.json()
+                        judgment_data = json.loads(v_data["choices"][0]["message"]["content"])
+                        judgment = judgment_data.get("judgment")
+                        
+                        new_conf = current_conf
+                        if judgment == "SUPPORTED":
+                            new_conf = min(0.9, current_conf + 0.1) # Boost
+                            logger.info(f"AUDIT: Fact '{entity} {relation}' SUPPORTED by RAG. New confidence: {new_conf:.2f}")
+                        elif judgment == "CONTRADICTED":
+                            new_conf = max(0.1, current_conf - 0.3) # Heavy Penalty
+                            logger.warning(f"AUDIT: Fact '{entity} {relation}' CONTRADICTED by RAG. New confidence: {new_conf:.2f}")
+                        
+                        # Apply update if changed
+                        if new_conf != current_conf:
+                            # We can use store_fact to update (it uses upsert logic)
+                            await tool_mcp_proxy(state, "project-memory", "store_fact", {
+                                "entity": entity,
+                                "relation": relation,
+                                "target": target,
+                                "context": fact.get("context", ""),
+                                "confidence": new_conf
+                            })
+                except Exception as e:
+                    logger.error(f"Audit verification failed for fact {fact_id}: {e}")
+                    
+    except Exception as e:
+        logger.error(f"Memory audit task error: {e}")
