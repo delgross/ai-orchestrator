@@ -41,6 +41,7 @@ class AgentEngine:
             "watch_path": fs_tools.tool_watch_path,
             "query_static_resources": fs_tools.tool_query_static_resources,
             "mcp_proxy": mcp_tools.tool_mcp_proxy,
+            "knowledge_search": self.tool_knowledge_search,
         }
         return impls
 
@@ -120,6 +121,21 @@ class AgentEngine:
                             "resource_name": {"type": "string", "description": "Specific file name to read."},
                             "list_all": {"type": "boolean", "description": "List all available resources."}
                         }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "knowledge_search",
+                    "description": "Deep search across uploaded PDFs, manuals, and long-form documents in your knowledge bases (RAG). Use this for complex questions that require more than just short facts.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The specific question or topic to search for."},
+                            "kb_id": {"type": "string", "description": "The specific knowledge base to search (default 'default'). Use 'farm-noc' for equipment/infrastructure data."}
+                        },
+                        "required": ["query"]
                     }
                 }
             }
@@ -515,9 +531,11 @@ class AgentEngine:
                     
                     if file_summaries:
                         files_info = (
-                            "\n### UPLOADED FILES (Ready for processing):\n"
-                            "The following files were uploaded via the chat interface and are available in your sandbox.\n"
-                            "To read them, use the relative path: uploads/{ID}_{FILENAME}\n"
+                            "\n### UPLOADED FILES & KNOWLEDGE BASES (Deep Context):\n"
+                            "The following files were uploaded and are ready for deep processing.\n"
+                            "1. TO READ RAW TEXT: Use 'read_text(path=\"uploads/{ID}_{FILENAME}\")'.\n"
+                            "2. TO SEARCH DEEP MEANING (RAG): Use 'knowledge_search(query=\"...\", kb_id=\"farm-noc\")'.\n"
+                            "\nRecent Uploads:\n"
                             + "\n".join(file_summaries)
                         )
             except Exception as e:
@@ -640,6 +658,25 @@ class AgentEngine:
                  logger.warning(f"Failed to store episode for request {request_id}: {e}")
 
         return {"error": "Max tool steps reached"}
+
+    async def tool_knowledge_search(self, state: AgentState, query: str, kb_id: str = "default") -> Dict[str, Any]:
+        """Query the RAG server for deep content."""
+        rag_url = "http://127.0.0.1:5555/query"
+        try:
+            async with httpx.AsyncClient() as client:
+                # Use query-specific limit for depth
+                payload = {"query": query, "kb_id": kb_id, "limit": 7}
+                r = await client.post(rag_url, json=payload, timeout=25.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    answer = data.get("answer", "")
+                    if not answer:
+                        return {"ok": True, "results": [], "message": "No relevant documents found for this query."}
+                    return {"ok": True, "context_found": answer}
+                else:
+                    return {"ok": False, "error": f"RAG server returned {r.status_code}"}
+        except Exception as e:
+            return {"ok": False, "error": f"RAG connection failed: {str(e)}"}
 
     async def _handle_fallback(self, messages, active_tools, worker_draft):
         """Centralized fallback logic when primary/finalizer models fail."""
