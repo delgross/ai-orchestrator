@@ -83,6 +83,19 @@ async def load_mcp_servers(state: AgentState) -> None:
                 print(f"DEBUG: Sync Exception for {name}: {e}")
                 logger.warning(f"Failed to sync MCP server '{name}' to memory: {e}")
 
+        # 4. Prune old servers (Remove ones not in current config)
+        try:
+            active_servers = list(state.mcp_servers.keys())
+            pres = await tool_mcp_proxy(state, "project-memory", "prune_offboarded_mcp_servers", {
+                "active_servers": active_servers
+            }, bypass_circuit_breaker=True)
+            if pres.get("ok"):
+                logger.info(f"Pruned offboarded MCP servers. Active: {len(active_servers)}")
+            else:
+                logger.warning(f"Failed to prune MCP servers: {pres.get('error')}")
+        except Exception as e:
+            logger.warning(f"Exception during MCP pruning: {e}")
+
 def load_agent_runner_limits(state: AgentState) -> None:
     """Load limits and general config from config.yaml."""
     config_path = Path(__file__).parent.parent / "config" / "config.yaml"

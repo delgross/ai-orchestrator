@@ -605,6 +605,20 @@ class MemoryServer:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    async def prune_offboarded_mcp_servers(self, active_servers: List[str]):
+        """Remove MCP servers from intelligence that are no longer configured."""
+        await self.ensure_connected()
+        if not self.initialized: return {"ok": False, "error": "DB not connected"}
+        try:
+            # Delete any mcp_intel record where name is NOT in the active_servers list
+            sql = "DELETE mcp_intel WHERE name NOT INSIDE $active_servers"
+            res = await self._execute_query(sql, {"active_servers": active_servers})
+            if res is None:
+                return {"ok": False, "error": "Query execution failed"}
+            return {"ok": True, "details": str(res)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     async def check_health(self) -> Dict[str, Any]:
         """Check server health status."""
         try:
@@ -641,6 +655,7 @@ async def main():
             Tool(name="record_performance_snapshot", description="Record metrics snapshot.", inputSchema={"type":"object","properties":{"model":{"type":"string"},"total_calls":{"type":"integer"},"success_rate":{"type":"number"},"avg_latency_ms":{"type":"number"}},"required":["model","total_calls","success_rate","avg_latency_ms"]}),
             Tool(name="store_mcp_intel", description="Store MCP server intel.", inputSchema={"type":"object","properties":{"name":{"type":"string"},"github_url":{"type":"string"},"newsletter":{"type":"string"},"similar_servers":{"type":"array","items":{"type":"string"}}},"required":["name","github_url","newsletter","similar_servers"]}),
             Tool(name="query_mcp_intel", description="Query MCP server intel.", inputSchema={"type":"object","properties":{"name":{"type":"string"}}}),
+            Tool(name="prune_offboarded_mcp_servers", description="Remove stale MCP server intel.", inputSchema={"type":"object","properties":{"active_servers":{"type":"array","items":{"type":"string"}}},"required":["active_servers"]}),
             Tool(name="check_health", description="Check health.", inputSchema={"type":"object","properties":{}}),
             Tool(name="get_memory_stats", description="Get statistics about facts and episodes in memory.", inputSchema={"type":"object","properties":{}}),
             Tool(name="trigger_backup", description="Trigger a manual backup of the memory database.", inputSchema={"type":"object","properties":{}}),
@@ -666,6 +681,7 @@ async def main():
             elif name == "record_performance_snapshot": res = await memory.record_performance_snapshot(**args)
             elif name == "store_mcp_intel": res = await memory.store_mcp_intel(**args)
             elif name == "query_mcp_intel": res = await memory.query_mcp_intel(**args)
+            elif name == "prune_offboarded_mcp_servers": res = await memory.prune_offboarded_mcp_servers(**args)
             elif name == "check_health": res = await memory.check_health()
             elif name == "get_memory_stats": res = await memory.get_memory_stats()
             elif name == "trigger_backup": res = await memory.trigger_backup()
