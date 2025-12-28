@@ -169,22 +169,28 @@ async def on_startup():
         idle_only=True
     )
 
-    from agent_runner.maintenance_tasks import code_janitor_task, auto_tagger_task
-    
+    from agent_runner.maintenance_tasks import code_janitor_task, auto_tagger_task, graph_optimization_task
+
     task_manager.register(
         name="code_janitor",
         func=lambda: code_janitor_task(state),
-        interval=21600, # Every 6 hours
-        description="Analyzes code for bugs/refactors",
+        interval=21600, 
         priority=TaskPriority.LOW,
         idle_only=True
     )
-    
+
     task_manager.register(
         name="auto_tagger",
         func=lambda: auto_tagger_task(state),
-        interval=300, # Every 5 minutes check for new images
-        description="Generates metadata/captions for images",
+        interval=300, 
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
+
+    task_manager.register(
+        name="graph_optimizer",
+        func=lambda: graph_optimization_task(state),
+        interval=43200, # Nightly
         priority=TaskPriority.LOW,
         idle_only=True
     )
