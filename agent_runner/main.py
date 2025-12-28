@@ -169,9 +169,18 @@ async def on_startup():
         idle_only=True
     )
 
-    from agent_runner.maintenance_tasks import code_janitor_task, auto_tagger_task, graph_optimization_task, morning_briefing_task, daily_research_task, stale_memory_pruner_task
+    from agent_runner.maintenance_tasks import code_janitor_task, auto_tagger_task, graph_optimization_task, morning_briefing_task, daily_research_task, stale_memory_pruner_task, visual_sentry_task
 
     # ... (existing registrations) ...
+
+    task_manager.register(
+        name="visual_sentry",
+        func=lambda: visual_sentry_task(state),
+        interval=3600, # Hourly security/defect check
+        description="Detects visual anomalies against reference images",
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
 
     task_manager.register(
         name="graph_optimizer",
