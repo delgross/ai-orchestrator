@@ -151,7 +151,7 @@ async def on_startup():
 
     task_manager.register(
         name="rag_ingestion",
-        func=lambda: rag_ingestion_task("http://127.0.0.1:5555", state.http_client),
+        func=lambda: rag_ingestion_task("http://127.0.0.1:5555", state),
         interval=300, # Check every 5 minutes
         description="Auto-ingestion of files into RAG server",
         priority=TaskPriority.LOW,

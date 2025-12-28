@@ -43,6 +43,8 @@ class IngestRequest(BaseModel):
     kb_id: str = "default"
     filename: Optional[str] = None
     metadata: Dict[str, Any] = {}
+    window_size: int = 1000
+    overlap: int = 200
 
 class QueryRequest(BaseModel):
     query: str
@@ -145,9 +147,15 @@ class RAGServer:
         
         sql = """
         USE NS $ns DB $db;
+        LET $now = time::now();
         SELECT *, 
                vector::distance::euclidean(embedding, $emb) AS raw_dist,
-               (1.0 - vector::distance::euclidean(embedding, $emb)) * authority AS quality_score
+               (1.0 - vector::distance::euclidean(embedding, $emb)) * authority * 
+               (IF metadata.is_volatile = true THEN
+                    math::pow(0.9, (duration::hours($now - time::from::unix(metadata.ingested_at)) / 24))
+                ELSE 
+                    1.0 
+                END) AS quality_score
         FROM chunk 
         WHERE kb_id = $kb
         ORDER BY quality_score DESC
@@ -221,11 +229,10 @@ rag_backend = RAGServer()
 
 @app.post("/ingest")
 async def ingest(req: IngestRequest):
-    # ACCURACY UPGRADE: Sliding Window Chunking
-    # instead of just paragraph split, we use overlapping windows to ensure context isn't cut off
+    # ACCURACY UPGRADE: Adaptive Sliding Window Chunking
     text = req.content
-    window_size = 1000 # chars
-    overlap = 200 # chars
+    window_size = req.window_size
+    overlap = req.overlap
     
     chunks = []
     if len(text) <= window_size:
@@ -236,6 +243,9 @@ async def ingest(req: IngestRequest):
             end = start + window_size
             chunks.append(text[start:end])
             start += (window_size - overlap)
+            # Prevent infinite loop if overlap >= window_size
+            if start >= len(text) or (window_size - overlap) <= 0:
+                break
         
     success_count = 0
     logger.info(f"INGEST: Received {len(req.content)} chars. Accuracy-friendly chunking produced {len(chunks)} overlapping windows.")

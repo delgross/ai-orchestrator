@@ -144,6 +144,14 @@ class MemoryServer:
         await self.ensure_connected()
         if not self.initialized: return {"ok": False, "error": "DB not connected"}
         
+        # Default to 'default' if no kb_id provided
+        kb_id = str(context).split("extracted from ")[-1] if "extracted from" in str(context) else "default"
+        # We'll allow explicit kb_id via a kwarg in a moment, but for now we detect or default.
+        if isinstance(context, dict) and "kb_id" in context:
+            kb_id = context["kb_id"]
+        elif not context:
+            kb_id = "default"
+        
         try:
             # Generate embedding for the fact
             fact_text = f"{entity} {relation} {target} {context}"
@@ -153,14 +161,14 @@ class MemoryServer:
             # If we hear it again, confidence increases (math::max of old and new).
             sql = """
             BEGIN TRANSACTION;
-            LET $existing = (SELECT id, confidence FROM fact WHERE entity = $e AND relation = $r AND target = $t LIMIT 1);
+            LET $existing = (SELECT id, confidence FROM fact WHERE entity = $e AND relation = $r AND target = $t AND kb_id = $kb LIMIT 1);
             IF count($existing) > 0 THEN
                 UPDATE fact SET 
                     context = $c, 
                     embedding = $emb, 
                     confidence = math::min(1.0, math::max($existing[0].confidence, $conf)),
                     timestamp = time::now() 
-                WHERE entity = $e AND relation = $r AND target = $t;
+                WHERE entity = $e AND relation = $r AND target = $t AND kb_id = $kb;
             ELSE
                 CREATE fact SET 
                     entity = $e, 
@@ -168,6 +176,7 @@ class MemoryServer:
                     target = $t, 
                     context = $c, 
                     embedding = $emb, 
+                    kb_id = $kb,
                     confidence = $conf;
             END;
             COMMIT TRANSACTION;
@@ -177,9 +186,10 @@ class MemoryServer:
                 "e": str(entity), 
                 "r": str(relation), 
                 "t": str(target), 
-                "c": context, 
+                "c": str(context), 
                 "emb": embedding, 
-                "conf": confidence
+                "conf": confidence,
+                "kb": kb_id
             })
             log(f"Stored fact: {entity} {relation} {target} (Confidence: {confidence})", "DEBUG")
             return {"ok": True}
@@ -228,6 +238,7 @@ class MemoryServer:
             try:
                 # Note: kwargs 'timeout' passed to _execute_query
                 # Vector search + Confidence weighting
+                # We can filter by kb_id if needed, but for now we search all visible ones
                 res = await self._execute_query(
                     "SELECT *, vector::distance::euclidean(embedding, $emb) AS dist FROM fact WHERE confidence > 0.3 ORDER BY dist ASC LIMIT $limit",
                     {"emb": embedding, "limit": limit},

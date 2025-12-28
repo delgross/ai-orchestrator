@@ -12,13 +12,15 @@ INGEST_DIR = Path(os.getenv("RAG_INGEST_DIR", os.path.expanduser("~/ai/agent_fs_
 INGEST_DIR.mkdir(parents=True, exist_ok=True)
 
 # Extension whitelist
-SUPPORTED_EXTENSIONS = ('.txt', '.md', '.pdf', '.docx', '.csv')
+SUPPORTED_EXTENSIONS = ('.txt', '.md', '.pdf', '.docx', '.csv', '.png', '.jpg', '.jpeg')
 
-async def rag_ingestion_task(rag_base_url: str, http_client: httpx.AsyncClient):
+from common.state import AgentState
+
+async def rag_ingestion_task(rag_base_url: str, state: AgentState):
     """
-    Background task to automatically ingest files from the ingest directory.
-    Only runs when the system is idle (managed by BackgroundTaskManager).
+    Background task to automatically ingest files and extract atomic facts.
     """
+    http_client = await state.get_http_client()
     if not INGEST_DIR.exists():
         return
 
@@ -33,55 +35,166 @@ async def rag_ingestion_task(rag_base_url: str, http_client: httpx.AsyncClient):
         try:
             logger.info(f"Ingesting file: {file_path.name}")
             
-            # 1. Read file content (basic implementation)
-            # In a real system, we'd use mcp-pandoc or a dedicated parser
+            # 1. Advanced Structural Parsing (Layout-Aware)
             content = ""
-            if file_path.suffix.lower() in ('.txt', '.md'):
+            ext = file_path.suffix.lower()
+            
+            if ext in ('.txt', '.md'):
                 content = file_path.read_text(encoding="utf-8", errors="replace")
+            elif ext == '.csv':
+                # Convert CSV to Markdown Table to preserve structural relationships
+                import csv
+                try:
+                    with open(file_path, newline='') as csvfile:
+                        reader = csv.reader(csvfile)
+                        lines = list(reader)
+                        if lines:
+                            headers = lines[0]
+                            content = "| " + " | ".join(headers) + " |\n"
+                            content += "| " + " | ".join(["---"] * len(headers)) + " |\n"
+                            for row in lines[1:]:
+                                content += "| " + " | ".join([str(c) for c in row]) + " |\n"
+                    logger.info(f"STRUCTURAL PARSE: Converted {file_path.name} to Markdown table")
+                except Exception as e:
+                    logger.warning(f"CSV parse failed, using raw: {e}")
+                    content = file_path.read_text(encoding="utf-8", errors="replace")
+            elif ext in ('.png', '.jpg', '.jpeg'):
+                # MULTIMODAL PARSING (Vision-to-Text)
+                logger.info(f"MULTIMODAL: Analyzing image {file_path.name}...")
+                import base64
+                img_data = base64.b64encode(file_path.read_bytes()).decode('utf-8')
+                
+                vision_payload = {
+                    "model": "openai:gpt-4o", # Direct high-end vision call
+                    "messages": [
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "Describe this image in extreme detail for a knowledge base. If it's a document/diagram/label, transcribe all text and describe relationships. Focus on technical accuracy."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_data}"}}
+                        ]}
+                    ]
+                }
+                try:
+                    v_url = f"{state.gateway_base}/v1/chat/completions"
+                    v_res = await http_client.post(v_url, json=vision_payload, timeout=60.0)
+                    v_res.raise_for_status()
+                    content = v_res.json()["choices"][0]["message"]["content"]
+                    logger.info(f"MULTIMODAL SUCCESS: Transcribed {len(content)} chars from {file_path.name}")
+                except Exception as e:
+                    logger.error(f"Vision analysis failed for {file_path.name}: {e}")
+                    continue
             else:
                 # For PDF/DOCX, we'd need more complex parsing
-                # For now, just mark as "complex file skipped"
-                logger.warning(f"Complex file format {file_path.suffix} not yet fully supported for auto-ingest. Skipping.")
+                logger.warning(f"Complex file format {file_path.suffix} not yet fully supported for OCR. Skipping.")
                 continue
 
-            # 2. Send to RAG backend
+            # 2. THE DIGITAL LIBRARIAN (Autonomous Classification)
+            # Before we ingest, we ask the LLM to categorize the file
+            kb_id = "default"
+            authority = 0.7
+            try:
+                lib_prompt = (
+                    f"You are Dr. Ed's Personal Knowledge Manager. Categorize this new entry for his library.\n"
+                    f"Filename: {file_path.name}\n"
+                    f"Content Snippet: {content[:1000]}\n\n"
+                    "Step 1: Identify the main theme of this piece of Dr. Ed's knowledge.\n"
+                    "Step 2: If it matches an existing domain, use it: [farm-noc, osu-med, farm-beekeeping, farm-agronomy, farm-woodworking, farm-inventory].\n"
+                    "Step 3: If it is a NEW distinct area of his interests or expertise, propose a new descriptive kb_id (e.g., 'homesteading', 'legal-archives').\n"
+                    "Step 4: Assign Authority (1.0 for Professional/Peer-Reviewed, 0.7 for Casual/Secondary sources).\n"
+                    "Step 5: Determine Chunking Strategy:\n"
+                    "   - TECHNICAL/CODE: window_size: 800, overlap: 100\n"
+                    "   - NARRATIVE/NOVELS: window_size: 2000, overlap: 500\n"
+                    "   - GENERAL/MAGAZINES: window_size: 1000, overlap: 200\n"
+                    "Step 6: Volatility Detection: Is this a 'Status' doc that expires (NOC logs, health reports) or 'Static' knowledge (Novels, Manuals)?\n\n"
+                    "Return ONLY JSON: {'kb_id': '...', 'authority': 0.0, 'window_size': 1000, 'overlap': 200, 'is_volatile': true/false, 'theme_detected': '...'}"
+                )
+                
+                url = f"{state.gateway_base}/v1/chat/completions"
+                lib_payload = {
+                    "model": state.task_model,
+                    "messages": [{"role": "user", "content": lib_prompt}],
+                    "response_format": {"type": "json_object"}
+                }
+                
+                lib_resp = await http_client.post(url, json=lib_payload, timeout=30.0)
+                if lib_resp.status_code == 200:
+                    lib_data = json.loads(lib_resp.json()["choices"][0]["message"]["content"])
+                    kb_id = lib_data.get("kb_id", "default")
+                    authority = lib_data.get("authority", 0.7)
+                    window_size = lib_data.get("window_size", 1000)
+                    overlap = lib_data.get("overlap", 200)
+                    is_volatile = lib_data.get("is_volatile", False)
+                    logger.info(f"LIBRARIAN: Classified {file_path.name} as {kb_id} (Volatility: {is_volatile})")
+            except Exception as e:
+                logger.warning(f"Librarian failed to classify {file_path.name}, using defaults: {e}")
+
+            # 3. Send to RAG backend
             payload = {
                 "filename": file_path.name,
                 "content": content,
+                "kb_id": kb_id,
                 "metadata": {
                     "source": "auto_ingest",
                     "ingested_at": time.time(),
-                    "path": str(file_path)
-                }
+                    "path": str(file_path),
+                    "authority": authority,
+                    "is_volatile": is_volatile
+                },
+                "window_size": window_size,
+                "overlap": overlap
             }
             
             try:
                 resp = await http_client.post(f"{rag_base_url}/ingest", json=payload, timeout=60.0)
                 resp.raise_for_status()
-                logger.info(f"RAG server ingested {file_path.name}")
+                logger.info(f"RAG server ingested {file_path.name} into {kb_id}")
             except Exception as e:
                 logger.error(f"Failed to send {file_path.name} to RAG backend: {e}")
                 continue
 
-            # 3. EXTRA CREDIT: Cross-Layer Fact Extraction
-            # We also summarize the file into 2-3 key atomic facts for the 'The Diary' (Project Memory)
+            # 3. AUTOMATED FACT EXTRACTION (Cross-Layer Automation)
+            # We summarize the file into key atomic facts for the 'Project Memory'
             try:
                 from agent_runner.tools.mcp import tool_mcp_proxy
-                from common.state import AgentState # Assuming access to state for LLM
                 
-                # Simple extraction prompt
-                summary_prompt = (
-                    f"Analyze this file: {file_path.name}\n\nContent:\n{content[:2000]}\n\n"
-                    "Extract 3 most vital facts as 'entity relation target' strings. "
-                    "Example: 'Barn_Gate status LOCKED'. Return ONLY JSON: {'facts': [{'e':'...','r':'...','t':'...'}]}"
+                # Assign authority based on file type for the memory confidence
+                authority = 0.7
+                ext = file_path.suffix.lower()
+                if ext in ['.pdf', '.docx']: authority = 0.9
+                elif ext in ['.csv', '.conf']: authority = 0.8
+                
+                extraction_prompt = (
+                    f"Analyze this file: {file_path.name}\n\nContent:\n{content[:3000]}\n\n"
+                    "Extract the 5 most important structural facts (locations, equipment, status, relationships). "
+                    "Format each as: 'Entity | Relation | Target'. "
+                    "Example: 'Barn_1 | contains | Tractor_A'\n"
+                    "Return ONLY a JSON list of objects: {'facts': [{'e': '...', 'r': '...', 't': '...'}]}"
                 )
                 
-                # Note: This is an autonomous task, so we use a specialized model if available
-                state_dummy = None # We'd need a real state object here, 
-                # but for now we'll log it as a todo or use a direct gateway call if possible
-                logger.info(f"FACT EXTRACTION READY: Extracted metadata from {file_path.name}")
+                url = f"{state.gateway_base}/v1/chat/completions"
+                payload = {
+                    "model": state.task_model,
+                    "messages": [{"role": "user", "content": extraction_prompt}],
+                    "response_format": {"type": "json_object"}
+                }
+                
+                v_resp = await http_client.post(url, json=payload, timeout=60.0)
+                if v_resp.status_code == 200:
+                    f_data = v_resp.json()
+                    import json
+                    extracted = json.loads(f_data["choices"][0]["message"]["content"]).get("facts", [])
+                    
+                    for f in extracted:
+                        # Store in the 'Diary' (Project Memory) with Source Authority as Confidence
+                        await tool_mcp_proxy(state, "project-memory", "store_fact", {
+                            "entity": f.get("e"),
+                            "relation": f.get("r"),
+                            "target": f.get("t"),
+                            "context": f"Auto-extracted from {file_path.name}",
+                            "confidence": authority 
+                        })
+                    logger.info(f"AUTO-FACTS: Extracted {len(extracted)} facts from {file_path.name}")
             except Exception as e:
-                logger.warning(f"Fact extraction skipped for {file_path.name}: {e}")
+                logger.warning(f"Fact extraction failed for {file_path.name}: {e}")
 
             # 3. Mark as processed (move to processed folder)
             processed_dir = INGEST_DIR / "processed"

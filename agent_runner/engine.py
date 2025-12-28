@@ -732,27 +732,56 @@ class AgentEngine:
             return {"ok": False, "error": f"RAG connection failed: {str(e)}"}
 
     async def tool_unified_search(self, state: AgentState, query: str) -> Dict[str, Any]:
-        """Check both Facts and RAG in one go with smart KB routing."""
-        # 1. SMART KB DISPATCHER (Low Hanging Fruit)
-        # Detect if we should search specific Knowledge Bases
-        target_kb = "default"
+        """Check both Facts and RAG in one go with adaptive multi-domain routing."""
+        # 1. DYNAMIC DISPATCHER
+        # Get existing KB stats to see what's actually available
+        target_kbs = ["default"]
         q_lower = query.lower()
-        if any(w in q_lower for w in ["starlink", "router", "noc", "wan", "lan", "ip"]):
-            target_kb = "farm-noc"
-        elif any(w in q_lower for w in ["medical", "osu", "clinic", "health"]):
-            target_kb = "osu-med"
         
-        # 2. Start both searches in parallel
+        try:
+            async with httpx.AsyncClient() as client:
+                stats_res = await client.get("http://127.0.0.1:5555/stats", timeout=5.0)
+                if stats_res.status_code == 200:
+                    available_kbs = stats_res.json().get("knowledge_bases", {}).keys()
+                    # Detect if query keywords match any known KB names
+                    for kb in available_kbs:
+                        if kb.replace("farm-", "").replace("osu-", "") in q_lower:
+                            target_kbs.append(kb)
+        except: pass
+
+        # Hardcoded semantic fallbacks for common aliases
+        domains = {
+            "farm-noc": ["starlink", "router", "noc", "wan", "lan", "ip", "network", "omada"],
+            "osu-med": ["medical", "osu", "clinic", "health", "radiology", "doctor"],
+            "farm-beekeeping": ["bees", "hive", "honey", "queen", "apiary", "pollination"],
+            "farm-agronomy": ["planting", "harvest", "soil", "crop", "seed", "fertilizer", "tractor"],
+            "farm-woodworking": ["woodworking", "wood", "saw", "joint", "joinery", "lathe", "planer", "workshop", "lumber", "species"]
+        }
+        for kb, keywords in domains.items():
+            if any(w in q_lower for w in keywords):
+                target_kbs.append(kb)
+        
+        # Filter duplicates and remove 'default' if we have specific hits
+        target_kbs = list(set(target_kbs))
+        if len(target_kbs) > 1 and "default" in target_kbs:
+            target_kbs.remove("default")
+
+        # 2. Start parallel searches across ALL relevant layers
         from agent_runner.tools.mcp import tool_mcp_proxy
+        
+        # Parallel Fact Search (The Diary)
         fact_task = asyncio.create_task(tool_mcp_proxy(state, "project-memory", "semantic_search", {"query": query}))
-        rag_task = asyncio.create_task(self.tool_knowledge_search(state, query, kb_id=target_kb))
         
-        results = await asyncio.gather(fact_task, rag_task, return_exceptions=True)
+        # Parallel Multi-KB Search (The Library)
+        rag_tasks = [asyncio.create_task(self.tool_knowledge_search(state, query, kb_id=kb)) for kb in target_kbs]
         
-        fact_res = results[0] if not isinstance(results[0], Exception) else {"ok": False}
-        rag_res = results[1] if not isinstance(results[1], Exception) else {"ok": False}
+        # Wait for all
+        all_results = await asyncio.gather(fact_task, *rag_tasks, return_exceptions=True)
         
-        combined_context = f"SEARCH MODE: Unified (KB: {target_kb})\n\n"
+        fact_res = all_results[0] if not isinstance(all_results[0], Exception) else {"ok": False}
+        rag_results = all_results[1:]
+        
+        combined_context = f"SEARCH MODE: Hybrid (Domains: {', '.join(target_kbs)})\n\n"
         
         if fact_res.get("ok"):
             # Unwrap MCP response
@@ -774,14 +803,20 @@ class AgentEngine:
                     combined_context += "\n"
             except: pass
         
-        if rag_res.get("ok"):
+        # 3. Process Multi-KB results
+        for i, rag_res in enumerate(rag_results):
+            if isinstance(rag_res, Exception) or not rag_res.get("ok"):
+                continue
+                
             chunks = rag_res.get("chunks", [])
+            kb_name = target_kbs[i]
             if chunks:
-                combined_context += f"### [DEEP KNOWLEDGE] (Verified documents from KB: {target_kb}):\n"
-                for i, c in enumerate(chunks):
+                combined_context += f"### [DEEP KNOWLEDGE: {kb_name}]\n"
+                for j, c in enumerate(chunks):
                     fname = c.get("filename", "Unknown Source")
                     quality = c.get("quality_score", 0.0)
-                    combined_context += f"\n[SOURCE {i+1}: {fname}] (QoI: {quality:.2f})\n{c.get('content')}\n"
+                    combined_context += f"\n[DOC {j+1} from {fname}] (QoI: {quality:.2f})\n{c.get('content')}\n"
+                combined_context += "\n"
                 
         if len(combined_context) < 50:
             return {"ok": True, "message": "No relevant info found in facts or documents."}
