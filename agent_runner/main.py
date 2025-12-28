@@ -138,6 +138,15 @@ async def on_startup():
         priority=TaskPriority.LOW,
         idle_only=True
     )
+
+    task_manager.register(
+        name="memory_audit",
+        func=lambda: memory_audit_task(state),
+        interval=1800, # Run every 30 minutes
+        description="Reflective fact checking and confidence updates",
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
     
     await task_manager.start()
     
