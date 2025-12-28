@@ -183,6 +183,30 @@ if has_modal:
             "confidence": top['score']
         }
 
+    # 7. Visual Anomaly Detection (The Sentry)
+    # Compares a reference image to a new image to find defects/changes.
+    @app.function(image=image, timeout=300)
+    def detect_visual_anomaly(reference_bytes: bytes, candidate_bytes: bytes):
+        """
+        Compare two images and identify significant visual anomalies/defects.
+        """
+        import base64
+        # In real usage:
+        # prompt = "Compare Image 1 (Reference) and Image 2 (Current). List mechanical defects, rust, or damage."
+        # model.generate([img1, img2], prompt)
+        
+        # Mock logic
+        return {
+            "detected_changes": [
+                "New oil stain on ground",
+                "Rust spot on front loader bucket",
+                "Tire pressure looks lower than reference"
+            ],
+            "severity": "MEDIUM",
+            "confidence": 0.89
+        }
+
+
 
 
 
