@@ -165,14 +165,34 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     file_path.rename(REVIEW_DIR / file_path.name)
                     continue
             elif ext in ('.mp3', '.m4a', '.mp4'):
-                # AUDIO TRANSCRIPTION (Whisper via API or Local if tool available)
-                # For now, we'll strip this since we haven't implemented Whisper tool yet
-                # But we can placeholder it or use the Vision API if it supported audio (it doesn't directly here)
-                # Actually, let's treat it as "unsupported" for this specific step but don't crash.
-                # TODO: Implement Whisper
-                logger.warning(f"Audio ingestion not yet fully wired. Moving {file_path.name} to DEFERRED.")
-                file_path.rename(DEFERRED_DIR / file_path.name)
-                continue
+                # AUDIO TRANSCRIPTION (Whisper via Router)
+                logger.info(f"AUDIO: Transcribing {file_path.name}...")
+                try:
+                    # We must read bytes to send via httpx inside this async loop
+                    # Note: For very large files, streaming upload would be better, but httpx+files supports file objects
+                    # We'll rely on the night shift to handle the latency
+                    with open(file_path, "rb") as audio_file:
+                        # Construct multipart payload
+                        files = {"file": (file_path.name, audio_file, "application/octet-stream")}
+                        data = {"model": "whisper-1"}
+                        
+                        tx_url = f"{state.gateway_base}/v1/audio/transcriptions"
+                        # Long timeout for audio
+                        tx_resp = await http_client.post(tx_url, files=files, data=data, timeout=600.0)
+                        
+                        if tx_resp.status_code == 200:
+                            content = tx_resp.json().get("text", "")
+                            logger.info(f"AUDIO SUCCESS: Transcribed {len(content)} chars from {file_path.name}")
+                        else:
+                            raise Exception(f"Gateway returned {tx_resp.status_code}: {tx_resp.text}")
+                            
+                except Exception as e:
+                    logger.error(f"Audio transcription failed for {file_path.name}: {e}")
+                    # If this was a deferred file, maybe leave it? Or move to review?
+                    # Let's move to review to avoid infinite loop of failures
+                    notify_error(f"Ingestion Error: {file_path.name}", f"Transcription failed: {e}. Moved to review.")
+                    file_path.rename(REVIEW_DIR / file_path.name)
+                    continue
             elif ext == '.pdf':
                 try:
                     import pypdf

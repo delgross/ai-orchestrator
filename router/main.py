@@ -310,6 +310,62 @@ async def embeddings(request: Request):
             
     raise HTTPException(status_code=404, detail=f"Provider not found for embedding model: {model}")
 
+            if isinstance(e, HTTPException): raise
+            raise HTTPException(status_code=500, detail=str(e))
+            
+    raise HTTPException(status_code=404, detail=f"Provider not found for embedding model: {model}")
+
+# --- Audio API ---
+
+@app.post("/v1/audio/transcriptions")
+async def audio_transcriptions(request: Request):
+    """Proxy audio transcriptions to OpenAI provider."""
+    require_auth(request)
+    
+    # 1. Identify OpenAI Provider
+    prov = state.providers.get("openai")
+    if not prov:
+        # Try finding one
+        for p_name, p in state.providers.items():
+            if "openai.com" in p.base_url:
+                prov = p
+                break
+    
+    if not prov:
+        raise HTTPException(status_code=503, detail="No OpenAI provider configured for audio")
+        
+    url = join_url(prov.base_url, "/audio/transcriptions")
+    
+    # 2. Proxy Multipart Request
+    # We must read the form data and reconstruct it or stream it.
+    # Streaming multipart is hard. Simplified approach: Read all, then post.
+    # Limit body size for safety.
+    
+    try:
+        form = await request.form()
+        
+        # httpx needs a specific files/data structure
+        files = []
+        data = {}
+        
+        for field_name, value in form.items():
+            if isinstance(value, UploadFile):
+                # It's a file
+                content = await value.read()
+                files.append((field_name, (value.filename, content, value.content_type)))
+            else:
+                # It's a form field
+                data[field_name] = value
+                
+        # 3. Call Upstream
+        async with state.client.stream("POST", url, headers=provider_headers(prov), data=data, files=files, timeout=60.0) as r:
+            body = await r.read()
+            return JSONResponse(json.loads(body), status_code=r.status_code)
+            
+    except Exception as e:
+        logger.error(f"Audio transcription failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- OpenAI Files API ---
 
 @app.post("/v1/files")
