@@ -485,13 +485,19 @@ async def ingest_graph(req: GraphIngestRequest):
         LET $desc = {json.dumps(ent.description)};
         LET $meta = {json.dumps(ent.metadata or {})};
         
-        UPDATE entity:{safe_id} MERGE {{
-            name: $name,
-            type: $type,
-            description: $desc,
-            metadata: $meta,
-            last_updated: time::now()
-        }};\n"""
+        LET $name = {json.dumps(ent.name)};
+        LET $type = {json.dumps(ent.type)};
+        LET $desc = {json.dumps(ent.description)};
+        LET $meta = {json.dumps(ent.metadata or {})};
+        
+        INSERT INTO entity (id, name, type, description, metadata, last_updated) 
+        VALUES (entity:{safe_id}, $name, $type, $desc, $meta, time::now())
+        ON DUPLICATE KEY UPDATE 
+            name = $name,
+            type = $type,
+            description = $desc,
+            metadata = $meta,
+            last_updated = time::now();\n"""
     
     if entity_sql:
         full_sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB};\n{entity_sql}"
