@@ -1,10 +1,14 @@
 
 import sys
 import os
+import time
+
+print(f"DEBUG: Script started at {time.strftime('%X')}", flush=True)
 
 # Add parent dir to path so we can import agent_runner
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+print("DEBUG: Importing Modal modules (this may take a moment)...", flush=True)
 from agent_runner.modal_tasks import graph_community_detection, has_modal, app
 
 def test_gpu_connection():
