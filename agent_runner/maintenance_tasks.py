@@ -75,6 +75,61 @@ async def graph_optimization_task(state: AgentState):
         else:
             logger.warning("Modal not active. Skipping.")
 
+
+async def visual_sentry_task(state: AgentState):
+    """
+    Visual Sentry:
+    Compares ingested images against 'references' to find anomalies.
+    """
+    logger.info("🛡️ Visual Sentry: Scanning for anomalies...")
+    ingest_dir = Path(os.getenv("RAG_INGEST_DIR", os.path.expanduser("~/ai/rag_ingest")))
+    ref_dir = ingest_dir / "references"
+    
+    if not ref_dir.exists():
+        # Create it so the user knows where to put golden images
+        ref_dir.mkdir(exist_ok=True)
+        return
+
+    # 1. Load References
+    references = list(ref_dir.glob("*.jpg")) + list(ref_dir.glob("*.png"))
+    if not references: return
+
+    # 2. Check Candidates (anything in root ingest that isn't a reference)
+    candidates = [p for p in ingest_dir.glob("*") if p.suffix.lower() in ('.png', '.jpg', '.jpeg') and "references" not in str(p)]
+    
+    from agent_runner.modal_tasks import detect_visual_anomaly, has_modal
+    if not has_modal: return
+
+    for img in candidates:
+        # Avoid re-scanning if we already have an anomaly report
+        report_path = img.with_name(f"{img.stem}_anomaly.json")
+        if report_path.exists(): continue
+        
+        # Simple Matching Strategy: distinct keyword
+        # If image is "tractor_005.jpg", look for reference containing "tractor"
+        match = None
+        for ref in references:
+            # Simple heuristic: specific overlapping words or exact code match
+            # For now, let's assume user names them well: "tractor_ref.jpg" matches "tractor_usage.jpg"
+            # We check if the reference stem (minus _ref) is in the candidate name
+            core_name = ref.stem.replace("_ref", "").replace("ref_", "")
+            if core_name in img.stem:
+                match = ref
+                break
+        
+        if match:
+            logger.info(f"SENTRY: Comparing {img.name} against {match.name}...")
+            try:
+                result = detect_visual_anomaly.remote(match.read_bytes(), img.read_bytes())
+                
+                # If anomalies found, save report
+                if result.get("detected_changes"):
+                    # Record it
+                    report_path.write_text(json.dumps(result, indent=2))
+                    logger.warning(f"SENTRY: Anomalies detected in {img.name}! Saved report.")
+            except Exception as e:
+                logger.error(f"Sentry check failed for {img.name}: {e}")
+
 async def morning_briefing_task(state: AgentState):
     """
     Daily Report:
