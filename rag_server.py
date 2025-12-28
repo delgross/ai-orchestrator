@@ -483,7 +483,7 @@ async def ingest_graph(req: GraphIngestRequest):
         LET $name = {json.dumps(ent.name)};
         LET $type = {json.dumps(ent.type)};
         LET $desc = {json.dumps(ent.description)};
-        LET $meta = {json.dumps(ent.metadata)};
+        LET $meta = {json.dumps(ent.metadata or {})};
         
         UPDATE entity:{safe_id} MERGE {{
             name: $name,
