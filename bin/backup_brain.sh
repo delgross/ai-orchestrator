@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Configuration
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SYNC_DIR="$ROOT_DIR/../_brain_state" # Parent folder (Sync/Antigravity/_brain_state)
+# Target iCloud Drive for automatic cloud sync
+SYNC_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Antigravity_Backups" 
 BACKUP_NAME="brain_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
 LATEST_LINK="$SYNC_DIR/latest_brain.tar.gz"
 
