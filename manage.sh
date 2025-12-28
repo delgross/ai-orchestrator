@@ -129,6 +129,29 @@ check_surreal() {
   echo "$port_ok|$http_ok|$launchd_ok|$pid"
 }
 
+# Check RAG status
+check_rag() {
+  local port_ok=false
+  local http_ok=false
+  local launchd_ok=false
+  local pid=""
+  
+  if port_in_use "$RAG_PORT"; then
+    port_ok=true
+    pid=$(get_port_pid "$RAG_PORT")
+  fi
+  
+  if service_responding "http://127.0.0.1:$RAG_PORT/health"; then
+    http_ok=true
+  fi
+  
+  if job_loaded "$RAG_LABEL"; then
+    launchd_ok=true
+  fi
+  
+  echo "$port_ok|$http_ok|$launchd_ok|$pid"
+}
+
 # Show status
 show_status() {
   echo -e "${BLUE}=== AI Orchestrator Status ===${NC}\n"
