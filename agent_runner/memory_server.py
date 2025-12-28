@@ -481,16 +481,32 @@ class MemoryServer:
         await self.ensure_connected()
         if not self.initialized: return {"ok": False, "error": "DB not connected"}
         try:
-            # Check if exists
-            res = await self._execute_query("SELECT * FROM mcp_intel WHERE name = $name", {"name": name})
+            sql = """
+            LET $existing = (SELECT id FROM mcp_intel WHERE name = $name LIMIT 1);
+            IF count($existing) > 0 THEN
+                UPDATE mcp_intel SET 
+                    github_url = $github_url, 
+                    newsletter = $newsletter, 
+                    similar_servers = $similar_servers, 
+                    last_updated = time::now() 
+                WHERE name = $name;
+            ELSE
+                CREATE mcp_intel SET 
+                    name = $name, 
+                    github_url = $github_url, 
+                    newsletter = $newsletter, 
+                    similar_servers = $similar_servers, 
+                    last_updated = time::now();
+            END;
+            """
+            res = await self._execute_query(sql, {
+                "name": name,
+                "github_url": github_url,
+                "newsletter": newsletter,
+                "similar_servers": similar_servers
+            })
             if res is None:
-                return {"ok": False, "error": "Query execution failed"}
-            exists = res and res[0].get("result")
-            if exists:
-                update_res = await self._execute_query("UPDATE mcp_intel SET github_url=$github_url, newsletter=$newsletter, similar_servers=$similar_servers, last_updated=time::now() WHERE name=$name", {"name": name, "github_url": github_url, "newsletter": newsletter, "similar_servers": similar_servers})
-            else:
-                update_res = await self._execute_query("CREATE mcp_intel SET name=$name, github_url=$github_url, newsletter=$newsletter, similar_servers=$similar_servers, last_updated=time::now()", {"name": name, "github_url": github_url, "newsletter": newsletter, "similar_servers": similar_servers})
-            if update_res is None:
+                # _execute_query logs errors
                 return {"ok": False, "error": "Query execution failed"}
             return {"ok": True}
         except Exception as e:
