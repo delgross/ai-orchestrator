@@ -21,16 +21,35 @@ async def auto_tagger_task(state: AgentState):
     """
     Image Enhancer:
     Scans RAG ingest folder for images.
-    Uses 'vision_model' (Cheap Cloud GPU) to generate rich metadata.
+    Uses 'cloud_process_image' (Cheap Cloud GPU) to generate rich metadata.
     """
     logger.info("🏷️ Auto-Tagger: Scanning...")
     ingest_dir = Path(os.getenv("RAG_INGEST_DIR", os.path.expanduser("~/ai/rag_ingest")))
     if not ingest_dir.exists(): return
     
-    # 1. Find images without tags
-    processed = 0
-    # ... logic ...
-    # Call state.vision_model 
+    # 1. Check for Modal
+    from agent_runner.modal_tasks import cloud_process_image, has_modal
+    if not has_modal:
+        logger.warning("Auto-Tagger: Modal not configured. Skipping tag run to save costs.")
+        return
+
+    # 2. Find images
+    images = [p for p in ingest_dir.glob("*") if p.suffix.lower() in ('.png', '.jpg', '.jpeg')]
+    
+    for img in images:
+        try:
+            logger.info(f"Auto-Tagging {img.name} via Cloud GPU...")
+            # Remote call
+            description = cloud_process_image.remote(img.read_bytes(), "Generate 5-10 keywords and a brief caption.")
+            
+            # Save sidecar
+            meta_path = img.with_name(f"{img.stem}_tags.txt")
+            meta_path.write_text(description)
+            logger.info(f"Tagged {img.name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to tag {img.name}: {e}")
+ 
 
 async def graph_optimization_task(state: AgentState):
     """
