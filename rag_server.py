@@ -159,6 +159,20 @@ class RAGServer:
         REMOVE INDEX IF EXISTS chunk_embedding_index ON TABLE chunk;
 
         DEFINE INDEX chunk_embedding_index ON TABLE chunk FIELDS embedding HNSW DIMENSION 1024 DIST EUCLIDEAN TYPE F32;
+
+        -- Graph Schema
+        DEFINE TABLE entity SCHEMAFULL;
+        DEFINE FIELD name ON TABLE entity TYPE string;
+        DEFINE FIELD type ON TABLE entity TYPE string;
+        DEFINE FIELD description ON TABLE entity TYPE string;
+        DEFINE FIELD metadata ON TABLE entity TYPE object;
+        DEFINE FIELD last_updated ON TABLE entity TYPE datetime DEFAULT time::now();
+        
+        DEFINE TABLE relates SCHEMAFULL TYPE RELATION;
+        DEFINE FIELD type ON TABLE relates TYPE string;
+        DEFINE FIELD description ON TABLE relates TYPE string;
+        DEFINE FIELD origin ON TABLE relates TYPE string;
+        DEFINE FIELD timestamp ON TABLE relates TYPE datetime DEFAULT time::now();
         """
         try:
             await self.execute_surreal_query(setup_sql)
@@ -372,16 +386,27 @@ async def health():
 async def stats():
     """Get a summary of the Knowledge Base contents."""
     await rag_backend.ensure_db()
-    sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB}; SELECT count() AS count, kb_id FROM chunk GROUP BY kb_id;"
+    sql = f"""
+    USE NS {SURREAL_NS} DB {SURREAL_DB}; 
+    SELECT count() AS count, kb_id FROM chunk GROUP BY kb_id;
+    SELECT count() AS count FROM entity GROUP ALL;
+    SELECT count() AS count FROM relates GROUP ALL;
+    """
     try:
         r = await rag_backend.client.post(rag_backend.sql_url, content=sql, auth=rag_backend.auth, headers=rag_backend.headers)
         if r.status_code == 200:
             res = r.json()
-            data = res[-1].get("result", [])
-            total = sum(d.get("count", 0) for d in data)
+            # Result 0 is chunks, Result 1 is entities, Result 2 is edges
+            chunk_data = res[0].get("result", []) if len(res) > 0 else []
+            entity_count = res[1].get("result", [{}])[0].get("count", 0) if len(res) > 1 and res[1]['result'] else 0
+            edge_count = res[2].get("result", [{}])[0].get("count", 0) if len(res) > 2 and res[2]['result'] else 0
+            
+            total = sum(d.get("count", 0) for d in chunk_data)
             return {
                 "total_chunks": total,
-                "knowledge_bases": {d.get("kb_id"): d.get("count") for d in data},
+                "total_entities": entity_count,
+                "total_relations": edge_count,
+                "knowledge_bases": {d.get("kb_id"): d.get("count") for d in chunk_data},
                 "embedding_model": EMBED_MODEL,
                 "performance": rag_backend.metrics,
                 "status": "online" if total > 0 else "empty"
@@ -390,6 +415,99 @@ async def stats():
         logger.error(f"Stats check failed: {e}")
         
     return {"error": "Could not connect to knowledge database"}
+
+# --- Graph Capabilities ---
+
+class GraphEntity(BaseModel):
+    name: str # Unique identifier/name
+    type: str # Person, Organization, Location, CodeClass, Function, etc.
+    description: Optional[str] = ""
+    metadata: Dict[str, Any] = {}
+
+class GraphRelation(BaseModel):
+    source: str # Name of source entity
+    target: str # Name of target entity
+    relation: str # writes_to, calls, knows, contains
+    description: Optional[str] = ""
+
+class GraphIngestRequest(BaseModel):
+    entities: List[GraphEntity]
+    relations: List[GraphRelation]
+    origin_file: Optional[str] = None # Linking these facts to a source document
+
+@app.post("/ingest/graph")
+async def ingest_graph(req: GraphIngestRequest):
+    """
+    Ingest structural knowledge (Entities and Relations) into the Graph DB.
+    Idempotent: Updates details if entity exists, creates new edges.
+    """
+    start = time.time()
+    await rag_backend.ensure_db()
+    
+    # 1. Upsert Entities first
+    entity_sql = ""
+    for ent in req.entities:
+        # Sanitize ID: replace spaces with underscores, lowercase
+        safe_id = ent.name.strip().replace(" ", "_").lower()
+        # Clean specific chars that break Surreal IDs (keep it simple)
+        safe_id = "".join([c for c in safe_id if c.isalnum() or c in "_-"])
+        
+        if not safe_id: continue
+
+        # We use proper ID record syntax: entity:id
+        # CONTENT logic: MERGE to update description/metadata without wiping existing info
+        entity_sql += f"""
+        LET $name = {json.dumps(ent.name)};
+        LET $type = {json.dumps(ent.type)};
+        LET $desc = {json.dumps(ent.description)};
+        LET $meta = {json.dumps(ent.metadata)};
+        
+        UPDATE entity:{safe_id} MERGE {{
+            name: $name,
+            type: $type,
+            description: $desc,
+            metadata: $meta,
+            last_updated: time::now()
+        }};\n"""
+    
+    if entity_sql:
+        full_sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB};\n{entity_sql}"
+        try:
+            await rag_backend.execute_surreal_query(full_sql)
+        except Exception as e:
+            logger.error(f"Graph Entity Ingest Failed: {e}")
+            return {"error": str(e)}
+
+    # 2. Create Relations
+    rel_sql = ""
+    for rel in req.relations:
+        src_id = "".join([c for c in rel.source.strip().replace(" ", "_").lower() if c.isalnum() or c in "_-"])
+        tgt_id = "".join([c for c in rel.target.strip().replace(" ", "_").lower() if c.isalnum() or c in "_-"])
+        
+        if not src_id or not tgt_id: continue
+
+        # Clean relation type
+        rel_type = rel.relation.strip().replace(" ", "_").lower()
+        
+        rel_sql += f"""
+        RELATE entity:{src_id}->relates->entity:{tgt_id} CONTENT {{
+            type: {json.dumps(rel_type)},
+            description: {json.dumps(rel.description or "")},
+            origin: {json.dumps(req.origin_file or "unknown")},
+            timestamp: time::now()
+        }};\n"""
+
+    if rel_sql:
+        full_sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB};\n{rel_sql}"
+        try:
+            await rag_backend.execute_surreal_query(full_sql)
+        except Exception as e:
+            logger.error(f"Graph Relation Ingest Failed: {e}")
+            return {"error": str(e)}
+
+    count = len(req.entities) + len(req.relations)
+    logger.info(f"GRAPH INGEST: Processed {len(req.entities)} entities and {len(req.relations)} relations in {time.time()-start:.2f}s")
+    return {"ok": True, "processed": count}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5555)

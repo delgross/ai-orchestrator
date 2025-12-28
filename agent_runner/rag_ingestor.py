@@ -385,23 +385,15 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 logger.error(f"Failed to send {file_path.name} to RAG backend: {e}")
                 continue
 
-            # 3. AUTOMATED FACT EXTRACTION (Cross-Layer Automation)
-            # We summarize the file into key atomic facts for the 'Project Memory'
+            # 3. KNOWLEDGE GRAPH CONSTRUCTION (GraphRAG)
+            # We extract Entities and Relations to build the visual brain.
             try:
-                from agent_runner.tools.mcp import tool_mcp_proxy
-                
-                # Assign authority based on file type for the memory confidence
-                authority = 0.7
-                ext = file_path.suffix.lower()
-                if ext in ['.pdf', '.docx']: authority = 0.9
-                elif ext in ['.csv', '.conf']: authority = 0.8
-                
                 extraction_prompt = (
-                    f"Analyze this file: {file_path.name}\n\nContent:\n{content[:3000]}\n\n"
-                    "Extract the 5 most important structural facts (locations, equipment, status, relationships). "
-                    "Format each as: 'Entity | Relation | Target'. "
-                    "Example: 'Barn_1 | contains | Tractor_A'\n"
-                    "Return ONLY a JSON list of objects: {'facts': [{'e': '...', 'r': '...', 't': '...'}]}"
+                    f"Analyze this file: {file_path.name} for the Knowledge Graph.\n\nContent:\n{content[:4000]}\n\n"
+                    "Task: Identify the core ENTITIES (Classes, Functions, Systems, Concepts, People) and RELATIONSHIPS (imports, definitions, calls, documents, authors).\n"
+                    "1. Define entities with a 'type' (e.g., 'Python Class', 'System', 'API').\n"
+                    "2. Define relationships (e.g., 'AgentRunner' -> 'imports' -> 'contextlib').\n"
+                    "Return JSON: {'entities': [{'name': '...', 'type': '...', 'description': '...'}], 'relations': [{'source': '...', 'target': '...', 'relation': '...', 'description': '...'}]}"
                 )
                 
                 url = f"{state.gateway_base}/v1/chat/completions"
@@ -413,22 +405,29 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 
                 v_resp = await http_client.post(url, json=payload, timeout=60.0)
                 if v_resp.status_code == 200:
-                    f_data = v_resp.json()
+                    # Clean response
+                    res_content = v_resp.json()["choices"][0]["message"]["content"]
                     import json
-                    extracted = json.loads(f_data["choices"][0]["message"]["content"]).get("facts", [])
+                    graph_data = json.loads(res_content)
                     
-                    for f in extracted:
-                        # Store in the 'Diary' (Project Memory) with Source Authority as Confidence
-                        await tool_mcp_proxy(state, "project-memory", "store_fact", {
-                            "entity": f.get("e"),
-                            "relation": f.get("r"),
-                            "target": f.get("t"),
-                            "context": f"Auto-extracted from {file_path.name}",
-                            "confidence": authority 
-                        })
-                    logger.info(f"AUTO-FACTS: Extracted {len(extracted)} facts from {file_path.name}")
+                    # Ensure minimal valid structure
+                    entities = graph_data.get("entities", [])
+                    relations = graph_data.get("relations", [])
+                    
+                    if entities or relations:
+                        graph_payload = {
+                            "entities": entities,
+                            "relations": relations,
+                            "origin_file": file_path.name
+                        }
+                        
+                        g_resp = await http_client.post(f"{rag_base_url}/ingest/graph", json=graph_payload, timeout=30.0)
+                        if g_resp.status_code == 200:
+                            logger.info(f"GRAPH INGEST: Added {len(entities)} nodes and {len(relations)} edges from {file_path.name}")
+                        else:
+                            logger.warning(f"Graph ingest failed: {g_resp.text}")
             except Exception as e:
-                logger.warning(f"Fact extraction failed for {file_path.name}: {e}")
+                logger.warning(f"Graph extraction failed for {file_path.name}: {e}")
 
             # 4. SMART FILING (The Digital Librarian's Shelf)
             # Create a specific folder for this domain
