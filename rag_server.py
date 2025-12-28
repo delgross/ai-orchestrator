@@ -73,6 +73,7 @@ class RAGServer:
         DEFINE FIELD filename ON TABLE chunk TYPE string;
         DEFINE FIELD metadata ON TABLE chunk TYPE object;
         DEFINE FIELD embedding ON TABLE chunk TYPE array<float, 1024>;
+        DEFINE FIELD authority ON TABLE chunk TYPE number DEFAULT 1.0;
         DEFINE FIELD timestamp ON TABLE chunk TYPE datetime DEFAULT time::now();
         
         DEFINE INDEX chunk_embedding_index ON TABLE chunk FIELDS embedding MTREE DIMENSION 1024 DIST EUCLIDEAN;
@@ -106,13 +107,23 @@ class RAGServer:
         await self.ensure_db()
         embedding = await self.get_embedding(content)
         
-        query = "CREATE chunk SET content = $content, kb_id = $kb, filename = $file, metadata = $meta, embedding = $emb;"
+        # Calculate Authority based on source type
+        authority = 1.0
+        if filename:
+            ext = filename.split(".")[-1].lower()
+            if ext in ["pdf", "docx"]: authority = 1.0 # Official Docs
+            elif ext in ["json", "yaml", "yml", "conf"]: authority = 0.9 # Configs
+            elif ext in ["csv", "nmap", "log"]: authority = 0.8 # Structured Data
+            elif ext in ["txt", "md"]: authority = 0.7 # Casual Notes
+        
+        query = "CREATE chunk SET content = $content, kb_id = $kb, filename = $file, metadata = $meta, embedding = $emb, authority = $auth;"
         params = {
             "content": content,
             "kb": kb_id,
             "file": filename or "unknown",
             "meta": metadata,
-            "emb": embedding
+            "emb": embedding,
+            "auth": authority
         }
         
         # Build prefix for params
@@ -134,10 +145,12 @@ class RAGServer:
         
         sql = """
         USE NS $ns DB $db;
-        SELECT *, vector::distance::euclidean(embedding, $emb) AS score 
+        SELECT *, 
+               vector::distance::euclidean(embedding, $emb) AS raw_dist,
+               (1.0 - vector::distance::euclidean(embedding, $emb)) * authority AS quality_score
         FROM chunk 
         WHERE kb_id = $kb
-        ORDER BY score ASC 
+        ORDER BY quality_score DESC
         LIMIT $limit;
         """
         params = {
@@ -165,17 +178,18 @@ class RAGServer:
                 cleaned = []
                 scores = []
                 for row in data:
-                    score = row.get("score", 2.0)
+                    score = row.get("raw_dist", 2.0)
+                    quality = row.get("quality_score", 0.0)
+                    
                     # For Euclidean in Surreal, 0.0 is perfect, > 1.0 is getting vague
-                    if score > 1.2: continue # Accuracy Filter: Drop low-confidence matches
+                    if score > 1.2: continue # Accuracy Filter
                     
                     scores.append(score)
                     row.pop("embedding", None)
                     cleaned.append(row)
                 
                 if scores:
-                    avg_score = sum(scores) / len(scores)
-                    logger.info(f"SEARCH QUALITY: Best Score: {min(scores):.4f}, Avg: {avg_score:.4f} ({len(cleaned)} matches kept)")
+                    logger.info(f"QoI REPORT: Best Quality: {max([r.get('quality_score', 0) for r in data]):.4f}, Avg Dist: {sum(scores)/len(scores):.4f}")
                 
                 return cleaned
             
