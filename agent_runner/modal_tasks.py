@@ -112,6 +112,60 @@ if has_modal:
         
         return f"[CLOUD VISION RESULT] Processed {len(image_bytes)} bytes. Analysis: Image content analyzed securely in cloud."
 
+    # 5. Search Re-Ranking (GPU/CPU)
+    # Uses a Cross-Encoder to rank search results better than vector similarity
+    @app.function(image=image.pip_install("sentence-transformers", "torch"), timeout=60)
+    def rerank_search_results(query: str, candidates: list):
+        """
+        Re-ranks a list of text chunks based on relevance to the query.
+        """
+        from sentence_transformers import CrossEncoder
+        model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        
+        # internal format: (query, doc)
+        pairs = [[query, doc] for doc in candidates]
+        scores = model.predict(pairs)
+        
+        # specific return format: list of (index, score)
+        scored_results = []
+        for i, score in enumerate(scores):
+            scored_results.append((i, float(score)))
+            
+        # Sort by score desc
+        scored_results.sort(key=lambda x: x[1], reverse=True)
+        return scored_results
+
+    # 6. Deep Fact Verification (The Audit)
+    # Uses a strong NLI model or LLM to check if evidence supports a claim
+    @app.function(image=image.pip_install("transformers", "torch"), timeout=300)
+    def verify_fact(fact: str, evidence: str):
+        """
+        Checks if the evidence supports the fact.
+        Returns: 'SUPPORTED', 'CONTRADICTED', or 'NEUTRAL' with a confidence score.
+        """
+        # Using a pre-trained NLI model is cheaper/faster than a full LLM for this specific task
+        from transformers import pipeline
+        nli_model = pipeline("text-classification", model="roberta-large-mnli")
+        
+        # NLI format: "Fact. Evidence"
+        input_text = f"{fact} {evidence}"
+        result = nli_model(input_text)
+        
+        # Map NLI labels to ours
+        # roberta-large-mnli labels: CONTRADICTION, NEUTRAL, ENTAILMENT
+        label_map = {
+            "ENTAILMENT": "SUPPORTED",
+            "CONTRADICTION": "CONTRADICTED",
+            "NEUTRAL": "NEUTRAL"
+        }
+        
+        top = result[0]
+        return {
+            "judgment": label_map.get(top['label'].upper(), "NEUTRAL"),
+            "confidence": top['score']
+        }
+
+
 
 
 else:
