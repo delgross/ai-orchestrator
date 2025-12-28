@@ -22,7 +22,7 @@ from common.constants import (
     MODEL_AGENT_MCP, MODEL_ROUTER, ROLE_ASSISTANT
 )
 
-from router.config import state, VERSION, OLLAMA_BASE, AGENT_RUNNER_URL, AGENT_RUNNER_CHAT_PATH, MODELS_CACHE_TTL_S, MAX_REQUEST_BODY_BYTES, FS_ROOT
+from router.config import state, VERSION, OLLAMA_BASE, AGENT_RUNNER_URL, AGENT_RUNNER_CHAT_PATH, MODELS_CACHE_TTL_S, MAX_REQUEST_BODY_BYTES, FS_ROOT, RAG_BASE
 from router.utils import join_url, sse_line, sanitize_messages, parse_model_string
 from router.middleware import RequestIDMiddleware, require_auth
 from router.providers import load_providers, call_ollama_chat, provider_headers
