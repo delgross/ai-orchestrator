@@ -169,28 +169,41 @@ async def on_startup():
         idle_only=True
     )
 
-    from agent_runner.maintenance_tasks import code_janitor_task, auto_tagger_task, graph_optimization_task
+    from agent_runner.maintenance_tasks import code_janitor_task, auto_tagger_task, graph_optimization_task, morning_briefing_task, daily_research_task, stale_memory_pruner_task
 
-    task_manager.register(
-        name="code_janitor",
-        func=lambda: code_janitor_task(state),
-        interval=21600, 
-        priority=TaskPriority.LOW,
-        idle_only=True
-    )
-
-    task_manager.register(
-        name="auto_tagger",
-        func=lambda: auto_tagger_task(state),
-        interval=300, 
-        priority=TaskPriority.LOW,
-        idle_only=True
-    )
+    # ... (existing registrations) ...
 
     task_manager.register(
         name="graph_optimizer",
         func=lambda: graph_optimization_task(state),
         interval=43200, # Nightly
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
+
+    task_manager.register(
+        name="morning_briefing",
+        func=lambda: morning_briefing_task(state),
+        interval=86400, # Daily 
+        description="Daily system status report",
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
+
+    task_manager.register(
+        name="daily_research",
+        func=lambda: daily_research_task(state),
+        interval=43200, 
+        description="Autonomous topic research",
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
+    
+    task_manager.register(
+        name="stale_pruner",
+        func=lambda: stale_memory_pruner_task(state),
+        interval=604800, # Weekly
+        description="Cleanup low-confidence memories",
         priority=TaskPriority.LOW,
         idle_only=True
     )
