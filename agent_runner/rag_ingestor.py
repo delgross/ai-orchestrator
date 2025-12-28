@@ -148,8 +148,26 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     from agent_runner.modal_tasks import cloud_process_image, has_modal
                     if has_modal:
                         logger.info(f"CLOUD GPU: Offloading Image {file_path.name} to Modal...")
-                        content = cloud_process_image.remote(file_path.read_bytes(), "Describe this image in extreme detail for a knowledge base.")
-                        logger.info(f"CLOUD SUCCESS: Received analysis from Modal.")
+                        raw_result = cloud_process_image.remote(file_path.read_bytes())
+                        
+                        # Parse Structured Output
+                        try:
+                            import json
+                            data = json.loads(raw_result)
+                            content = data.get("description", "")
+                            
+                            # Merge strict metadata
+                            if "objects" in data: filename_meta["objects"] = data["objects"]
+                            if "animals" in data: filename_meta["animals"] = data["animals"]
+                            if "people" in data: filename_meta["people"] = data["people"]
+                            if "camera_data" in data: filename_meta["camera_data"] = data["camera_data"]
+                            
+                            logger.info(f"CLOUD SUCCESS: Received structured analysis. Objects: {len(data.get('objects', []))}")
+                        except:
+                            # Fallback if model returns plain text
+                            content = raw_result
+                            logger.info("CLOUD SUCCESS: Received plain text analysis.")
+
                     else:
                         raise ImportError("Modal not configured")
                         
