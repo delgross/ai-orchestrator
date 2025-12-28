@@ -141,6 +141,8 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                         
                         ocr_text = []
                         total_images = len(scanned_images)
+                        # Flag to track if we hit network issues
+                        network_issues = False
                         
                         for idx, (page_num, img) in enumerate(scanned_images):
                             logger.info(f"OCR: Processing Page {page_num}/{total_images} (Image {img.name})...")
@@ -163,10 +165,22 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                                     ocr_text.append(f"[Page {page_num} - VISION OCR]\n{desc}")
                                 else:
                                     logger.error(f"OCR HTTP Error {v_res.status_code}: {v_res.text}")
+                                    # If 5xx or 429, might be temporary
+                                    if v_res.status_code >= 500 or v_res.status_code == 429:
+                                        network_issues = True
+                            except (httpx.ConnectError, httpx.ReadTimeout, httpx.NetworkError) as ne:
+                                logger.warning(f"OCR Network Error for page {page_num}: {ne}. Pausing OCR.")
+                                network_issues = True
+                                break # Stop processing this file to save retries
                             except Exception as ve:
                                 logger.error(f"OCR Failed for page {page_num}: {ve}")
                         
                         full_text += "\n\n".join(ocr_text)
+                        
+                        # If we had network issues, we should NOT move to review. We should leave it to retry.
+                        if network_issues:
+                            logger.warning(f"Ingestion incomplete due to network issues for {file_path.name}. Leaving in INGEST to retry later.")
+                            continue
                         
                     if not full_text.strip():
                         logger.warning(f"PDF {file_path.name} is empty after processing. Moving to REVIEW.")
