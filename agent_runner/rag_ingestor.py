@@ -116,20 +116,66 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             elif ext == '.pdf':
                 try:
                     import pypdf
+                    import base64
                     reader = pypdf.PdfReader(file_path)
                     text = []
+                    scanned_images = []
+                    
                     for i, page in enumerate(reader.pages):
                         page_text = page.extract_text()
-                        if page_text:
+                        if page_text and len(page_text.strip()) > 50:
                             text.append(f"[Page {i+1}]\n{page_text}")
+                        else:
+                            # Potential scanned page
+                            if hasattr(page, "images") and page.images:
+                                for img in page.images:
+                                    scanned_images.append((i+1, img))
                     
                     full_text = "\n\n".join(text)
+                    
+                    # If text content is low but we have images, trigger OCR
+                    if len(full_text) < 500 and scanned_images:
+                        logger.warning(f"PDF {file_path.name} appears to be scanned ({len(scanned_images)} images). Triggering Vision OCR (Subset)...")
+                        
+                        # Selection Strategy: First 3 pages (Title/Intro), Last 2 pages (Index), and 3 random middle
+                        # to get a good gist without burning 100 calls.
+                        # Actually, let's do First 5 + Last 2.
+                        selected_indices = [0, 1, 2, 3, 4, len(scanned_images)-1, len(scanned_images)-2]
+                        # Filter valid
+                        selected_indices = sorted(list(set([k for k in selected_indices if 0 <= k < len(scanned_images)])))
+                        
+                        ocr_text = []
+                        for idx in selected_indices:
+                            page_num, img = scanned_images[idx]
+                            logger.info(f"OCR: Processing Page {page_num} Image {img.name}...")
+                            
+                            try:
+                                img_b64 = base64.b64encode(img.data).decode('utf-8')
+                                vision_payload = {
+                                    "model": "openai:gpt-4o",
+                                    "messages": [
+                                        {"role": "user", "content": [
+                                            {"type": "text", "text": f"Transcribe this scanned document page (Page {page_num}) verbatim. Describe any diagrams."},
+                                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+                                        ]}
+                                    ]
+                                }
+                                v_url = f"{state.gateway_base}/v1/chat/completions"
+                                v_res = await http_client.post(v_url, json=vision_payload, timeout=45.0)
+                                if v_res.status_code == 200:
+                                    desc = v_res.json()["choices"][0]["message"]["content"]
+                                    ocr_text.append(f"[Page {page_num} - VISION OCR]\n{desc}")
+                            except Exception as ve:
+                                logger.error(f"OCR Failed for page {page_num}: {ve}")
+                        
+                        full_text += "\n\n".join(ocr_text)
+                        
                     if not full_text.strip():
-                        logger.warning(f"PDF {file_path.name} appears to be scanned/empty (no text layer). Skipping for now.")
+                        logger.warning(f"PDF {file_path.name} is empty after OCR attempt. Skipping.")
                         continue
                         
                     content = full_text
-                    logger.info(f"PDF PARSE: Extracted {len(content)} chars from {file_path.name}")
+                    logger.info(f"PDF PARSE: Extracted {len(content)} chars from {file_path.name} (Text+OCR)")
                 except Exception as e:
                     logger.warning(f"PDF parse failed for {file_path.name}: {e}")
                     continue

@@ -251,8 +251,8 @@ show_status() {
     echo -e "${GREEN}✓ All services healthy${NC}"
     
     # Check if dashboard is reachable (check HTTP status code)
-    if curl -sf -o /dev/null -w "%{http_code}" "http://127.0.0.1:$ROUTER_PORT/dashboard" | grep -q "200" 2>/dev/null; then
-      echo -e "Dashboard: ${GREEN}✓ Available${NC} (http://127.0.0.1:$ROUTER_PORT/dashboard)"
+    if curl -sf -o /dev/null -w "%{http_code}" "http://127.0.0.1:$ROUTER_PORT/v2/index.html" | grep -q "200" 2>/dev/null; then
+      echo -e "Dashboard: ${GREEN}✓ Available${NC} (http://127.0.0.1:$ROUTER_PORT/v2/index.html)"
     else
       echo -e "Dashboard: ${RED}✗ Not responding correctly${NC}"
     fi

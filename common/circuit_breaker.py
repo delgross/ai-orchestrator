@@ -3,6 +3,8 @@ import logging
 from enum import Enum
 from typing import Dict, Any, Optional, List, Callable
 
+from common.notifications import notify_health, notify_info
+
 logger = logging.getLogger("common.circuit_breaker")
 
 class CircuitState(Enum):
@@ -62,6 +64,11 @@ class CircuitBreaker:
         if self.state == CircuitState.HALF_OPEN:
             # Successful test in half-open state - fully recover
             logger.info(f"Circuit Breaker '{self.name}': Recovery successful, transitioning to CLOSED")
+            notify_info(
+                f"Service Recovered: {self.name}",
+                f"Circuit breaker '{self.name}' has recovered and is now CLOSED.",
+                source="CircuitBreaker"
+            )
             self.state = CircuitState.CLOSED
             self.failures = 0
             self.half_open_tests = 0
@@ -89,6 +96,11 @@ class CircuitBreaker:
         elif self.state == CircuitState.CLOSED:
             if self.failures >= self.threshold:
                 logger.error(f"Circuit Breaker '{self.name}': Threshold {self.threshold} reached, transitioning to OPEN")
+                notify_health(
+                    f"Service Suspended: {self.name}",
+                    f"Circuit breaker '{self.name}' tripped after {self.threshold} failures. Service temporarily disabled.",
+                    source="CircuitBreaker"
+                )
                 self.state = CircuitState.OPEN
                 self.disabled_until = time.time() + self.recovery_timeout
 
