@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Configuration
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SYNC_DIR="$ROOT_DIR/../_brain_state"
+SYNC_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Antigravity_Backups"
 
 # Check argument or find latest
 ARCHIVE=""
