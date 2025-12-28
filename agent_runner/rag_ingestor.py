@@ -130,10 +130,6 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                         
                     content = full_text
                     logger.info(f"PDF PARSE: Extracted {len(content)} chars from {file_path.name}")
-                except ImportError:
-                    import sys
-                    logger.error(f"PDF PARSE ERROR: pypdf not found. Executable: {sys.executable}, Path: {sys.path}")
-                    continue
                 except Exception as e:
                     logger.warning(f"PDF parse failed for {file_path.name}: {e}")
                     continue
