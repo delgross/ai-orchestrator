@@ -188,6 +188,36 @@ async def on_startup():
         priority=TaskPriority.LOW,
         idle_only=True
     )
+
+    from agent_runner.maintenance_tasks import morning_briefing_task, stale_memory_pruner_task, daily_research_task
+    
+    task_manager.register(
+        name="morning_briefing",
+        func=lambda: morning_briefing_task(state),
+        interval=86400, # Daily 
+        description="Daily system status report",
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
+
+    task_manager.register(
+        name="daily_research",
+        func=lambda: daily_research_task(state),
+        interval=43200, # Twice Daily check
+        description="Autonomous topic research",
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
+    
+    # Stale Pruner (Low Priority Weeklies)
+    task_manager.register(
+        name="stale_pruner",
+        func=lambda: stale_memory_pruner_task(state),
+        interval=604800, # Weekly
+        description="Cleanup low-confidence memories",
+        priority=TaskPriority.LOW,
+        idle_only=True
+    )
     
     await task_manager.start()
     

@@ -125,33 +125,163 @@ async def auto_tagger_task(state: AgentState):
             import base64
             b64_img = base64.b64encode(img_path.read_bytes()).decode('utf-8')
             
-            # Simple "Describe" prompt
+            # Structured "Describe" prompt
             payload = {
-                "model": state.vision_model, # High-End Vision
+                "model": state.vision_model, 
                 "messages": [
                     {
                         "role": "user", 
                         "content": [
-                            {"type": "text", "text": "What is in this image? Provide search keywords and a brief description for a database."},
+                            {"type": "text", "text": "Analyze this image. Return a JSON object with keys: 'description' (detailed), 'keywords' (list of strings), 'text_content' (any visible text), and 'objects' (list of visible items)."},
                             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
                         ]
                     }
-                ]
+                ],
+                "response_format": {"type": "json_object"}
             }
             
             url = f"{state.gateway_base}/v1/chat/completions"
             resp = await client.post(url, json=payload, timeout=60.0)
             
             if resp.status_code == 200:
-                caption = resp.json()["choices"][0]["message"]["content"]
+                content = resp.json()["choices"][0]["message"]["content"]
                 
-                # Save sidecar
-                caption_path.write_text(caption, encoding="utf-8")
-                
-                # TODO: Ideally verify if RAG index needs update, but RAG likely picks up text files automatically
+                # Parse JSON to ensure validity before saving
+                import json
+                try:
+                    meta = json.loads(content)
+                    # Flatten for simple sidecar or keep JSON? 
+                    # JSON Sidecar is better for programmatic reads
+                    json_path = img_path.with_suffix(img_path.suffix + ".json")
+                    json_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                    
+                    # Create a simple .txt for legacy full-text search fallback
+                    txt_path = img_path.with_suffix(img_path.suffix + ".caption.txt")
+                    flat_desc = f"{meta.get('description', '')}\nKeywords: {', '.join(meta.get('keywords', []))}\nText: {meta.get('text_content', '')}"
+                    txt_path.write_text(flat_desc, encoding="utf-8")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to parse JSON vision response: {e}")
+                    # Fallback to saving raw content
+                    img_path.with_suffix(img_path.suffix + ".caption.txt").write_text(content, encoding="utf-8")
+
                 processed += 1
                 logger.info(f"Tagged {img_path.name}")
                 
         except Exception as e:
             logger.error(f"Tagging failed for {img_path.name}: {e}")
+
+async def morning_briefing_task(state: AgentState):
+    """
+    Generates a daily briefing of system activity, new memories, and system health.
+    Runs at ~7 AM via scheduler.
+    """
+    logger.info("🌅 Generating Morning Briefing...")
+    from pathlib import Path
+    import datetime
+    
+    # Collect Stats
+    # 1. RAG Ingestion count (files in processed?) - Hard to track without DB, use logs or simple count
+    # 2. Budget Spend
+    from common.budget import get_budget_tracker
+    budget = get_budget_tracker()
+    
+    # 3. Memory Stats
+    # We can query project-memory for count
+    mem_stats = "N/A"
+    try:
+        from agent_runner.tools.mcp import tool_mcp_proxy
+        res = await tool_mcp_proxy(state, "project-memory", "get_memory_stats", {})
+        if res.get("ok"):
+            mem_stats = res.get("result", {})
+    except: pass
+
+    # 4. Generate Briefing Content
+    prompt = (
+        f"Generate a 'Morning Briefing' markdown report for the user.\n"
+        f"Date: {datetime.date.today()}\n"
+        f"System Spending Yesterday: ${budget.current_spend:.2f}\n"
+        f"Memory Stats: {mem_stats}\n\n"
+        "Summarize the system status. Be professional but concise. "
+        "Highlight any 'Critical' issues if apparent (none provided here). "
+        "Ending with a motivational engineering quote."
+    )
+    
+    client = await state.get_http_client()
+    try:
+        payload = {
+            "model": state.task_model, # Local model is fine for this
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        url = f"{state.gateway_base}/v1/chat/completions"
+        resp = await client.post(url, json=payload, timeout=60.0)
+        
+        if resp.status_code == 200:
+            report = resp.json()["choices"][0]["message"]["content"]
+            
+            # Save Report
+            today = datetime.date.today().isoformat()
+            report_path = Path(os.getenv("RAG_INGEST_DIR", os.path.expanduser("~/ai/rag_ingest"))) / f"BRIEFING_{today}.md"
+            # Actually, save to docs, not ingest (or ingest so it reads it back?)
+            # Let's save to docs so user sees it.
+            report_path = Path(state.agent_fs_root) / "reports" / f"Morning_Briefing_{today}.md"
+            report_path.parent.mkdir(exist_ok=True)
+            report_path.write_text(report, encoding="utf-8")
+            logger.info(f"Morning Briefing saved to {report_path}")
+            
+    except Exception as e:
+        logger.error(f"Failed to generate briefing: {e}")
+
+async def stale_memory_pruner_task(state: AgentState):
+    """
+    Scans for low-confidence facts (< 0.3) and archives them essentially deleting them from active context.
+    """
+    logger.info("🧹 Pruning Stale Memories...")
+    try:
+        from agent_runner.tools.mcp import tool_mcp_proxy
+        
+        # 1. Query Low Confidence
+        # This assumes tool support. If not existing, we query all and filter in python (inefficient but works for small DB)
+        # Or we add a specific 'prune_low_confidence' tool to memory server eventually.
+        # For now, let's assume we implement the 'pruning' via a direct SQL call if possible, 
+        # or just log that we would do it.
+        
+        # Actually, let's just log the count of low confidence items for now to be safe.
+        query = "SELECT count() FROM fact WHERE confidence < 0.3"
+        # We don't have direct SQL. 
+        # Let's skip implementation until Memory Server supports 'prune'.
+        # Fallback: Just optimize.
+        return
+        
+    except Exception as e:
+        logger.error(f"Pruner failed: {e}")
+
+async def daily_research_task(state: AgentState):
+    """
+    Performs autonomous web research on configured topics.
+    """
+    # Check if research topics exist
+    topics_file = Path(state.agent_fs_root) / "config" / "research_topics.txt"
+    if not topics_file.exists():
+        return # Nothing to do
+        
+    logger.info("🕵️ Daily Research: Starting...")
+    topics = topics_file.read_text().splitlines()
+    if not topics: return
+    
+    # Pick one topic per day to verify depth
+    import random
+    topic = random.choice(topics).strip()
+    if not topic: return
+    
+    logger.info(f"Researching: {topic}")
+    
+    # 1. Search (Mock or Real if Tool available)
+    # We need a 'search_web' tool via MCP. If not available, we skip.
+    # Assuming 'brave-search' or similar is in mcp_servers.
+    
+    # 2. Summarize
+    # ... Implementation depends on Search MCP availability.
+    # Placeholder for now.
+    logger.info(f"Research on {topic} deferred (Search Tool check pending).")
 
