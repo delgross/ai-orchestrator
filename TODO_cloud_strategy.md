@@ -1,0 +1,12 @@
+- [ ] **Cloud GPU Offloading Strategy** (`future`)
+    - **Goal**: Offload heavy RAG ingestion and complex reasoning tasks to cloud GPUs (e.g., Vast.ai, Modal, Replicate) to avoid local hardware strain and reduce costs.
+    - **Strategy**: 
+        - Use local Mac for lightweight orchestration, vector DB, and fast models.
+        - Use cloud instances for batch ingestion and large model inference.
+    - **Implementation Thoughts**:
+        - **Ingestion**: Spin up a cheap GPU instance (e.g., RTX 4090 on Vast.ai) to process document backlogs and generate embeddings, then export to SurrealDB.
+        - **Inference**: Configure the "Gateway Router" to route complex queries to serverless H100 endpoints (Modal/Replicate).
+    - **Robustness Requirements**: 
+        - Strict cost controls (auto-shutdown, spending caps).
+        - Secure data handling (especially for sensitive data on public marketplaces).
+        - Automated "nightly runs" for data quality improvement and review.

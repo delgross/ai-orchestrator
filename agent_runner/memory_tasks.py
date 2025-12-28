@@ -187,8 +187,9 @@ async def memory_audit_task(state: AgentState):
                 
                 client = await state.get_http_client()
                 url = f"{state.gateway_base}/v1/chat/completions"
+                # UPGRADE: Use Finalizer (High-End/H100) model for deep audit instead of weak summarizer
                 payload = {
-                    "model": state.summarization_model or "ollama:mistral:latest",
+                    "model": state.finalizer_model or "openai:gpt-4o",
                     "messages": [{"role": "user", "content": verification_prompt}],
                     "response_format": {"type": "json_object"}
                 }

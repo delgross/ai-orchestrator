@@ -145,7 +145,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 img_data = base64.b64encode(file_path.read_bytes()).decode('utf-8')
                 
                 vision_payload = {
-                    "model": "openai:gpt-4o", # Direct high-end vision call
+                    "model": state.vision_model, # Use configured vision model (Local or Cloud)
                     "messages": [
                         {"role": "user", "content": [
                             {"type": "text", "text": "Describe this image in extreme detail for a knowledge base. If it's a document/diagram/label, transcribe all text and describe relationships. Focus on technical accuracy."},
@@ -228,7 +228,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                             try:
                                 img_b64 = base64.b64encode(img.data).decode('utf-8')
                                 vision_payload = {
-                                    "model": "openai:gpt-4o",
+                                    "model": state.vision_model,
                                     "messages": [
                                         {"role": "user", "content": [
                                             {"type": "text", "text": f"Transcribe this scanned document page (Page {page_num}) verbatim. Describe any diagrams."},

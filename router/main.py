@@ -599,6 +599,13 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                 raise HTTPException(status_code=503, detail=f"Provider '{prefix}' is currently disabled via circuit breaker")
 
             state.provider_requests[prefix] = state.provider_requests.get(prefix, 0) + 1
+            
+            # BUDGET CHECK
+            from common.budget import get_budget_tracker
+            budget = get_budget_tracker()
+            if not budget.check_budget():
+                raise HTTPException(status_code=429, detail="Daily Budget Exceeded (Antigravity Cost Control)")
+
             url = join_url(prov.base_url, prov.chat_path)
             
             # Update body with the provider-specific model ID
@@ -609,7 +616,8 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                 # Passthrough with error tracking
                 async def stream_gen():
                     try:
-                        async with state.client.stream("POST", url, headers=provider_headers(prov), json=body) as r:
+                        # Increased timeout to 120s for serverless cold boots (H100s)
+                        async with state.client.stream("POST", url, headers=provider_headers(prov), json=body, timeout=120.0) as r:
                             if r.status_code >= 400:
                                 state.circuit_breakers.record_failure(prefix)
                             else:
@@ -617,6 +625,13 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                             
                             async for chunk in r.aiter_bytes():
                                 yield chunk
+                                # Try to sniff usage from chunk if possible? 
+                                # Hard with raw bytes pass-through. 
+                                # We'll estimate cost on input (pre-flight) for now to be safe?
+                                # No, let's just not block functionality. Budget check happens at start.
+                                
+                        # Post-flight recording is hard in passthrough. 
+                        # We will rely on Pre-Check mostly.
                     except Exception as e:
                         state.circuit_breakers.record_failure(prefix)
                         logger.error(f"Provider {prefix} call failed: {e}")
@@ -625,13 +640,26 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
             else:
                 # Regular non-streaming request
                 try:
-                    r = await state.client.post(url, headers=provider_headers(prov), json=body)
+                    # Increased timeout to 120s for serverless cold boots (H100s)
+                    r = await state.client.post(url, headers=provider_headers(prov), json=body, timeout=120.0)
                     if r.status_code >= 400:
                         state.circuit_breakers.record_failure(prefix)
                         raise HTTPException(status_code=r.status_code, detail=r.text)
                     
                     state.circuit_breakers.record_success(prefix)
-                    return JSONResponse(r.json())
+                    data = r.json()
+                    
+                    # BUDGET RECORDING
+                    try:
+                        usage = data.get("usage", {})
+                        in_tok = usage.get("prompt_tokens", 0)
+                        out_tok = usage.get("completion_tokens", 0)
+                        cost = budget.estimate_cost(body.get("model", ""), in_tok, out_tok)
+                        if cost > 0:
+                            budget.record_usage(prefix, cost)
+                    except: pass
+                    
+                    return JSONResponse(data)
                 except Exception as e:
                     state.circuit_breakers.record_failure(prefix)
                     logger.error(f"Provider {prefix} non-streaming call failed: {e}")

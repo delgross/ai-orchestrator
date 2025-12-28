@@ -589,16 +589,18 @@ async def graph_snapshot(limit: int = 1000):
                     "id": e.get("id"),
                     "label": e.get("name", "Unknown"),
                     "group": e.get("type", "Thing"),
-                    "val": 1 
+                    "val": 1,
+                    "timestamp": e.get("last_updated") # Critical for time-evolution
                 })
             
             links = []
             for r in relations:
                 links.append({
-                    "source": r.get("in"), # Surreal Relate uses 'in' for source
-                    "target": r.get("out"), # Surreal Relate uses 'out' for target
+                    "source": r.get("in"), 
+                    "target": r.get("out"),
                     "type": r.get("type", "relates"),
-                    "label": r.get("type", "relates")
+                    "label": r.get("type", "relates"),
+                    "timestamp": r.get("timestamp") # Critical for time-evolution
                 })
                 
             return {

@@ -408,13 +408,24 @@
                             );
                         });
 
-                    // Tune Physics to fix layout
-                    graphInstance.d3Force('charge').strength(-300);
-                    graphInstance.d3Force('link').distance(100);
+                    // HIERARCHICAL ORGANIZATION (DAG Mode)
+                    // This creates a rigid Top-Down tree structure instead of a floating cloud
+                    graphInstance
+                        .dagMode('td')        // Top-Down layout
+                        .dagLevelDistance(100)
+                        .d3Force('charge').strength(-500); // Spread out on the horizontal plane
+
+                    // Freeze quickly (stop moving)
+                    if (typeof graphInstance.d3AlphaDecay === 'function') {
+                        graphInstance.d3AlphaDecay(0.1);
+                    }
+
+                    // Re-heat to apply layout
+                    graphInstance.numDimensions(3);
 
                 } else {
                     graphInstance.graphData(data);
-                    graphInstance.numDimensions(3); // Re-heat simulation
+                    graphInstance.numDimensions(3);
                 }
 
                 window.graphLoaded = true;

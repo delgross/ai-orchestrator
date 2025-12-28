@@ -483,8 +483,10 @@ async def get_llm_roles():
             "router_model": state.router_model,
             "summarization_model": state.summarization_model,
             "finalizer_model": state.finalizer_model,
+            "finalizer_model": state.finalizer_model,
             "fallback_model": state.fallback_model,
-            "embedding_model": state.embedding_model
+            "embedding_model": state.embedding_model,
+            "vision_model": state.vision_model
         },
         "flags": {
             "finalizer_enabled": state.finalizer_enabled
@@ -505,6 +507,7 @@ async def update_llm_roles(request: Request):
     if "summarization_model" in updates: state.summarization_model = updates["summarization_model"]
     if "finalizer_model" in updates: state.finalizer_model = updates["finalizer_model"]
     if "fallback_model" in updates: state.fallback_model = updates["fallback_model"]
+    if "vision_model" in updates: state.vision_model = updates["vision_model"]
     
     if "embedding_model" in updates:
         state.embedding_model = updates["embedding_model"]
@@ -529,7 +532,8 @@ async def update_llm_roles(request: Request):
         "summarization_model": state.summarization_model,
         "finalizer_model": state.finalizer_model,
         "fallback_model": state.fallback_model,
-        "embedding_model": state.embedding_model
+        "embedding_model": state.embedding_model,
+        "vision_model": state.vision_model
     }}
 
 @app.get("/admin/docs/list")

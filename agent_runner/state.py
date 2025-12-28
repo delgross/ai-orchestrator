@@ -23,6 +23,7 @@ class AgentState:
         self.gateway_base = os.getenv("GATEWAY_BASE", "http://127.0.0.1:5455").rstrip("/")
         self.agent_model = os.getenv("AGENT_MODEL", "openai:gpt-4o-mini")
         self.task_model = os.getenv("TASK_MODEL", "ollama:mistral:latest")
+        self.vision_model = os.getenv("VISION_MODEL", "openai:gpt-4o") # Default to high-quality vision, can be overridden
         self.mcp_model = os.getenv("MCP_MODEL", "openai:gpt-4o-mini") # Missing generic tool model
         self.router_model = os.getenv("ROUTER_MODEL", "ollama:mistral:latest")
         self.finalizer_model = os.getenv("FINALIZER_MODEL", "openai:gpt-5.2") # User requested High-End model
@@ -56,6 +57,7 @@ class AgentState:
                     self.agent_model = cfg.get("agent_model", self.agent_model)
                     self.summarization_model = cfg.get("summarization_model", self.summarization_model)
                     self.task_model = cfg.get("task_model", self.task_model)
+                    self.vision_model = cfg.get("vision_model", self.vision_model)
                     self.router_model = cfg.get("router_model", self.router_model)
             except Exception as e:
                 print(f"Failed to load system_config.json: {e}")
