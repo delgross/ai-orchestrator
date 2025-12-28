@@ -1,0 +1,35 @@
+
+# Antigravity Provider Configuration
+# Rename this to 'providers.yaml' to activate.
+
+providers:
+  # 1. OpenAI (Standard Reliability)
+  openai:
+    type: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+    default_headers:
+      "Antigravity-Source": "Standard"
+
+  # 2. Replicate (Hypercompute / H100) via OpenAI-Compatible Wrapper
+  # Many providers (DeepInfra, OpenRouter, Fireworks) use this standard format.
+  hypercompute:
+    type: openai-compat
+    base_url: https://api.deepinfra.com/v1/openai  # Example: Change to your H100 provider
+    api_key_env: HYPERCOMPUTE_KEY
+    models:
+      - meta-llama/Meta-Llama-3.1-405B-Instruct
+      - meta-llama/Meta-Llama-3.1-70B-Instruct
+      - meta-llama/Llama-3.2-90B-Vision-Instruct  # Excellent for the Auto-Tagger
+    default_headers:
+       # Some providers need extra headers
+       "X-Title": "Antigravity-Night-Shift"
+
+  # 3. Local Fallback (Ollama) is handled automatically by the Router logic,
+  # but you can define it here if you run it on a separate machine.
+  # ollama_remote:
+  #   type: openai-compat
+  #   base_url: http://192.168.1.50:11434/v1
