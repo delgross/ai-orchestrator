@@ -541,6 +541,7 @@ async def graph_snapshot(limit: int = 1000):
     await rag_backend.ensure_db()
     
     sql = f"""
+    USE NS {SURREAL_NS} DB {SURREAL_DB};
     SELECT * FROM entity LIMIT {limit};
     SELECT * FROM relates LIMIT {limit};
     """
@@ -549,7 +550,6 @@ async def graph_snapshot(limit: int = 1000):
         r = await rag_backend.client.post(rag_backend.sql_url, content=sql, auth=rag_backend.auth, headers=rag_backend.headers)
         if r.status_code == 200:
             res = r.json()
-            logger.info(f"RAW DB RESP: {json.dumps(res)}")
             
             # Helper safely get list
             def get_res(idx):
@@ -558,29 +558,23 @@ async def graph_snapshot(limit: int = 1000):
                     return val if val is not None else []
                 return []
             
-            entities = get_res(0)
-            relations = get_res(1)
+            # Index 0 is USE result
+            entities = get_res(1)
+            relations = get_res(2)
             
             logger.info(f"GRAPH_SNAPSHOT: Fetched {len(entities)} entities and {len(relations)} relations.")
             
             # Format for Force Graph
             nodes = []
-            if entities:
-                logger.info(f"SAMPLE ENTITY ({type(entities[0])}): {entities[0]}")
-
             for e in entities:
-                if isinstance(e, str):
-                    # Fallback for ID-only return
-                    nodes.append({"id": e, "label": e, "group": "Unknown", "val": 1})
-                    continue
-                
+                if not isinstance(e, dict): continue
                 nodes.append({
                     "id": e.get("id"),
                     "label": e.get("name", "Unknown"),
                     "group": e.get("type", "Thing"),
-                    "val": 1 # size
+                    "val": 1 
                 })
-                
+            
             links = []
             for r in relations:
                 links.append({
