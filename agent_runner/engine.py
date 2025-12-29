@@ -872,10 +872,11 @@ class AgentEngine:
             async with httpx.AsyncClient() as client:
                 payload = {
                     "model": self.state.agent_model, # e.g. gpt-4o-mini
-                    "messages": [{"role": "system", "content": prompt}],
+                    "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "response_format": {"type": "json_object"}
                 }
+                r = await client.post(self.state.gateway_url, json=payload, timeout=25.0)
                 if r.status_code == 200:
                     data = r.json()
                     content = data["choices"][0]["message"]["content"]
