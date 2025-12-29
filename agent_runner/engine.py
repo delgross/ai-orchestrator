@@ -842,13 +842,7 @@ class AgentEngine:
         )
 
         try:
-            # fast call
-            resp = await self.fast_llm_call(prompt) # Assuming helper exists or using client directly
-            # Wait, I don't have a clean helper for fast LLM call in this class context easily visible?
-            # I should use the standard client I use elsewhere.
-            # Let's check how 'call_gateway_with_tools' is used or 'client.post'
-            # I will implement a quick call here.
-            
+            # Helper for explicit fast call
             async with httpx.AsyncClient() as client:
                 payload = {
                     "model": self.state.agent_model, # e.g. gpt-4o-mini
