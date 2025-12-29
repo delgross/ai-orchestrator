@@ -353,6 +353,10 @@ async def metrics():
 @app.get("/admin/system-status")
 async def system_status():
     # Mocking hardware data for dashboard KPI
+    ollama_ok = False
+    if hasattr(state, "mcp_circuit_breaker"):
+        ollama_ok = state.mcp_circuit_breaker.is_allowed("ollama")
+    
     return {
         "ok": True,
         "mode": state.system_mode,
@@ -360,6 +364,7 @@ async def system_status():
         "hardware_verified": state.hardware_verified,
         "cpu_usage": "Low", # Simplified
         "memory_info": "Optimal",
+        "ollama_ok": ollama_ok,
         "limits": {
             "max_read": state.max_read_bytes,
             "max_list": state.max_list_entries
