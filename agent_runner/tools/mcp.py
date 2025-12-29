@@ -61,14 +61,14 @@ async def tool_mcp_proxy(state: AgentState, server: str, tool: str, arguments: D
             res = await call_http_mcp(state, server, cfg["url"], rpc_body, {})
         elif scheme == MCP_SCHEME_SSE:
             res = await call_sse_mcp(state, server, cfg["url"], rpc_body, {})
-        elif scheme == MCP_SCHEME_STDIO:
+        if scheme == MCP_SCHEME_STDIO:
             proc = await get_or_create_stdio_process(state, server, cfg["cmd"], cfg.get("env", {}))
             if not proc: 
-                state.mcp_circuit_breaker.record_failure(server, weight=3)
+                state.mcp_circuit_breaker.record_failure(server, weight=3, error="Failed to start stdio process")
                 return {"ok": False, "error": "Failed to start stdio process"}
             
             if not await initialize_stdio_process(state, server, proc):
-                state.mcp_circuit_breaker.record_failure(server, weight=2)
+                state.mcp_circuit_breaker.record_failure(server, weight=2, error="Failed to initialize stdio process")
                 return {"ok": False, "error": "Failed to initialize stdio process"}
             
             # Stdio communication logic
@@ -115,11 +115,11 @@ async def tool_mcp_proxy(state: AgentState, server: str, tool: str, arguments: D
             is_logic_error = any(kw in error_msg.lower() for kw in ["not found", "invalid", "validation"])
             
             if not is_logic_error:
-                state.mcp_circuit_breaker.record_failure(server)
+                state.mcp_circuit_breaker.record_failure(server, error=error_msg)
             
             return res
 
     except Exception as e:
         logger.error(f"Execution error in tool_mcp_proxy for {server}::{tool}: {e}")
-        state.mcp_circuit_breaker.record_failure(server, weight=2)
+        state.mcp_circuit_breaker.record_failure(server, weight=2, error=e)
         return {"ok": False, "error": f"Transport error: {str(e)}"}

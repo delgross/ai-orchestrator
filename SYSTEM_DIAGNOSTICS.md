@@ -51,3 +51,19 @@ This document logs identified problems and test failures discovered during the s
 - **Ingestion**: Currently 3 files in `deferred` (m4a, pdf, txt). Night shift synchronized (1 AM - 6 AM).
 - **Tasks**: Duplicate registrations for research/briefing tasks removed from `main.py`.
 - **Economic Safety**: OCR/Vision tasks now use `gpt-4o-mini` by default.
+
+### 9. MCP Infrastructure (OPERATIONAL)
+- **Multi-Server Ingestion**: [x] VERIFIED (Supports multiple JSON manifests + entries in `config.yaml`).
+- **Duplicate Detection**: [x] FIXED (Explicit logging added in `config.py` for overwritten server definitions).
+- **Live Reload (Tool Sync)**: [x] FIXED (Reload endpoint in `main.py` now correctly awaits async loader and re-triggers tool discovery).
+- **Collision Protection**: [x] VERIFIED (Server-specific prefixing `mcp__{server}__{tool}` prevents tool name collisions during execution).
+
+### 10. Economic Guard-rails (ENFORCED)
+- **Vision Cost Safety**: [x] FIXED (Paid remote fallbacks for vision analysis removed from automated ingestion).
+- **Persistent Deferral**: [x] FIXED (Failed night shift tasks now return to `/deferred` instead of `/review`, ensuring they wait for the next free window).
+- **Modal Offloading**: [x] VERIFIED (Automated tasks exclusively use Modal or Local fallbacks; paid LLMs reserved for high-value reasoning).
+### 11. Plumbing & Interconnects (CLEAR)
+- **Network Pipes**: [x] VERIFIED (Router ↔ Agent ↔ RAG ↔ DB all reporting 200 OK/Healthy).
+- **Leak Detection**: [x] VERIFIED (Log sizes stable, no zombie processes, handle counts normal).
+- **Blockage Scan**: [x] VERIFIED (Ingestion queues flowing; deferral logic active for 1 AM shift).
+- **Heartbeat Status**: [x] PASS (Background tasks showing continuous successful cycles for consolidation and monitoring).

@@ -31,6 +31,8 @@ class CircuitBreaker:
         self.state = CircuitState.CLOSED
         self.failures = 0
         self.last_failure_time = 0.0
+        self.last_error = None
+        self.last_error_time = 0.0
         self.disabled_until = 0.0
         self.half_open_tests = 0
         self.total_failures = 0
@@ -77,7 +79,7 @@ class CircuitBreaker:
             if self.failures > 0:
                 self.failures = 0
 
-    def record_failure(self, weight: int = 1):
+    def record_failure(self, weight: int = 1, error: Any = None):
         """
         Record a failed request.
         Weight can be > 1 for critical failures (e.g. process crash).
@@ -86,21 +88,50 @@ class CircuitBreaker:
         self.failures += weight
         self.last_failure_time = time.time()
         
+        if error:
+            self.last_error = str(error)
+            self.last_error_time = time.time()
+        
         if self.state == CircuitState.HALF_OPEN:
             # Failed during recovery test - move back to open with longer timeout
-            logger.warning(f"Circuit Breaker '{self.name}': Recovery test failed, returning to OPEN")
+            logger.warning(f"Circuit Breaker '{self.name}': Recovery test failed, returning to OPEN. Error: {self.last_error}")
             self.state = CircuitState.OPEN
             self.disabled_until = time.time() + (self.recovery_timeout * 2) # Backoff
             self.half_open_tests = 0
             
+            # Track the failed recovery attempt
+            from common.unified_tracking import track_event, EventSeverity, EventCategory
+            track_event(
+                event="circuit_breaker_recovery_failed",
+                severity=EventSeverity.HIGH,
+                category=EventCategory.HEALTH,
+                message=f"Service '{self.name}' failed recovery check.",
+                metadata={
+                    "circuit": self.name, 
+                    "error": self.last_error,
+                    "next_retry_seconds": self.recovery_timeout * 2
+                }
+            )
+            
         elif self.state == CircuitState.CLOSED:
             if self.failures >= self.threshold:
-                logger.error(f"Circuit Breaker '{self.name}': Threshold {self.threshold} reached, transitioning to OPEN")
-                notify_health(
-                    f"Service Suspended: {self.name}",
-                    f"Circuit breaker '{self.name}' tripped after {self.threshold} failures. Service temporarily disabled.",
-                    source="CircuitBreaker"
+                logger.error(f"Circuit Breaker '{self.name}': Threshold {self.threshold} reached, transitioning to OPEN. Last Error: {self.last_error}")
+                
+                # Use Unified Tracker for the alert
+                from common.unified_tracking import track_event, EventSeverity, EventCategory
+                track_event(
+                    event="circuit_breaker_tripped",
+                    severity=EventSeverity.CRITICAL,  # Critical because a service is now down
+                    category=EventCategory.HEALTH,
+                    message=f"Service Suspended: {self.name}",
+                    metadata={
+                        "circuit": self.name,
+                        "threshold": self.threshold,
+                        "failures": self.failures,
+                        "last_error": self.last_error
+                    }
                 )
+                
                 self.state = CircuitState.OPEN
                 self.disabled_until = time.time() + self.recovery_timeout
 
@@ -124,6 +155,8 @@ class CircuitBreaker:
             "state": self.state.value,
             "failures": self.failures,
             "last_failure_time": self.last_failure_time,
+            "last_error": self.last_error,
+            "last_error_time": self.last_error_time,
             "disabled_until": self.disabled_until,
             "total_failures": self.total_failures,
             "total_successes": self.total_successes,
@@ -149,8 +182,8 @@ class CircuitBreakerRegistry:
     def record_success(self, name: str):
         self.get_breaker(name).record_success()
 
-    def record_failure(self, name: str, weight: int = 1):
-        self.get_breaker(name).record_failure(weight)
+    def record_failure(self, name: str, weight: int = 1, error: Any = None):
+        self.get_breaker(name).record_failure(weight, error)
 
     def is_allowed(self, name: str) -> bool:
         return self.get_breaker(name).is_allowed()

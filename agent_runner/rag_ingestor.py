@@ -185,32 +185,14 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                         raise ImportError("Modal not configured")
                         
                 except Exception as cloud_err:
-                    if "Modal not configured" not in str(cloud_err):
-                        logger.warning(f"Modal Image Cloud processing failed: {cloud_err}. Falling back to local/Router.")
-                    
-                    # FALLBACK: Router API
-                    import base64
-                    img_data = base64.b64encode(file_path.read_bytes()).decode('utf-8')
-                    vision_payload = {
-                        "model": state.vision_model, 
-                        "messages": [
-                            {"role": "user", "content": [
-                                {"type": "text", "text": "Describe this image in extreme detail for a knowledge base. If it's a document/diagram/label, transcribe all text and describe relationships. Focus on technical accuracy."},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_data}"}}
-                            ]}
-                        ]
-                    }
-                    try:
-                        v_url = f"{state.gateway_base}/v1/chat/completions"
-                        v_res = await http_client.post(v_url, json=vision_payload, timeout=60.0)
-                        v_res.raise_for_status()
-                        content = v_res.json()["choices"][0]["message"]["content"]
-                        logger.info(f"MULTIMODAL SUCCESS (Router): Transcribed {len(content)} chars")
-                    except Exception as e:
-                        logger.error(f"Vision analysis failed for {file_path.name}: {e}")
-                        notify_error(f"Ingestion Error: {file_path.name}", f"Image analysis failed: {e}. Moved to review folder.")
-                        file_path.rename(REVIEW_DIR / file_path.name)
-                        continue
+                    logger.error(f"Image analysis failed: {cloud_err}")
+                    # Re-defer for next night shift instead of expensive fallback
+                    if is_night or force_run:
+                        logger.info(f"ECONOMY GUARD: Deferring image {file_path.name} for next available window.")
+                        if file_path.parent != DEFERRED_DIR:
+                             try: file_path.rename(DEFERRED_DIR / file_path.name)
+                             except: pass
+                    continue
             elif ext in ('.mp3', '.m4a', '.mp4'):
                 # AUDIO TRANSCRIPTION (Whisper via Router)
                 logger.info(f"AUDIO: Transcribing {file_path.name}...")
@@ -235,10 +217,12 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                             
                 except Exception as e:
                     logger.error(f"Audio transcription failed for {file_path.name}: {e}")
-                    # If this was a deferred file, maybe leave it? Or move to review?
-                    # Let's move to review to avoid infinite loop of failures
-                    notify_error(f"Ingestion Error: {file_path.name}", f"Transcription failed: {e}. Moved to review.")
-                    file_path.rename(REVIEW_DIR / file_path.name)
+                    # Defer for next night shift
+                    if is_night or force_run:
+                        logger.info(f"ECONOMY GUARD: Deferring audio {file_path.name} for next available window.")
+                        if file_path.parent != DEFERRED_DIR:
+                            try: file_path.rename(DEFERRED_DIR / file_path.name)
+                            except: pass
                     continue
             elif ext == '.pdf':
                 try:
@@ -525,11 +509,18 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
 
         except Exception as e:
             logger.error(f"Error ingesting {file_path.name}: {e}")
-            notify_error("Ingestion Failure", f"Failed to ingest {file_path.name}: {e}", source="RAG Ingestor")
-            # If catastrophic failure, move to review so we don't loop forever
-            try:
-                file_path.rename(REVIEW_DIR / file_path.name)
-            except: pass
+            # ECONOMY GUARD: If it's a heavy file or night shift, defer instead of review
+            if is_night or force_run:
+                logger.warning(f"INGESTION DELAYED: {file_path.name} moved back to deferred for next retry.")
+                try: 
+                    if file_path.parent != DEFERRED_DIR:
+                        file_path.rename(DEFERRED_DIR / file_path.name)
+                except: pass
+            else:
+                notify_error("Ingestion Failure", f"Failed to ingest {file_path.name}: {e}. Moved to review.", source="RAG Ingestor")
+                try:
+                    file_path.rename(REVIEW_DIR / file_path.name)
+                except: pass
 
     if len(batch_files) > 1:
         notify_info("Knowledge Ingestion Complete", f"Successfully filed {len(batch_files)} new entries into the library.", source="RAG Ingestor")
