@@ -360,11 +360,12 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     # CLOUD OFFLOAD STRATEGY: Use Modal H100/CPU if available
                     from agent_runner.modal_tasks import cloud_process_pdf, has_modal
                     
-                    # Policy: Heavy PDF processing (Modal) is reserved for Night Shift or Turbo Mode
-                    use_cloud = (is_night or force_run) and has_modal
+                    # Policy: Use Modal for everything if available. 
+                    # Heavy files are deferred by earlier logic, so this handles Small Files (Day) + All Files (Night)
+                    use_cloud = has_modal
 
                     if use_cloud:
-                        logger.info(f"CLOUD GPU: Offloading PDF {file_path.name} to Modal (Night/Force Rule)...")
+                        logger.info(f"CLOUD GPU: Offloading PDF {file_path.name} to Modal...")
                         # Run remote function
                         try:
                             content = cloud_process_pdf.remote(file_path.read_bytes(), file_path.name)
