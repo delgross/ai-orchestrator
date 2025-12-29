@@ -554,6 +554,14 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                         yield "data: [DONE]\n\n"
                         return
 
+                    if r.status_code >= 500:
+                        err_msg = "Agent Runner Unavailable (Warming Up / Building)"
+                        logger.warning(f"Agent stream failed: {r.status_code}")
+                        error_obj = {"error": {"message": err_msg, "type": "service_unavailable", "code": 503}}
+                        yield f"data: {json.dumps(error_obj)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
+
                     data = r.json()
                     content = data["choices"][0]["message"]["content"] or ""
                     usage = data.get("usage")

@@ -61,9 +61,25 @@ async def call_ollama_chat(
     num_ctx: Optional[int] = None
 ) -> Dict[str, Any]:
     url = join_url(OLLAMA_BASE, "/api/chat")
+    
+    # helper to flatten content
+    def flatten_content(c: Any) -> str:
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            # Join text parts, ignore images for Ollama (unless using llava, but for now we assume text-only fallback)
+            parts = []
+            for item in c:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "\n".join(parts)
+        return str(c)
+
     ollama_body = {
         "model": model_id,
-        "messages": [{"role": m.get("role"), "content": m.get("content", "")} for m in messages],
+        "messages": [{"role": m.get("role"), "content": flatten_content(m.get("content", ""))} for m in messages],
         "stream": False,
     }
     

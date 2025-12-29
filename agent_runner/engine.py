@@ -191,6 +191,18 @@ class AgentEngine:
     async def call_gateway_with_tools(self, messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         target_model = model or self.state.agent_model
         
+        # Economy Mode Optimization:
+        # If economic_mode is ON and we are calling a "Premium" cloud model for a simple task,
+        # we try to divert to the "High End Local" model first.
+        is_premium = target_model.startswith(("openai:gpt-4o", "openai:gpt-4", "anthropic:", "claude-"))
+        if self.state.economic_mode and is_premium:
+             # Heuristic: Simple if message count is low and no recent images
+             is_simple = len(messages) < 10
+             if is_simple:
+                 economic_fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+                 logger.info(f"ECONOMY MODE: Diverting simple request from '{target_model}' to local '{economic_fallback}'")
+                 target_model = economic_fallback
+
         # Universal Offline Fallback Logic
         if not self.state.internet_available:
             # Check if target model is remote. 

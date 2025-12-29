@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent_runner.state import AgentState
 from agent_runner.engine import AgentEngine
 from agent_runner.config import load_mcp_servers, load_agent_runner_limits
-from agent_runner.tasks import internet_check_task, stdio_process_health_monitor
+from agent_runner.tasks import internet_check_task, stdio_process_health_monitor, modal_heartbeat_task
 from agent_runner.background_tasks import get_task_manager, TaskPriority
 from agent_runner.health_monitor import initialize_health_monitor, health_check_task
 from agent_runner.memory_tasks import memory_consolidation_task, optimize_memory_task, memory_audit_task
@@ -126,6 +126,14 @@ async def on_startup():
     )
     
     task_manager.register(
+        name="modal_heartbeat",
+        func=lambda: modal_heartbeat_task(state),
+        interval=300, # Check every 5 mins
+        description="Monitor Cloud GPU status",
+        priority=TaskPriority.MEDIUM
+    )
+    
+    task_manager.register(
         name="memory_consolidation",
         func=lambda: memory_consolidation_task(state),
         interval=300, # Run every 5 minutes
@@ -184,9 +192,18 @@ async def on_startup():
     )
 
     task_manager.register(
+        name="nightly_gardener",
+        func=lambda: memory_audit_task(state), # Using audit task as gardener base
+        schedule="01:00",
+        description="Critical 1 AM database cleanup and fact audit",
+        priority=TaskPriority.MEDIUM,
+        idle_only=True
+    )
+
+    task_manager.register(
         name="graph_optimizer",
         func=lambda: graph_optimization_task(state),
-        interval=43200, # Nightly
+        schedule="01:00", # Nightly
         priority=TaskPriority.LOW,
         idle_only=True
     )
@@ -194,7 +211,7 @@ async def on_startup():
     task_manager.register(
         name="morning_briefing",
         func=lambda: morning_briefing_task(state),
-        interval=86400, # Daily 
+        schedule="06:00", # Daily 
         description="Daily system status report",
         priority=TaskPriority.LOW,
         idle_only=True
@@ -203,7 +220,7 @@ async def on_startup():
     task_manager.register(
         name="daily_research",
         func=lambda: daily_research_task(state),
-        interval=43200, 
+        schedule="01:15", 
         description="Autonomous topic research",
         priority=TaskPriority.LOW,
         idle_only=True
