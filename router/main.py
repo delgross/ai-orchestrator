@@ -600,8 +600,15 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
             return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
         else:
             # Standard JSON proxy
-            r = await state.client.post(url, json=body, timeout=300.0)
-            return JSONResponse(r.json(), status_code=r.status_code)
+            try:
+                r = await state.client.post(url, json=body, timeout=300.0)
+                if r.status_code >= 500:
+                   logger.warning(f"Agent Runner returned {r.status_code}. Returning 503 to client.")
+                   return JSONResponse({"error": {"message": "Agent Runner Unavailable (Warming Up / Building)", "type": "service_unavailable", "code": 503}}, status_code=503)
+                return JSONResponse(r.json(), status_code=r.status_code)
+            except Exception as e:
+                logger.error(f"Agent request failed (non-streaming): {e}")
+                raise HTTPException(status_code=502, detail=f"Agent Runner Unavailable: {str(e)}")
     
     elif prefix == PREFIX_OLLAMA:
         res = await call_ollama_chat(model_id, body["messages"], request_id)

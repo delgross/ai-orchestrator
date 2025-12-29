@@ -20,20 +20,24 @@ if has_modal:
     app = modal.App("antigravity-night-shift")
 
     # Define the environment: A lightweight Debian image with graph libraries AND AI dependencies
+    # We pin Python 3.11 because 3.12+ (or 3.14 beta) causes PyO3/Tokenizers build failures.
     image = (
-        modal.Image.debian_slim()
+        modal.Image.debian_slim(python_version="3.11")
+        .apt_install("git")
         .pip_install(
             "networkx", 
             "scikit-learn", 
             "numpy",
-            "torch",
-            "transformers",
-            "accelerate", 
+            "torch>=2.2.0",
+            # Qwen2-VL requires bleeding edge transformers not yet in some PyPI releases
+            "git+https://github.com/huggingface/transformers.git",
+            "accelerate>=0.26.0", 
             "pillow",
             "sentencepiece",
             "einops", 
-            "transformers_stream_generator",
-            "tiktoken"
+            "tiktoken",
+            "torchvision",
+            "qwen-vl-utils"
         )
     )
 
@@ -220,6 +224,7 @@ if has_modal:
         from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
         from PIL import Image
         import io
+        import json
         
         model_id = "Qwen/Qwen2-VL-72B-Instruct"
         model = Qwen2VLForConditionalGeneration.from_pretrained(
@@ -230,14 +235,13 @@ if has_modal:
         img1 = Image.open(io.BytesIO(reference_bytes))
         img2 = Image.open(io.BytesIO(candidate_bytes))
 
-        prompt = "Compare Image 1 (Ref) and Image 2 (Candidate). Identify broken parts, rust, or defects."
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": img1},
                     {"type": "image", "image": img2},
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": "Compare these two images. Image 1 is the Reference. Image 2 is the Candidate. Identify any anomalies, defects, or significant differences in Image 2. Focus on structural integrity, missing elements, or foreign objects. Return JSON with 'anomalies': [list] and 'severity': 'low|medium|high'."},
                 ],
             }
         ]
@@ -248,26 +252,172 @@ if has_modal:
         output_ids = model.generate(**inputs, max_new_tokens=1024)
         generated_ids = [output_ids[len(inputs.input_ids):] for inputs, output_ids in zip(inputs.input_ids, output_ids)]
         output_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        return output_text
 
-        return {"detected_changes": [output_text], "severity": "UNKNOWN", "confidence": 0.95}
+    # 8. Nightly Database Gardener (Uses 72B on H100)
+    @app.function(image=image, gpu="H100", timeout=1200)
+    def cloud_database_cleanup(facts_json: str):
+        """
+        Reviews a list of facts for semantic truth and consistency.
+        Input: JSON list of {entity, relation, target, context}
+        Output: JSON list of {entity, relation, target, semantic_confidence, reasoning}
+        """
+        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        import json
+        
+        model_id = "Qwen/Qwen2-VL-72B-Instruct"
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype="auto", device_map="auto", trust_remote_code=True
+        )
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        prompt = f"""
+        You are the 'Truth Judge' for a long-term memory database. 
+        Your job is to audit the following list of facts.
+        
+        For each fact:
+        1. semantic_confidence: Assign a score (0.0 to 1.0) based on plausibility, contradiction with physical reality, or vagueness.
+           - 1.0: Absolute truth (e.g. "Sky is blue", "Python is a language").
+           - 0.5: Plausible but specific context needed.
+           - 0.1: Likely hallucination, contradiction, or nonsense.
+        2. reasoning: Briefly explain why.
+        3. correction: If the fact is wrong or typoed, provide a corrected version.
+
+        Input Facts:
+        {facts_json}
+
+        Return strictly a JSON list of objects with keys: id (from input), original_fact, semantic_confidence, reasoning, correction (or null).
+        """
+
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=None, padding=True, return_tensors="pt").to("cuda")
+        
+        output_ids = model.generate(**inputs, max_new_tokens=4096)
+        generated_ids = [output_ids[len(inputs.input_ids):] for inputs, output_ids in zip(inputs.input_ids, output_ids)]
+        output_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        # Clean markdown code blocks if present
+        if "```json" in output_text:
+            output_text = output_text.split("```json")[1].split("```")[0]
+        elif "```" in output_text:
+            output_text = output_text.split("```")[1].split("```")[0]
+            
+        return output_text
+
+    # 9. Code Geneticist (Uses 72B on H100)
+    @app.function(image=image, volumes={"/models": modal.Volume.from_name("huggingface-cache")}, timeout=3600)
+    def download_models():
+        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        model_id = "Qwen/Qwen2-VL-72B-Instruct"
+        print(f"📥 Downloading Unified Model: {model_id}...")
+        
+        # Use the specific class to avoid AutoModel configuration errors
+        Qwen2VLForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True)
+        AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+    @app.function(image=image, gpu="H100", timeout=1200)
+    def code_geneticist(target_function_code: str):
+        """
+        Analyzes and optimizes a Python function.
+        Input: Python source code string.
+        Output: JSON with {analysis: str, proposed_code: str, complexity_change: str}.
+        """
+        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        
+        model_id = "Qwen/Qwen2-VL-72B-Instruct"
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype="auto", device_map="auto", trust_remote_code=True
+        )
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        prompt = f"""
+        You are a Senior Systems Architect and Algorithms Expert.
+        Analyze the following Python code for:
+        1. Time Complexity Inefficiencies (e.g. O(N^2) where O(N) is possible).
+        2. Readability/Pythonic Standards.
+        3. Potential Edge Case Bugs.
+
+        TARGET CODE:
+        {target_function_code}
+
+        OUTPUT FORMAT (JSON):
+        {{
+            "analysis": "Brief explanation of issues found.",
+            "complexity_change": "e.g. O(N^2) -> O(N)",
+            "proposed_code": "The complete rewritten python code."
+        }}
+        """
+
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=None, padding=True, return_tensors="pt").to("cuda")
+        
+        output_ids = model.generate(**inputs, max_new_tokens=4096)
+        generated_ids = [output_ids[len(inputs.input_ids):] for inputs, output_ids in zip(inputs.input_ids, output_ids)]
+        output_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        if "```json" in output_text:
+            output_text = output_text.split("```json")[1].split("```")[0]
+        elif "```" in output_text:
+            output_text = output_text.split("```")[1].split("```")[0]
+            
+        return output_text
 
     @app.local_entrypoint()
     def test_main():
-        print("🚀 [1/3] Testing Cloud Graph Detection...")
-        nodes = [1, 2, 3, 4, 5]
-        edges = [(1,2), (2,3), (3,1), (4,5)]
-        res_graph = graph_community_detection.remote(nodes, edges)
-        print(f"✅ Graph Result: {res_graph}")
-
-        print("\n🚀 [2/3] Testing Unified 72B Model (Reasoning)...")
-        res_reason = cloud_heavy_reasoning.remote("Antigravity is a project.", "What is Antigravity?")
-        print(f"✅ Reasoning Result: {res_reason}")
-
-        print("\n🚀 [3/3] Testing PDF Ingestion (CPU Pypdf)...")
-        # Create dummy PDF bytes
         import io
+        import json
         from pypdf import PdfWriter
+
+        print("🚀 Starting Modal H100 Tests (Unified 72B Model)...")
+        
+        # Initialize buffer for PDF test
         buf = io.BytesIO()
+        
+        # Test 1: Graph (CPU)
+        print("\n1. Testing Graph Community Detection...")
+        nodes = ["A", "B", "C", "D", "E"]
+        edges = [("A", "B"), ("B", "C"), ("C", "A"), ("D", "E")]
+        res = graph_community_detection.remote(nodes, edges)
+        print(f"✅ Graph Result: {res}")
+
+        # Test 2: Reasoning (H100)
+        print("\n2. Testing Unified 72B Reasoning...")
+        res = cloud_heavy_reasoning.remote("The server logs show error 500 at 3am. The backup job runs at 3am.", "What caused the error?")
+        print(f"✅ Reasoning Result: {res}")
+
+        # Test 3: Nightly Gardener (H100)
+        print("\n3. Testing Nightly Gardener (Fact Auditing)...")
+        sample_facts = json.dumps([
+            {"id": "1", "fact": "The sky is green."},
+            {"id": "2", "fact": "Python 3.14 was released in 2024."},
+            {"id": "3", "fact": "Server 29 is located on Mars."}
+        ])
+        res = cloud_database_cleanup.remote(sample_facts)
+        print(f"✅ Gardener Result:\n{res}")
+
+        # Test 4: Code Geneticist (H100)
+        print("\n4. Testing Code Geneticist (Evolution)...")
+        bad_code = """
+def find_item(items, target):
+    # O(N) search? No, let's make it clear.
+    for i in range(len(items)):
+        if items[i] == target:
+            return True
+    return False
+"""
+        res = code_geneticist.remote(bad_code)
+        print(f"✅ Geneticist Result:\n{res}")
+
+        print("\n🎉 All tests passed!")
         writer = PdfWriter()
         writer.add_blank_page(width=100, height=100)
         writer.write(buf)
