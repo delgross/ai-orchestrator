@@ -83,7 +83,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             # Quick check for large PDFs (proxy for page count without opening)
             is_heavy = True
             
-        if is_heavy and not is_night_shift:
+        if is_heavy and not (is_night or force_run):
             logger.info(f"NIGHT SHIFT: Deferring heavy file {f.name} ({size_mb:.1f}MB) to off-hours.")
             try:
                 f.rename(DEFERRED_DIR / f.name)
@@ -93,7 +93,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             batch_files.append(f)
 
     # 2. If Night Shift, also pull from Deferred
-    if is_night_shift:
+    if (is_night or force_run):
         deferred_files = [p for p in DEFERRED_DIR.glob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
         if deferred_files:
             logger.info(f"NIGHT SHIFT: Processing {len(deferred_files)} deferred items.")
