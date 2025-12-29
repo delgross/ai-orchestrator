@@ -409,5 +409,19 @@ async def restart_agent_runner():
     # 2. Wait
     await asyncio.sleep(2.0)
     
-    # 3. Start
     return await start_agent_runner()
+
+@router.get("/budget")
+async def get_budget():
+    """Return current budget status."""
+    from common.budget import get_budget_tracker
+    b = get_budget_tracker()
+    # Force reload to get latest file changes
+    b._load()
+    return {
+        "ok": True,
+        "current_spend": b.current_spend,
+        "daily_limit_usd": b.daily_limit_usd,
+        "last_reset": b.last_reset,
+        "percent_used": (b.current_spend / max(0.01, b.daily_limit_usd)) * 100
+    }
