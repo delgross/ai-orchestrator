@@ -764,6 +764,7 @@ class ObservabilitySystem:
                     "severity": a.severity.value,
                     "timestamp": a.timestamp,
                     "metadata": a.metadata,
+                    "message": f"Anomaly detected in {a.metric_name}: Current {a.current_value:.2f} (Baseline {a.baseline_value:.2f}, Deviation {a.deviation:.1f}σ)",
                 }
                 for a in anomalies
             ],
