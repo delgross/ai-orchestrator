@@ -2382,7 +2382,8 @@
           fetchJson(agentBase + "/", headers),
           new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000))
         ]).catch(() => ({ ok: false }));
-        const agentModels = agentRes?.models || {};
+        // The root endpoint now returns the model config directly
+        const agentModels = agentRes || {};
 
         // Models are now included in the root endpoint response
         // Fallback values for backward compatibility
@@ -2593,18 +2594,18 @@
         return;
       }
 
-      // Map service IDs to API endpoints (agent-runner endpoints)
-      const endpointMap = {
-        "agent": "/admin/set-model",
-        "mcp": "/admin/set-mcp-model",
-        "task": "/admin/set-task-model",
-        "summarization": "/admin/set-summarization-model",
-        "fallback": "/admin/set-fallback-model"
+      // Map service IDs to backend model field names
+      const fieldMap = {
+        "agent": "agent_model",
+        "mcp": "mcp_model",
+        "task": "task_model",
+        "summarization": "summarization_model",
+        "fallback": "fallback_model"
       };
 
-      const endpoint = endpointMap[serviceId];
-      if (!endpoint) {
-        console.warn(`Model selection for ${serviceId} is not yet supported via API`);
+      const fieldName = fieldMap[serviceId];
+      if (!fieldName) {
+        console.warn(`Model selection for ${serviceId} is not supported via API`);
         return;
       }
 
@@ -2613,8 +2614,17 @@
       const originalValue = selectEl ? selectEl.value : null;
 
       try {
-        console.log("Setting model:", { serviceId, agentBase, endpoint, modelId, url: agentBase + endpoint });
-        const result = await postJson(agentBase + endpoint, headers, { model: modelId });
+        // Use the standardized /admin/roles endpoint 
+        const endpoint = "/admin/roles";
+        console.log("Setting model:", { serviceId, fieldName, agentBase, endpoint, modelId, url: agentBase + endpoint });
+        
+        const payload = {
+            updates: {
+                [fieldName]: modelId
+            }
+        };
+
+        const result = await postJson(agentBase + endpoint, headers, payload);
         if (result.ok) {
           // Visual feedback: briefly highlight the model tag
           if (selectEl) {

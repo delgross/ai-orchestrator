@@ -261,6 +261,16 @@ async def root():
         "ok": True, # Dashboard expectation
         "model": state.agent_model,
         "agent_model": state.agent_model, # Alias for board
+        "task_model": state.task_model,
+        "mcp_model": state.mcp_model,
+        "router_model": state.router_model,
+        "summarization_model": state.summarization_model,
+        "finalizer_model": state.finalizer_model,
+        "fallback_model": state.fallback_model,
+        "embedding_model": state.embedding_model,
+        "vision_model": state.vision_model,
+        "finalizer_enabled": state.finalizer_enabled,
+        "fallback_enabled": state.fallback_enabled,
         "mcp_servers": list(state.mcp_servers.keys()),
         "uptime_s": time.time() - state.started_at,
         "version": "1.0.0-modular"
