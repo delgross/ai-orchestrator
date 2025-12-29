@@ -688,13 +688,27 @@ class AgentEngine:
 
             
             # Helper for tool execution loop
+            # Helper for tool execution loop
             if message.get("tool_calls"):
-                for tool_call in message["tool_calls"]:
-                    result = await self.execute_tool_call(tool_call, request_id=request_id)
+                logger.info(f"Executing {len(message['tool_calls'])} tool calls in PARALLEL")
+                
+                # Execute all tools concurrently
+                tasks = [self.execute_tool_call(tc, request_id=request_id) for tc in message["tool_calls"]]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                for i, result in enumerate(results):
+                    tool_call = message["tool_calls"][i]
+                    
+                    # Handle crash inside tool execution wrapper
+                    if isinstance(result, Exception):
+                        content = json.dumps({"ok": False, "error": str(result)})
+                    else:
+                        content = json.dumps(result.get("result", result.get("error")))
+                        
                     messages.append({
                         "role": ROLE_TOOL,
                         "tool_call_id": tool_call["id"],
-                        "content": json.dumps(result.get("result", result.get("error")))
+                        "content": content
                     })
         
         # 2. Episodic Logging: Store the thread for background consolidation (Max steps reached)

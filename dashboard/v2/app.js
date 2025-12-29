@@ -738,6 +738,33 @@ my-server-name:
             const assistantDiv = appendMessage('assistant', '');
             let fullResponse = "";
 
+            // Live Log Polling
+            let logPoller = null;
+            const liveLog = document.getElementById('chat-live-log');
+            if (liveLog) {
+                logPoller = setInterval(async () => {
+                    try {
+                        const r = await fetch('/admin/logs/tail?lines=20');
+                        if (r.ok) {
+                            const d = await r.json();
+                            // Filter for activity indicators
+                            const relevant = d.lines.filter(l =>
+                                (l.includes('Calling') || l.includes('Tool') || l.includes('Step') || l.includes('Thinking')) &&
+                                !l.includes('GET /admin/logs/tail')
+                            ).pop();
+
+                            if (relevant) {
+                                let msg = relevant.split('agent_runner: ')[1] || relevant;
+                                // Clean up timestamps if split failed
+                                if (msg.match(/^\d{4}-\d{2}/)) msg = msg.substring(25);
+                                if (msg.length > 50) msg = msg.substring(0, 50) + "...";
+                                liveLog.textContent = "> " + msg;
+                            }
+                        }
+                    } catch (e) { }
+                }, 1000);
+            }
+
             try {
                 // Use relative path since Dashboard is served by Router
                 const response = await fetch('/v1/chat/completions', {
@@ -798,6 +825,9 @@ my-server-name:
                 statusSpan.textContent = "Error";
                 statusSpan.className = "status-indicator error";
             } finally {
+                if (logPoller) clearInterval(logPoller);
+                if (liveLog) liveLog.textContent = "";
+
                 chatInput.disabled = false;
                 sendBtn.disabled = false;
                 chatInput.focus();
