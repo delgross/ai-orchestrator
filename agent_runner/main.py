@@ -542,8 +542,13 @@ async def upload_file_endpoint(
         import time
         
         # Ensure uploads dir exists
-        upload_dir = Path(__file__).parent.parent / "uploads"
-        upload_dir.mkdir(exist_ok=True)
+        import os
+        raw_root = state.agent_fs_root
+        if raw_root.startswith("~"):
+            raw_root = os.path.expanduser(raw_root)
+            
+        upload_dir = Path(raw_root) / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
         final_filename = ""
         file_path = None
