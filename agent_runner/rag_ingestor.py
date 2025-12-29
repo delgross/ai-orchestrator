@@ -381,11 +381,16 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                             logger.info(f"CLOUD SUCCESS: Received {len(content)} chars from Modal.")
                         except Exception as cloud_err:
                             logger.error(f"Modal Cloud processing failed: {cloud_err}")
-                            logger.warning(f"STRICT QUALITY: Aborting {file_path.name} to preserve quality. Re-deferring.")
-                            if file_path.parent != DEFERRED_DIR:
-                                try: file_path.rename(DEFERRED_DIR / file_path.name)
-                                except: pass
-                            continue # Skip local fallback
+                            
+                            if is_heavy_file:
+                                logger.warning(f"STRICT QUALITY: Aborting heavy file {file_path.name} to preserve quality. Re-deferring.")
+                                if file_path.parent != DEFERRED_DIR:
+                                    try: file_path.rename(DEFERRED_DIR / file_path.name)
+                                    except: pass
+                                continue # ABORT: Skip local fallback
+                            else:
+                                logger.warning(f"CONTINUITY: Light file {file_path.name} failing over to Local Helper.")
+                                # Fallback proceeds to next block
                     else:
                         raise ImportError("Modal skipped by policy (Daytime/Local Pref)")
 
