@@ -393,10 +393,17 @@ class AgentEngine:
             except Exception as e:
                 logger.warning(f"Failed discovery for {server_name}: {e}")
 
-    async def get_all_tools(self) -> List[Dict[str, Any]]:
+    async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Combine built-in tools with discovered MCP tools, filtering by environmental constraints."""
         tools = list(self.tool_definitions)
         
+        # Build context string for keyword matching
+        context_str = ""
+        if messages:
+            # Check last 3 user messages for intent
+            user_msgs = [m.get("content", "") for m in messages if m.get("role") == "user"]
+            context_str = " ".join([str(c) for c in user_msgs[-3:]]).lower()
+
         # Add discovered MCP tools
         for server_name, server_tools in self.mcp_tool_cache.items():
             # Environmental check: filter out internet-requiring tools if offline
@@ -407,10 +414,42 @@ class AgentEngine:
             for t in server_tools:
                 # Recreate to avoid modifying the original cached definition
                 orig_func = t.get("function", {})
+                tool_name = f"mcp__{server_name}__{orig_func.get('name')}"
+                
+                # [LITE MODE] Tool Pruning Logic
+                # Only include heavy/specialized tools if relevant keywords appear in the last few user messages
+                # Core tools are always included.
+                is_core = server_name in ["project-memory", "tavily-search", "time", "weather", "system-control", "thinking"]
+                
+                should_include = is_core
+                
+                if not should_include:
+                    # Default inclusion for small toolsets (e.g. specialized, single-purpose servers)
+                    if len(server_tools) < 5:
+                        should_include = True
+                    else:
+                        # For massive toolsets, only include if hinted in context
+                        hint_map = {
+                            "playwright": ["browser", "web", "click", "page", "scrape", "site", "url", "http"],
+                            "filesystem": ["file", "read", "write", "list", "dir", "folder", "path", "fs"],
+                            "github": ["git", "repo", "pr", "issue", "commit", "pull"],
+                        }
+                        hints = hint_map.get(server_name, [])
+                        if hints:
+                            if any(h in context_str for h in hints):
+                                should_include = True
+                        else:
+                            # If it's a large toolset with no hints defined, include conservatively or limit count?
+                            # For safety, we default to including unless we are sure.
+                            should_include = True
+
+                if not should_include:
+                    continue
+
                 wrapped = {
                     "type": "function",
                     "function": {
-                        "name": f"mcp__{server_name}__{orig_func.get('name')}",
+                        "name": tool_name,
                         "description": orig_func.get("description"),
                         "parameters": orig_func.get("parameters")
                     }
