@@ -850,11 +850,13 @@ class AgentEngine:
                     "stream": False,
                     "response_format": {"type": "json_object"}
                 }
-                r = await client.post(f"{self.state.gateway_url}/v1/chat/completions", json=payload, timeout=5.0)
                 if r.status_code == 200:
                     data = r.json()
                     content = data["choices"][0]["message"]["content"]
                     return json.loads(content)
+                elif r.status_code == 429:
+                    logger.warning("Maître d' Overloaded (429). Bypassing intent classification.")
+                    return {"target_servers": []} # Fail Open
         except Exception as e:
             logger.warning(f"Intent classification failed: {e}")
         
