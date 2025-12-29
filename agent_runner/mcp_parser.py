@@ -49,8 +49,7 @@ async def parse_mcp_config_with_llm(state: AgentState, raw_content: str) -> Dict
         completion = await engine.agent_loop(
             messages, 
             model=state.task_model, 
-            request_id="mcp-parse",
-            max_iterations=1 # Just a single generation needed
+            request_id="mcp-parse"
         )
         
         content = completion.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
