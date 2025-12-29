@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import httpx
+import shutil
 from pathlib import Path
 from mcp.server.stdio import stdio_server # type: ignore[import-untyped]
 from mcp.server import Server # type: ignore[import-untyped]
@@ -276,6 +277,34 @@ class SystemControlServer:
             except Exception as e:
                 return {"ok": False, "error": f"Connection to Agent Runner failed: {str(e)}"}
 
+    async def ingest_file(self, source_path: str):
+        """Copy a file to the RAG ingestion inbox to trigger background processing."""
+        try:
+            src = Path(source_path)
+            if not src.exists():
+                return {"error": f"Source file not found: {source_path}"}
+                
+            # Define ingestion root
+            ingest_root = WORKSPACE_ROOT / "agent_fs_root" / "ingest"
+            ingest_root.mkdir(parents=True, exist_ok=True)
+            
+            # Destination path
+            dest = ingest_root / src.name
+            
+            # Copy file
+            shutil.copy2(src, dest)
+            
+            # Create trigger file to force immediate processing
+            (ingest_root / ".trigger_now").touch()
+            
+            return {
+                "ok": True, 
+                "message": "File submitted to background ingestion system.",
+                "path": str(dest)
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
 async def main():
     server = Server("system-control")
     controller = SystemControlServer()
@@ -291,6 +320,7 @@ async def main():
             Tool(name="set_voice_preference", description="Configure default voice provider (macos/openai).", inputSchema={"type":"object","properties":{"provider":{"type":"string","enum":["macos","openai"]},"voice":{"type":"string","default":"alloy"}},"required":["provider"]}),
             Tool(name="add_mcp_server", description="Safely add/update an MCP server in config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"},"config":{"type":"object"}},"required":["name","config"]}),
             Tool(name="remove_mcp_server", description="Safely remove an MCP server from config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
+            Tool(name="ingest_file", description="Submit a file for asynchronous background ingestion (RAG/Knowledge Graph).", inputSchema={"type":"object","properties":{"source_path":{"type":"string"}},"required":["source_path"]}),
         ]
 
     @server.call_tool()
@@ -312,6 +342,8 @@ async def main():
                 res = await controller.add_mcp_server(**args)
             elif name == "remove_mcp_server":
                 res = await controller.remove_mcp_server(**args)
+            elif name == "ingest_file":
+                res = await controller.ingest_file(**args)
             else:
                 raise ValueError(f"Unknown tool: {name}")
                 
