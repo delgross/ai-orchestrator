@@ -113,6 +113,13 @@ class AgentState:
         """Dynamically add or update an MCP server at runtime."""
         from agent_runner.transports.stdio import get_or_create_stdio_process, initialize_stdio_process
         
+        # 0. Normalization (Consistent with load_mcp_servers)
+        if "command" in config:
+            cmd = [config["command"]]
+            if "args" in config:
+                cmd.extend(config["args"])
+            config["cmd"] = cmd
+
         # 1. Update In-Memory State
         self.mcp_servers[name] = config
         
