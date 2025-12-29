@@ -206,6 +206,11 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
         try:
             logger.info(f"Ingesting file: {file_path.name}")
             
+            # Re-evaluate heaviness for processing logic (Strict Quality vs Continuity)
+            f_size_mb = file_path.stat().st_size / (1024 * 1024)
+            is_heavy_file = (f_size_mb > 10) or (file_path.suffix.lower() == '.pdf' and f_size_mb > 2)
+
+            # ... (Metadata extraction code matches existing lines 209-224) ...
             # 0. FILENAME METADATA EXTRACTION (The Tag-Extract Workflow)
             # Parse [Key=Value] tags from filename
             import re
@@ -230,7 +235,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             if ext in ('.txt', '.md'):
                 content = file_path.read_text(encoding="utf-8", errors="replace")
             elif ext == '.csv':
-                # Convert CSV to Markdown Table to preserve structural relationships
+                # ... (CSV logic unchanged) ...
                 import csv
                 try:
                     with open(file_path, newline='') as csvfile:
@@ -255,8 +260,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     # CLOUD OFFLOAD STRATEGY: Use Modal if available (for all permitted files)
                     from agent_runner.modal_tasks import cloud_process_image, has_modal
                     
-                    # Policy: If Modal is configured, use it for everything that passes the gateway
-                    # (Heavy files are already deferred by the logic above, so this applies to light files + night shift items)
+                    # Policy: Use Modal for everything if available.
                     use_cloud = has_modal
                     
                     if use_cloud:
@@ -279,18 +283,23 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                             logger.info(f"CLOUD SUCCESS: Received structured analysis. Objects: {len(data.get('objects', []))}")
                         except Exception as cloud_err:
                             logger.error(f"Modal Cloud processing failed: {cloud_err}")
-                            logger.warning(f"STRICT QUALITY: Aborting {file_path.name} to preserve quality. Re-deferring.")
-                            if file_path.parent != DEFERRED_DIR:
-                                try: file_path.rename(DEFERRED_DIR / file_path.name)
-                                except: pass
-                            continue # Skip local fallback
+                            
+                            if is_heavy_file:
+                                logger.warning(f"STRICT QUALITY: Aborting heavy file {file_path.name} to preserve quality. Re-deferring.")
+                                if file_path.parent != DEFERRED_DIR:
+                                    try: file_path.rename(DEFERRED_DIR / file_path.name)
+                                    except: pass
+                                continue # ABORT: Skip local fallback
+                            else:
+                                logger.warning(f"CONTINUITY: Light file {file_path.name} failing over to Local Vision.")
+                                # Fall through to Local Vision
                     else:
                          # Fall through to Local Vision if not Night/Force or Modal missing
                          raise ImportError("Modal skipped by policy (Daytime/Local Pref)")
                         
                 except Exception as cloud_err:
                     # LOCAL FALLBACK (Standard Vision Model)
-                    # This runs for daytime images OR if Modal fails
+                    # This runs for daytime/light images OR if Modal fails on a light file
                     try:
                         import base64
                         with open(file_path, "rb") as image_file:
