@@ -60,8 +60,33 @@ class Provider:
 class State:
     def __init__(self) -> None:
         self.started_at = time.time()
+        
+        # Load overrides from config.yaml
+        config_timeout = HTTP_TIMEOUT_S
+        config_concurrency = ROUTER_MAX_CONCURRENCY
+        
+        try:
+            # Assuming cwd is ai/ or file is at ai/router/config.py
+            # FS_ROOT is usually ~/ai/agent_fs_root
+            # We want ~/ai/config/config.yaml or <repo>/config/config.yaml
+            # Let's try relative path from this file
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            conf_path = os.path.join(base_dir, "config", "config.yaml")
+            if os.path.exists(conf_path):
+                with open(conf_path, "r") as f:
+                    c = yaml.safe_load(f)
+                    if c and "router" in c:
+                        rc = c["router"]
+                        if "http_timeout" in rc:
+                            config_timeout = float(rc["http_timeout"])
+                            print(f"DEBUG: Loaded http_timeout={config_timeout} from config.yaml")
+                        if "max_concurrency" in rc:
+                            config_concurrency = int(rc["max_concurrency"])
+        except Exception as e:
+            print(f"WARN: Failed to load config.yaml in router: {e}")
+
         self.client = httpx.AsyncClient(
-            timeout=HTTP_TIMEOUT_S,
+            timeout=config_timeout,
             trust_env=False,
             limits=httpx.Limits(
                 max_keepalive_connections=20,
@@ -71,7 +96,7 @@ class State:
         )
         self.providers: Dict[str, Provider] = {}
         self.models_cache: Tuple[float, Dict[str, Any]] = (0.0, {})
-        self.max_concurrency = ROUTER_MAX_CONCURRENCY
+        self.max_concurrency = config_concurrency
         
         # MCP & Agent Health
         cb_threshold = int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "5"))

@@ -386,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (e) { console.warn("Failed to parse breaker data", e); }
             }
 
-            const serverNames = Object.keys(toolMap);
+            const serverNames = Object.keys(toolMap).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
             if (serverNames.length === 0) {
                 if (mcpRetryCount < retryLimit) {

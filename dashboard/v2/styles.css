@@ -220,7 +220,7 @@ body {
 /* Grid System */
 .grid-layout {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 1.5rem;
 }
 
@@ -671,4 +671,63 @@ body {
     background: var(--accent-blue);
     opacity: 0.2;
     border-radius: 2px;
+}
+
+/* Compact Server Card Styles */
+.server-card {
+    padding: 1rem !important;
+    border-radius: 12px !important;
+    min-height: auto;
+}
+
+.server-card h4 {
+    font-size: 0.9rem !important;
+    margin-bottom: 0.4rem !important;
+}
+
+.server-card .tool-meta {
+    font-size: 0.7rem !important;
+    margin-bottom: 0.6rem !important;
+}
+
+.server-card .config-select {
+    padding: 0.3rem 0.5rem !important;
+    font-size: 0.75rem !important;
+}
+
+.server-card .indicator {
+    width: 6px !important;
+    height: 6px !important;
+}
+
+/* Interactive states for server-card */
+.server-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: default;
+}
+
+.server-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+/* Ultra-Compact Overrides */
+.server-card {
+    padding: 0.75rem !important;
+    border-radius: 10px !important;
+}
+.server-card h4 {
+    margin-bottom: 2px !important;
+}
+.server-card label {
+    display: none !important;
+}
+.server-card .tool-meta {
+    margin-bottom: 8px !important;
+    opacity: 0.6;
+}
+.server-card .config-select {
+    padding: 2px 4px !important;
+    font-size: 0.75rem !important;
+    height: 28px !important;
+    background: rgba(0,0,0,0.2) !important;
 }
