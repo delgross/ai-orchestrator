@@ -30,8 +30,35 @@ async def _proxy_agent_runner(method: str, path: str, json_body: Any = None):
         raise HTTPException(status_code=502, detail=f"Agent Runner unavailable: {e}")
 
 @router.get("/system-status")
-async def proxy_system_status():
-    return await _proxy_agent_runner("GET", "/system-status")
+async def system_status():
+    """Aggregate status of all services (Router, Agent, Ollama)."""
+    # 1. Router Self-Check
+    router_status = {"ok": True, "version": VERSION}
+    
+    # 2. Agent Check (via Proxy)
+    agent_data = {}
+    try:
+        # We use the raw client to avoid raising HTTP 502 logic in _proxy wrapper if down
+        # But _proxy_agent_runner handles generic logic. Let's try/except it.
+        agent_data = await _proxy_agent_runner("GET", "/system-status")
+    except Exception as e:
+        logger.warning(f"Status check: Agent unreachable: {e}")
+        agent_data = {"ok": False, "mode": "Offline", "internet": "Unknown", "ollama_ok": False}
+
+    # 3. Construct Unified Response (The 'Defined Channel' Contract)
+    return {
+        "ok": True,
+        "services": {
+            "router": router_status,
+            "agent_runner": {"ok": agent_data.get("ok", False)}
+        },
+        "ollama_ok": agent_data.get("ollama_ok", False),
+        "internet": agent_data.get("internet", "Unknown"),
+        "mode": agent_data.get("mode", "Production"),
+        # Pass through Agent capabilities
+        "hardware_verified": agent_data.get("hardware_verified", False),
+        "limits": agent_data.get("limits", {})
+    }
 
 @router.get("/background-tasks")
 async def proxy_background_tasks():
