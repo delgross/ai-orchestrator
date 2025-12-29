@@ -505,6 +505,26 @@ async def add_mcp_server_endpoint(name: str = Body(...), config: Dict[str, Any] 
         logger.error(f"Failed to dynamically add MCP server '{name}': {e}")
         return {"ok": False, "error": str(e)}
 
+@app.post("/admin/mcp/remove")
+async def remove_mcp_server_endpoint(name: str = Body(..., embed=True)):
+    """Dynamically remove an MCP server, terminate its process, and clear tool cache."""
+    try:
+        # 1. Update State (handles process termination and config persistence)
+        success = await state.remove_mcp_server(name)
+        
+        if success:
+            # 2. Clear Tool Cache
+            if name in engine.mcp_tool_cache:
+                del engine.mcp_tool_cache[name]
+                logger.info(f"Cleared tool cache for removed MCP server '{name}'")
+            
+            return {"ok": True, "message": f"Successfully removed server '{name}'"}
+        else:
+            return {"ok": False, "error": f"Server '{name}' not found"}
+    except Exception as e:
+        logger.error(f"Failed to dynamically remove MCP server '{name}': {e}")
+        return {"ok": False, "error": str(e)}
+
 @app.post("/admin/mcp/upload-config")
 async def upload_mcp_config(
     file: UploadFile = File(None),

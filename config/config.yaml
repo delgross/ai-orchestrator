@@ -213,6 +213,9 @@ mcp_servers:
   time:
     args:
     - mcp-server-time
+    cmd:
+    - uvx
+    - mcp-server-time
     command: uvx
     type: stdio
   weather:

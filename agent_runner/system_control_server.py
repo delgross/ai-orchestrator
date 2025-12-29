@@ -263,26 +263,18 @@ class SystemControlServer:
                 return {"ok": False, "error": f"Connection to Agent Runner failed: {str(e)}"}
 
     async def remove_mcp_server(self, name: str):
-        """Remove an MCP server configuration."""
-        if yaml is None: return {"error": "PyYAML not installed"}
-        config_path = WORKSPACE_ROOT / "config" / "config.yaml"
-        if not config_path.exists():
-            return {"error": f"Config not found at {config_path}"}
-            
-        try:
-            with open(config_path, "r") as f:
-                data = yaml.safe_load(f) or {}
-            
-            if "mcp_servers" in data and name in data["mcp_servers"]:
-                del data["mcp_servers"][name]
-                
-                with open(config_path, "w") as f:
-                    yaml.dump(data, f, sort_keys=False, indent=2)
-                return {"ok": True, "message": f"Removed server '{name}'"}
-            else:
-                return {"error": f"Server '{name}' not found"}
-        except Exception as e:
-            return {"error": str(e)}
+        """Remove an MCP server configuration safely via Agent Runner API."""
+        url = f"{AGENT_URL}/admin/mcp/remove"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                resp = await client.post(url, json={"name": name})
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    return {"ok": False, "error": f"Agent Runner API error ({resp.status_code}): {resp.text}"}
+            except Exception as e:
+                return {"ok": False, "error": f"Connection to Agent Runner failed: {str(e)}"}
 
 async def main():
     server = Server("system-control")
