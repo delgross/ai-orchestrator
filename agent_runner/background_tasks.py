@@ -43,7 +43,7 @@ class Task:
     """Background task definition."""
     name: str
     task_type: TaskType
-    func: Callable
+    func: Callable[..., Any]
     interval: Optional[float] = None  # For periodic tasks (seconds)
     schedule: Optional[str] = None  # For scheduled tasks (cron-like: "HH:MM" or "*/N minutes")
     delay: Optional[float] = None  # For one-time tasks (seconds)
@@ -346,7 +346,7 @@ class BackgroundTaskManager:
                     # Send notification about disabling
                     from common.notifications import notify_high
                     
-                    if notify_high:
+                    if notify_high is not None:
                         try:
                             notify_high(
                                 title=f"Task Disabled: {task.name}",
@@ -360,7 +360,7 @@ class BackgroundTaskManager:
             # Send notification based on priority
             from common.notifications import notify_critical, notify_high
             
-            if notify_critical and notify_high:
+            if notify_critical is not None and notify_high is not None:
                 try:
                     if task.priority == TaskPriority.CRITICAL:
                         notify_critical(

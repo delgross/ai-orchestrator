@@ -37,11 +37,13 @@ async def log_time(operation_name: str, level=logging.DEBUG):
         duration = time.time() - t0
         logger.log(level, f"PERF: {operation_name} completed in {duration:.4f}s")
 
+from agent_runner.agent_runner import get_shared_state, get_shared_engine
+
 app = FastAPI(title="Agent Runner (Modularized)")
 
-# State and Engine instances
-state = AgentState()
-engine = AgentEngine(state)
+# State and Engine instances (shared with background tasks)
+state = get_shared_state()
+engine = get_shared_engine()
 
 # CORS Configuration for Dashboard
 app.add_middleware(

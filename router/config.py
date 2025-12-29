@@ -127,7 +127,7 @@ class State:
         # Ollama config
         self.ollama_num_ctx = 32768
         self.ollama_auto_adjust_context = False
-        self.ollama_model_options = {}
+        self.ollama_model_options: Dict[str, Any] = {}
         
         # Stats
         self.request_count = 0

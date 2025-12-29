@@ -4,9 +4,15 @@ import os
 import sys
 import httpx
 from pathlib import Path
-from mcp.server.stdio import stdio_server
-from mcp.server import Server
-from mcp.types import Tool, TextContent
+from mcp.server.stdio import stdio_server # type: ignore[import-untyped]
+from mcp.server import Server # type: ignore[import-untyped]
+from mcp.types import Tool, TextContent # type: ignore[import-untyped]
+from typing import Any, Dict, List, Optional
+
+try:
+    import yaml # type: ignore[import-untyped]
+except ImportError:
+    yaml = None
 
 # Configuration
 ROUTER_URL = os.getenv("ROUTER_URL", "http://127.0.0.1:5455")
@@ -244,7 +250,7 @@ class SystemControlServer:
 
     async def add_mcp_server(self, name: str, config: dict):
         """Add or update an MCP server configuration safely."""
-        import yaml
+        if yaml is None: return {"error": "PyYAML not installed"}
         config_path = WORKSPACE_ROOT / "config" / "config.yaml"
         if not config_path.exists():
             return {"error": f"Config not found at {config_path}"}
@@ -267,7 +273,7 @@ class SystemControlServer:
 
     async def remove_mcp_server(self, name: str):
         """Remove an MCP server configuration."""
-        import yaml
+        if yaml is None: return {"error": "PyYAML not installed"}
         config_path = WORKSPACE_ROOT / "config" / "config.yaml"
         if not config_path.exists():
             return {"error": f"Config not found at {config_path}"}

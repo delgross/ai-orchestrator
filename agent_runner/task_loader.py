@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from pathlib import Path
 
 try:
-    import yaml
+    import yaml # type: ignore[import-untyped]
 except ImportError:
     yaml = None
 

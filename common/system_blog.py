@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
-    import yaml
+    import yaml # type: ignore[import-untyped]
 except ImportError:
     yaml = None  # Optional dependency
 
@@ -94,6 +94,8 @@ class BlogEntry:
         
         # Build markdown
         lines = ["---"]
+        if yaml is None:
+            raise ImportError("PyYAML is required for blog entries. Install with: pip install pyyaml")
         lines.append(yaml.dump(frontmatter, default_flow_style=False, sort_keys=False).strip())
         lines.append("---")
         lines.append("")

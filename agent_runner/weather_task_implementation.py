@@ -1,16 +1,28 @@
 """
 Complete Weather Task Implementation
-Add this to agent_runner.py in _on_startup() before start_task_manager_delayed()
+Add this to main.py or similar to register.
 """
+import logging
+import json
+from typing import List, Dict, Any
+from agent_runner.background_tasks import get_task_manager, TaskPriority
 
-# Weather update task using local Ollama model
+logger = logging.getLogger("weather_task")
+
 async def weather_update_task() -> None:
     """Update weather file using local Ollama model with weather MCP server."""
     try:
         logger.info("Updating weather file with local Ollama model...")
         
-        # Use local Ollama model (adjust to match your installed models)
-        local_model = "ollama:mistral:latest"  # or "ollama:llama3.1:8b", "ollama:qwen2.5:7b", etc.
+        # Import here to avoid circular dependencies
+        from agent_runner.agent_runner import (
+            _agent_loop,
+            MCP_TOOLS,
+            FILE_TOOLS,
+        )
+        
+        # Use local Ollama model
+        local_model = "ollama:mistral:latest"
         
         # Create focused prompt for weather task
         weather_prompt = """Get the current weather using the weather MCP server tools and write it to 
@@ -25,11 +37,11 @@ weather/current_weather.txt in the sandbox. Include:
 Format it nicely and make it readable."""
         
         # Filter tools to only weather MCP + file writing tools (more efficient)
-        weather_tools = []
+        weather_tools: List[Dict[str, Any]] = []
         # Add weather MCP tools
         for tool in MCP_TOOLS:
             tool_name = tool.get("function", {}).get("name", "")
-            if tool_name.startswith("mcp__weather__"):
+            if tool_name.startswith("mcp__weather__") or tool_name == "mcp_proxy":
                 weather_tools.append(tool)
         # Add file writing tools
         for tool in FILE_TOOLS:
@@ -37,15 +49,11 @@ Format it nicely and make it readable."""
             if tool_name in ["write_text", "make_dir"]:
                 weather_tools.append(tool)
         
-        # If no weather tools found, use all tools (fallback)
-        if not weather_tools:
-            weather_tools = None  # Will default to all tools
-        
-        # Call agent loop with local model
-        result = await _agent_loop(
+        # Call agent loop
+        await _agent_loop(
             user_messages=[{"role": "user", "content": weather_prompt}],
-            model=local_model,  # Use local Ollama instead of AGENT_MODEL
-            tools=weather_tools  # Only weather + file tools
+            model=local_model,
+            tools=weather_tools if weather_tools else None
         )
         
         logger.info("Weather file updated successfully using local Ollama model")
@@ -53,20 +61,16 @@ Format it nicely and make it readable."""
     except Exception as e:
         logger.error(f"Weather update task failed: {e}", exc_info=True)
 
-# Register the task
-task_manager.register(
-    name="weather_update",
-    func=weather_update_task,
-    interval=300.0,  # 5 minutes = 300 seconds
-    enabled=True,
-    idle_only=False,  # Can run even when system is busy
-    priority=TaskPriority.LOW,
-    description="Update weather file using local Ollama model every 5 minutes",
-    estimated_duration=10.0  # Local models might take a bit longer
-)
-
-
-
-
-
-
+# Function to register the task
+def register_weather_task() -> None:
+    task_manager = get_task_manager()
+    task_manager.register(
+        name="weather_update",
+        func=weather_update_task,
+        interval=300.0,
+        enabled=True,
+        idle_only=False,
+        priority=TaskPriority.LOW,
+        description="Update weather file using local Ollama model every 5 minutes",
+        estimated_duration=10.0
+    )

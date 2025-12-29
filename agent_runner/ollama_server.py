@@ -177,7 +177,7 @@ server = OllamaServer()
 def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     """Handle MCP JSON-RPC requests."""
     method = request.get("method")
-    request_id = request.get("id")
+    request_id: Any = request.get("id")
     params = request.get("params", {})
     
     if method == "initialize":

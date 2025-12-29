@@ -75,14 +75,14 @@ restart_router() {
   echo "=== restarting router ==="
   restart_one "$ROUTER_LABEL" "$ROUTER_PLIST"
   sleep 1
-  curl -sS http://127.0.0.1:5455/ | python -m json.tool
+  curl -sS -H "Accept: application/json" http://127.0.0.1:5455/ | python -m json.tool
 }
 
 restart_agent() {
   echo "=== restarting agent_runner ==="
   restart_one "$AGENT_LABEL" "$AGENT_PLIST"
   sleep 1
-  curl -sS http://127.0.0.1:5460/ | python -m json.tool
+  curl -sS -H "Accept: application/json" http://127.0.0.1:5460/ | python -m json.tool
 }
 
 restart_both() {
