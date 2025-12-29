@@ -4,6 +4,7 @@ import os
 import sys
 import httpx
 import shutil
+import time
 from pathlib import Path
 from mcp.server.stdio import stdio_server # type: ignore[import-untyped]
 from mcp.server import Server # type: ignore[import-untyped]
@@ -278,7 +279,10 @@ class SystemControlServer:
                 return {"ok": False, "error": f"Connection to Agent Runner failed: {str(e)}"}
 
     async def ingest_file(self, source_path: str):
-        """Copy a file to the RAG ingestion inbox to trigger background processing."""
+        """
+        Copy a file to the RAG ingestion inbox and wait for initial processing status.
+        Returns immediately if classified/moved, or timeouts after 5s if still processing.
+        """
         try:
             src = Path(source_path)
             if not src.exists():
@@ -287,6 +291,9 @@ class SystemControlServer:
             # Define ingestion root
             ingest_root = WORKSPACE_ROOT / "agent_fs_root" / "ingest"
             ingest_root.mkdir(parents=True, exist_ok=True)
+            processed_dir = ingest_root / "processed"
+            review_dir = ingest_root / "review"
+            deferred_dir = ingest_root / "deferred"
             
             # Destination path
             dest = ingest_root / src.name
@@ -297,9 +304,44 @@ class SystemControlServer:
             # Create trigger file to force immediate processing
             (ingest_root / ".trigger_now").touch()
             
+            # --- Smart Wait (Polling) ---
+            # Wait up to 5 seconds to see if the file disappears from ingest (moved to processed/review)
+            start_time = time.time()
+            final_status = "queued"
+            details = "Processing in background..."
+            
+            while time.time() - start_time < 5.0:
+                if not dest.exists():
+                    # It moved! Checking where it went...
+                    # We check processed subfolders deeply
+                    found_in_processed = False
+                    for p in processed_dir.rglob(src.name):
+                        found_in_processed = True
+                        domain = p.parent.name
+                        final_status = "success"
+                        details = f"Classified as '{domain}' and ingested."
+                        break
+                    
+                    if not found_in_processed:
+                        if (review_dir / src.name).exists():
+                            final_status = "failure"
+                            details = "Moved to review (unsupported or error)."
+                        elif (deferred_dir / src.name).exists():
+                            final_status = "deferred"
+                            details = "Deferred to Night Shift (large file)."
+                        else:
+                            # Catch-all
+                            final_status = "success" 
+                            details = "Processed successfully."
+                    
+                    break
+                
+                await asyncio.sleep(0.5)
+            
             return {
                 "ok": True, 
-                "message": "File submitted to background ingestion system.",
+                "status": final_status,
+                "message": details,
                 "path": str(dest)
             }
         except Exception as e:
