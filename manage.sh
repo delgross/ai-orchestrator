@@ -669,9 +669,10 @@ case "${1:-status}" in
     # 4. RAG Stats
     if [ "$rag_http" = "true" ]; then
         rag_stats=$(curl -s "http://127.0.0.1:$RAG_PORT/stats")
-        total_docs=$(echo "$rag_stats" | python3 -c "import sys, json; print(json.load(sys.stdin).get('total_documents', 0))")
+        total_chunks=$(echo "$rag_stats" | python3 -c "import sys, json; print(json.load(sys.stdin).get('total_chunks', 0))")
+        total_ents=$(echo "$rag_stats" | python3 -c "import sys, json; print(json.load(sys.stdin).get('total_entities', 0))")
         kb_count=$(echo "$rag_stats" | python3 -c "import sys, json; print(json.load(sys.stdin).get('knowledge_bases', {}).__len__())")
-        echo -e "RAG Content: ${GREEN}${total_docs} docs${NC} across ${GREEN}${kb_count} KBs${NC}"
+        echo -e "RAG Content: ${GREEN}${total_chunks} chunks${NC} across ${GREEN}${kb_count} KBs${NC} (${total_ents} entities)"
     fi
     
     echo -e "--------------------------------------"

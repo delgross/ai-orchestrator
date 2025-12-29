@@ -9,7 +9,7 @@
         "memory_audit": true,
         "memory_consolidation": true
     },
-    "agent_model": "openai:gpt-4o-RETRY-2",
+    "agent_model": "openai:gpt-4o",
     "summarization_model": "openai:gpt-4o",
     "task_model": "ollama:mistral:latest",
     "router_model": "ollama:mistral:latest",

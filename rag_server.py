@@ -160,8 +160,8 @@ class RAGServer:
         -- 2. Define Tables
         DEFINE TABLE IF NOT EXISTS chunk SCHEMAFULL;
         
-        -- 3. Define Fields safely
-        DEFINE FIELD IF NOT EXISTS content ON TABLE chunk TYPE string ANALYZER en_lemma;
+        -- 3. Define Fields safely (Removed ANALYZER from fields for 2.x compatibility)
+        DEFINE FIELD IF NOT EXISTS content ON TABLE chunk TYPE string;
         DEFINE FIELD IF NOT EXISTS kb_id ON TABLE chunk TYPE string;
         DEFINE FIELD IF NOT EXISTS filename ON TABLE chunk TYPE string;
         DEFINE FIELD IF NOT EXISTS metadata ON TABLE chunk TYPE object;
@@ -169,22 +169,30 @@ class RAGServer:
         DEFINE FIELD IF NOT EXISTS authority ON TABLE chunk TYPE number DEFAULT 1.0;
         DEFINE FIELD IF NOT EXISTS timestamp ON TABLE chunk TYPE datetime DEFAULT time::now();
         
+        -- Full-Text Search Indices (New 2.x syntax)
+        DEFINE INDEX IF NOT EXISTS chunk_content_search ON TABLE chunk FIELDS content SEARCH ANALYZER en_lemma BM25;
+
         -- HNSW Vector Index (Persist unless schema change required)
         DEFINE INDEX IF NOT EXISTS chunk_embedding_index ON TABLE chunk FIELDS embedding HNSW DIMENSION 1024 DIST EUCLIDEAN TYPE F32;
 
         -- Graph Schema
         DEFINE TABLE IF NOT EXISTS entity SCHEMAFULL;
-        DEFINE FIELD IF NOT EXISTS name ON TABLE entity TYPE string ANALYZER en_lemma;
+        DEFINE FIELD IF NOT EXISTS name ON TABLE entity TYPE string;
         DEFINE FIELD IF NOT EXISTS type ON TABLE entity TYPE string;
-        DEFINE FIELD IF NOT EXISTS description ON TABLE entity TYPE string ANALYZER en_lemma;
+        DEFINE FIELD IF NOT EXISTS description ON TABLE entity TYPE string;
         DEFINE FIELD IF NOT EXISTS metadata ON TABLE entity TYPE object;
         DEFINE FIELD IF NOT EXISTS last_updated ON TABLE entity TYPE datetime DEFAULT time::now();
         
+        DEFINE INDEX IF NOT EXISTS entity_name_search ON TABLE entity FIELDS name SEARCH ANALYZER en_lemma BM25;
+        DEFINE INDEX IF NOT EXISTS entity_description_search ON TABLE entity FIELDS description SEARCH ANALYZER en_lemma BM25;
+
         DEFINE TABLE IF NOT EXISTS relates SCHEMAFULL TYPE RELATION;
         DEFINE FIELD IF NOT EXISTS type ON TABLE relates TYPE string;
-        DEFINE FIELD IF NOT EXISTS description ON TABLE relates TYPE string ANALYZER en_lemma;
+        DEFINE FIELD IF NOT EXISTS description ON TABLE relates TYPE string;
         DEFINE FIELD IF NOT EXISTS origin ON TABLE relates TYPE string;
         DEFINE FIELD IF NOT EXISTS timestamp ON TABLE relates TYPE datetime DEFAULT time::now();
+
+        DEFINE INDEX IF NOT EXISTS relates_description_search ON TABLE relates FIELDS description SEARCH ANALYZER en_lemma BM25;
         """
         try:
             await self.execute_surreal_query(setup_sql)
@@ -379,20 +387,6 @@ class RAGServer:
         self.metrics["avg_search_time"] = (current_avg * 0.9) + (elapsed * 0.1)
 
         return data
-            
-            r = await self.client.post(self.sql_url, content=prefix + keyword_sql, auth=self.auth, headers=self.headers)
-            if r.status_code == 200:
-                results = r.json()
-                if isinstance(results, list) and len(results) > 0:
-                    data = results[-1].get("result", [])
-                    logger.info(f"HYBRID SUCCESS: Keyword search found {len(data)} literal matches.")
-                    for row in data: row.pop("embedding", None)
-                    return data
-            return []
-        except Exception as e:
-            self.metrics["errors"] += 1
-            logger.error(f"Search failed: {e}")
-            return []
 
 import json
 rag_backend = RAGServer()
