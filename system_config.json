@@ -16,5 +16,5 @@
     "mcp_model": "openai:gpt-4o-mini",
     "finalizer_model": "openai:gpt-5.2",
     "embedding_model": "ollama:mxbai-embed-large:latest",
-    "vision_model": "openai:gpt-4o"
+    "vision_model": "openai:gpt-4o-mini"
 }

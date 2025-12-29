@@ -19,6 +19,9 @@ async def load_mcp_servers(state: AgentState) -> None:
                     data = json.load(f)
                     servers = data.get("mcpServers", data)
                     for name, cfg in servers.items():
+                        if name in state.mcp_servers:
+                            logger.info(f"MCP: Updating existing server definition for '{name}' (from manifest {manifest_file.name})")
+                        
                         # Normalize 'command' + 'args' to 'cmd'
                         if "command" in cfg:
                             cmd = [cfg["command"]]
@@ -37,6 +40,9 @@ async def load_mcp_servers(state: AgentState) -> None:
                 cfg_data = yaml.safe_load(f)
                 if cfg_data and "mcp_servers" in cfg_data:
                     for name, cfg in cfg_data["mcp_servers"].items():
+                        if name in state.mcp_servers:
+                            logger.info(f"MCP: Updating/Overwriting server definition for '{name}' with config.yaml entry")
+                            
                         # Normalize 'command' + 'args' to 'cmd'
                         if "command" in cfg:
                             cmd = [cfg["command"]]

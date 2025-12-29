@@ -464,8 +464,9 @@ async def list_tasks():
 
 @app.post("/admin/reload-mcp")
 async def reload_mcp():
-    load_mcp_servers(state)
-    return {"ok": True, "message": "MCP servers reloaded"}
+    await load_mcp_servers(state)
+    await engine.discover_mcp_tools()
+    return {"ok": True, "message": "MCP servers and tools reloaded"}
 
 @app.get("/admin/system-prompt")
 async def get_system_prompt():

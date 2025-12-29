@@ -33,6 +33,10 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
     
     # CIRCUIT BREAKER: Check RAG health before starting batch
     try:
+        if not state.internet_available:
+             logger.warning("RAG Ingestor: Internet unavailable. Skipping batch.")
+             return
+
         health = await http_client.get(f"{rag_base_url}/health", timeout=5.0)
         if health.status_code != 200:
             logger.warning("RAG Ingestor: Circuit Breaker TRIPPED (Server unhealthy). Skipping batch.")
