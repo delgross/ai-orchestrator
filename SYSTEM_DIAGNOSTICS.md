@@ -73,3 +73,9 @@ This document logs identified problems and test failures discovered during the s
 - **Leak Detection**: [x] VERIFIED (Log sizes stable, no zombie processes, handle counts normal).
 - **Blockage Scan**: [x] VERIFIED (Ingestion queues flowing; deferral logic active for 1 AM shift).
 - **Heartbeat Status**: [x] PASS (Background tasks showing continuous successful cycles for consolidation and monitoring).
+
+### 13. Subsystem Enhancements (Active)
+- **Notification Webhooks**: [x] ENABLED (Real-time `httpx` alerting channel active).
+- **Memory Correction**: [x] IMPLEMENTED (`correct_fact` tool logic creates logical penalties for old data).
+- **RAG Startup Speed**: [x] OPTIMIZED (Vector index persists between restarts, removing boot lag).
+- **MCP Hot-Reload**: [x] ARCHITECTED (Dynamic `add/remove_server` methods in state for runtime updates).

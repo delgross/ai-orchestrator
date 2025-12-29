@@ -257,97 +257,128 @@ class RAGServer:
             logger.error(f"Failed to store chunk: {e}")
             return False
 
+    async def _run_vector_search(self, embedding: List[float], kb_id: str, limit: int) -> List[Dict[str, Any]]:
+        sql = f"""
+        USE NS {SURREAL_NS} DB {SURREAL_DB};
+        SELECT *, vector::distance::euclidean(embedding, $emb) AS raw_dist
+        FROM chunk 
+        WHERE kb_id = $kb
+        ORDER BY raw_dist ASC
+        LIMIT $limit;
+        """
+        params = {"emb": embedding, "kb": kb_id, "limit": limit}
+        results = await self.execute_surreal_query(sql, params)
+        if isinstance(results, list) and len(results) > 0:
+            return results[-1].get("result", []) or []
+        return []
+
+    async def _run_keyword_search(self, query_text: str, kb_id: str, limit: int) -> List[Dict[str, Any]]:
+        # Basic keyword search using CONTAINS
+        # In a real SurrealDB setup, we'd use comprehensive full-text indexing
+        sql = f"""
+        USE NS {SURREAL_NS} DB {SURREAL_DB};
+        SELECT *
+        FROM chunk 
+        WHERE kb_id = $kb AND content CONTAINS $q
+        LIMIT $limit;
+        """
+        params = {"q": query_text, "kb": kb_id, "limit": limit}
+        results = await self.execute_surreal_query(sql, params)
+        if isinstance(results, list) and len(results) > 0:
+            return results[-1].get("result", []) or []
+        return []
+
+    def _reciprocal_rank_fusion(self, vector_results: List[Dict], keyword_results: List[Dict], k: int = 60) -> List[Dict]:
+        """
+        Fuse results using Reciprocal Rank Fusion (RRF).
+        score = 1 / (k + rank)
+        """
+        fused_scores = {}
+        doc_map = {}
+        
+        # Process Vector Results
+        for rank, doc in enumerate(vector_results):
+            doc_id = doc.get("id")
+            if not doc_id: continue
+            doc_map[doc_id] = doc
+            fused_scores[doc_id] = fused_scores.get(doc_id, 0.0) + (1 / (k + rank + 1))
+            
+        # Process Keyword Results
+        for rank, doc in enumerate(keyword_results):
+            doc_id = doc.get("id")
+            if not doc_id: continue
+            doc_map[doc_id] = doc # Overwrite or keep, doesn't matter as content is same
+            fused_scores[doc_id] = fused_scores.get(doc_id, 0.0) + (1 / (k + rank + 1))
+        
+        # Sort by Fused Score
+        sorted_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
+        
+        final_results = []
+        for doc_id in sorted_ids:
+            doc = doc_map[doc_id]
+            doc["score"] = fused_scores[doc_id] * 10.0 # Normalize roughly to 0-10 range for compatibility
+            doc["fusion_source"] = "hybrid_rrf"
+            final_results.append(doc)
+            
+        return final_results
+
     async def search(self, query_text: str, kb_id: str, limit: int = 5):
         start_time = time.time()
         embedding = await self.get_embedding(query_text)
         
-        sql = f"""
-        USE NS {SURREAL_NS} DB {SURREAL_DB};
-        SELECT content, 
-               filename, 
-               metadata, 
-               kb_id, 
-               authority, 
-               timestamp,
-               vector::distance::euclidean(embedding, $emb) AS raw_dist,
-               (
-                 (vector::distance::euclidean(embedding, $emb) * 10.0) 
-                 - (authority * 2.0)
-                 - (math::max([0, (time::now() - timestamp).days() / 365.0]) * 0.5)
-               ) AS score
-        FROM chunk 
-        WHERE kb_id = $kb
-        ORDER BY score ASC
-        LIMIT $limit;
-        """
-        params = {
-            "emb": embedding,
-            "kb": kb_id,
-            "limit": limit
-        }
+        # 1. Run Parallel Searches (Ensemble)
+        vector_task = self._run_vector_search(embedding, kb_id, limit * 2) # Fetch more for fusion
+        keyword_task = self._run_keyword_search(query_text, kb_id, limit * 2)
         
-        try:
-            results = await self.execute_surreal_query(sql, params)
-            if isinstance(results, list) and len(results) > 0:
-                # Last statement result
-                data = results[-1].get("result", [])
-                
-                # Filter out None results (if any)
-                if data is None: data = []
-                
-                # Calculate Audit Metrics
-                if data:
-                    # Ensure 'score' exists before checking max
-                    best_score = max([d.get("score", 0) for d in data]) if "score" in data[0] else 0
-                    logger.info(f"QUERY_STATS: Found {len(data)} chunks. Best Vector Score: {best_score:.4f}")
-                    
-                    # --- CLOUD RE-RANKING (GPU) ---
-                    try:
-                        from agent_runner.modal_tasks import rerank_search_results, has_modal
-                        if has_modal and len(data) > 1:
-                            logger.info("RERANK: Sending candidates to Cloud GPU...")
-                            candidates = [d.get("content", "") for d in data]
-                            
-                            # Remote call
-                            ranked_indices = rerank_search_results.remote(query_text, candidates)
-                            # Returns list of (original_index, new_score)
-                            
-                            # Re-construct data in new order
-                            reranked_data = []
-                            for idx, score in ranked_indices:
-                                item = data[idx]
-                                item["score"] = score # Update score with cross-encoder score
-                                item["reranked"] = True
-                                reranked_data.append(item)
-                                
-                            data = reranked_data
-                            logger.info(f"RERANK: Successfully re-ordered {len(data)} results.")
-                    except Exception as re_err:
-                        if "Modal not configured" not in str(re_err) and "No module named" not in str(re_err):
-                            logger.warning(f"Re-ranking failed: {re_err}")
-                        pass
-                    # -----------------------------
-                    
-                else:
-                    logger.info("QUERY_STATS: No relevant chunks found.")
-
-                # Update metrics
-                elapsed = time.time() - start_time
-                self.metrics["total_searches"] += 1
-                current_avg = self.metrics.get("avg_search_time", 0.0)
-                self.metrics["avg_search_time"] = (current_avg * 0.9) + (elapsed * 0.1)
-
-                return data
+        vector_res, keyword_res = await asyncio.gather(vector_task, keyword_task)
+        
+        logger.info(f"RAG ENSEMBLE: Vector found {len(vector_res)}, Keyword found {len(keyword_res)}")
+        
+        # 2. Fuse Results (RRF)
+        data = self._reciprocal_rank_fusion(vector_res, keyword_res)
+        data = data[:limit] # Trim to final limit
+        
+        if data:
+             # Ensure 'score' exists before checking max
+            best_score = max([d.get("score", 0) for d in data]) if "score" in data[0] else 0
+            logger.info(f"QUERY_STATS: Fused {len(data)} results. Best RRF Score: {best_score:.4f}")
             
-            # HYBRID FALLBACK: If vector search is empty/poor, try exact keyword matching
-            logger.info(f"HYBRID FALLBACK: Vector search found no high-confidence matches. Trying keyword search for '{query_text}'...")
-            keyword_sql = """
-            USE NS $ns DB $db;
-            SELECT *, 1.0 AS score FROM chunk 
-            WHERE kb_id = $kb AND content CONTAINS $q
-            LIMIT $limit;
-            """
-            params["q"] = query_text
+            # --- CLOUD RE-RANKING (GPU) ---
+            try:
+                from agent_runner.modal_tasks import rerank_search_results, has_modal
+                if has_modal and len(data) > 1:
+                    logger.info("RERANK: Sending candidates to Cloud GPU...")
+                    candidates = [d.get("content", "") for d in data]
+                    
+                    # Remote call
+                    ranked_indices = rerank_search_results.remote(query_text, candidates)
+                    # Returns list of (original_index, new_score)
+                    
+                    # Re-construct data in new order
+                    reranked_data = []
+                    for idx, score in ranked_indices:
+                        item = data[idx]
+                        item["score"] = score # Update score with cross-encoder score
+                        item["reranked"] = True
+                        reranked_data.append(item)
+                        
+                    data = reranked_data
+                    logger.info(f"RERANK: Successfully re-ordered {len(data)} results.")
+            except Exception as re_err:
+                if "Modal not configured" not in str(re_err) and "No module named" not in str(re_err):
+                    logger.warning(f"Re-ranking failed: {re_err}")
+                pass
+            # -----------------------------
+        else:
+             logger.info("QUERY_STATS: No relevant chunks found (Vector + Keyword).")
+
+        # Update metrics
+        elapsed = time.time() - start_time
+        self.metrics["total_searches"] += 1
+        current_avg = self.metrics.get("avg_search_time", 0.0)
+        self.metrics["avg_search_time"] = (current_avg * 0.9) + (elapsed * 0.1)
+
+        return data
             
             r = await self.client.post(self.sql_url, content=prefix + keyword_sql, auth=self.auth, headers=self.headers)
             if r.status_code == 200:
