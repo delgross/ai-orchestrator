@@ -724,6 +724,28 @@ class AgentEngine:
                          # Preserve Worker's draft in case both Finalizer and Fallback fail
                         worker_draft = messages.pop() if messages else None
                         await self._handle_fallback(messages, active_tools, worker_draft)
+            
+            # [FEATURE-9] TELEMETRY: Log Selection Precision
+            # We track how efficient the Maître d' was.
+            # Precision = (Tools Used / Tools Provided)
+            if message.get("tool_calls"):
+                used_count = len(message["tool_calls"])
+                provided_count = len(active_tools)
+                precision = used_count / provided_count if provided_count > 0 else 0
+                
+                track_event(
+                    event="tool_selection_quality",
+                    message=f"Selection Precision: {precision:.2f} ({used_count}/{provided_count})",
+                    severity=EventSeverity.INFO,
+                    category=EventCategory.METRIC,
+                    component="engine",
+                    metadata={
+                        "provided_count": provided_count,
+                        "used_count": used_count,
+                        "precision": precision,
+                        "intent": "feature_9_maitre_d"
+                    }
+                )
 
                 # Store episode before returning
                 if request_id:
