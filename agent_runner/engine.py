@@ -595,7 +595,7 @@ class AgentEngine:
             f"{env_instructions}\n"
             f"{service_alerts}\n"
             "You are a helpful, intelligent assistant. Engage naturally with the user.\n"
-            "When you perform actions (like searching or ingesting), explicitly confirm the outcome to the user. Do not simply return raw data or remain silent.\n"
+            "When you use a tool, weave the result or confirmation naturally into your answer. Avoid robotic 'I have done X' statements unless necessary for clarity. Be concise.\n"
             "Use the tools provided to you to be the most helpful assistant possible."
             f"{memory_facts}"
             f"{files_info}"
