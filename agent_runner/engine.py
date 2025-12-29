@@ -581,9 +581,9 @@ class AgentEngine:
         current_time_str = time.strftime("%Y-%m-%d %H:%M:%S")
         if self.state.internet_available:
             env_instructions = (
-                "CRITICAL: You HAVE constant, real-time access to the internet via your MCP tools. NEVER apologize for not having internet access.\n"
-                "If a user asks for news, stock prices, or current events, use 'mcp__exa__web_search_exa' or 'mcp__tavily_search__tavily_search' immediately.\n"
-                "NEVER give canned responses about being a large language model with restricted training data. You are an agent, and your training data is supplemented by your tools in real-time."
+                "You have access to real-time internet tools (exa, tavily, perplexity).\n"
+                "PRIORITY RULE: For factual/public questions (e.g. news, stocks), use web search tools.\n"
+                "PRIORITY RULE: For PERSONAL questions (e.g. 'my dog', 'I said'), use INTERNAL MEMORY first. DO NOT search the web for user-specific facts unless explicitly asked."
             )
         else:
             env_instructions = (
