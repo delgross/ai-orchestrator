@@ -213,10 +213,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (statsResp.ok) {
             const data = await statsResp.json();
             const metrics = data.metrics || {};
-            document.getElementById('metric-requests').textContent = metrics.completed_requests || metrics.requests || 0;
-            document.getElementById('metric-latency').textContent = `${Math.round(metrics.avg_latency || 0)}ms`;
-            document.getElementById('metric-cache').textContent = `${((metrics.cache_hit_rate || 0) * 100).toFixed(1)}%`;
-            document.getElementById('metric-errors').textContent = `${((metrics.error_rate || 0) * 100).toFixed(1)}%`;
+            const efficiency = metrics.efficiency || {};
+
+            document.getElementById('metric-requests').textContent = metrics.completed_requests_1min || metrics.completed_requests || metrics.requests || 0;
+            document.getElementById('metric-latency').textContent = `${Math.round(metrics.avg_response_time_1min || metrics.avg_latency || 0)}ms`;
+            document.getElementById('metric-cache').textContent = `${((efficiency.cache_hit_rate || metrics.cache_hit_rate || 0) * 100).toFixed(1)}%`;
+            document.getElementById('metric-errors').textContent = `${((efficiency.error_rate_1min || metrics.error_rate_1min || metrics.error_rate || 0) * 100).toFixed(1)}%`;
         }
     }
 
@@ -499,6 +501,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Config Logic ---
     async function fetchConfigFiles() {
         const sel = document.getElementById('config-file-selector');
+        if (!sel) return;
         sel.innerHTML = '<option value="" disabled selected>Select a file...</option>';
 
         const resp = await fetch('/admin/config/files');
@@ -531,7 +534,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    document.getElementById('btn-save-config').addEventListener('click', async () => {
+    document.getElementById('btn-save-config')?.addEventListener('click', async () => {
         if (!state.editorPath) return;
         const resp = await fetch('/admin/config/write', {
             method: 'POST',

@@ -18,37 +18,27 @@ Refactored the weather task into a proper module.
 - Added a `register_weather_task()` helper for easy integration.
 
 ### 3. Main Entrypoint: [main.py](file:///Users/bee/Sync/Antigravity/ai/agent_runner/main.py) [UPDATED]
-Updated `main.py` to use the shared state and engine from the `agent_runner` shim. This ensures that background tasks and the FastAPI app are working with the exact same instances.
+Updated `main.py` to:
+- Use shared `state` and `engine` instances from the `agent_runner` shim.
+- Explicitly register the `weather_update` task during the startup sequence.
 
 ### 4. Background Tasks: [background_tasks.py](file:///Users/bee/Sync/Antigravity/ai/agent_runner/background_tasks.py) [FIXED]
 - Resolved Mypy `truthy-function` errors by changing implicit boolean checks on functions to explicit `is not None` checks.
 - Added missing type annotations for the `func` argument in the `Task` dataclass.
 
-### 5. Service & Tool Fixes
-#### [ollama_server.py](file:///Users/bee/Sync/Antigravity/ai/agent_runner/ollama_server.py)
-- Fixed an incompatible type assignment for `request_id`.
-
-#### [system_control_server.py](file:///Users/bee/Sync/Antigravity/ai/agent_runner/system_control_server.py)
-- Fixed imports for `yaml` and `mcp` by adding `type: ignore`.
-- Restored method signatures that were accidentally mangled.
-
-#### [router/config.py](file:///Users/bee/Sync/Antigravity/ai/router/config.py)
-- Added missing type annotation for `ollama_model_options`.
+### 5. Service Orchestration: [restart_services.sh](file:///Users/bee/Sync/Antigravity/ai/restart_services.sh) [UPDATED]
+- Improved the health check logic to explicitly request JSON, avoiding redirect issues.
+- Increased the startup delay for the Agent Runner to 5 seconds to ensure full initialization before verification.
 
 ## Verification Results
 
+### System Health
+- **Router (Port 5455)**: Online and responding with JSON health status.
+- **Agent Runner (Port 5460)**: Online and successfully discovered 15+ MCP servers.
+- **Weather Task**: Verified as "Started" in the system logs.
+
 ### Import Resolution
-All `NameError` and `ImportError` issues in the following files have been addressed:
-- `weather_task_implementation.py`
-- `task_loader.py`
-- `task_factory.py`
-- `main.py`
-
-### Type Safety
-Mypy errors related to `None` values, incompatible assignments, and untyped imports have been cleared or suppressed with `type: ignore` where appropriate for third-party libraries.
-
-### System Consistency
-By centralizing `state` and `engine` in the `agent_runner` shim, the system now maintains a consistent internal state across all components.
+All `NameError` and `ImportError` issues have been cleared. The system maintains a consistent internal state across all background processes.
 
 render_diffs(file:///Users/bee/Sync/Antigravity/ai/agent_runner/agent_runner.py)
 render_diffs(file:///Users/bee/Sync/Antigravity/ai/agent_runner/weather_task_implementation.py)

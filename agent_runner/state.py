@@ -40,9 +40,9 @@ class AgentState:
         self._load_config_file()
 
     def _load_config_file(self):
-        config_path = Path("ai/system_config.json")
+        config_path = Path("system_config.json")
         if not config_path.is_absolute():
-            config_path = Path(os.getcwd()) / "ai" / "system_config.json"
+            config_path = Path(os.getcwd()) / "system_config.json"
         
         if config_path.exists():
             try:

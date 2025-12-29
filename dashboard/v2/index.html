@@ -22,7 +22,7 @@
             <div class="logo-text">?</div>
             <h1>QUESTIONABLE INSIGHT</h1>
             <div id="clock" class="clock"
-                style="margin-left: 20px; font-family: 'JetBrains Mono'; font-size: 0.9rem; color: var(--text-muted);">
+                style="font-family: 'JetBrains Mono'; font-size: 0.9rem; color: var(--text-muted);">
                 00:00:00</div>
         </div>
         <div class="status-groups">
@@ -408,11 +408,21 @@
                     <!-- File Viewer (Read Only reference) -->
                     <div class="card glass" style="grid-column: span 1;">
                         <div class="card-header">
-                            <h3>Current Config (Read-Only)</h3>
-                            <button class="action-btn sm" onclick="loadConfigFile()">🔄 Refresh View</button>
+                            <h3>File Manager</h3>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <select id="config-file-selector" class="config-select" style="max-width: 150px;">
+                                    <option value="" disabled selected>Select...</option>
+                                </select>
+                                <button class="action-btn sm" id="btn-save-config" title="Save File to Disk">
+                                    <span class="icon">💾</span> Save
+                                </button>
+                                <button class="action-btn sm" onclick="loadConfigFile()" title="Reload from Disk">
+                                    <span class="icon">🔄</span>
+                                </button>
+                            </div>
                         </div>
-                        <textarea id="config-editor" class="code-editor mono" readonly
-                            style="height: 400px; opacity: 0.8; background: #111;"
+                        <textarea id="config-editor" class="code-editor mono"
+                            style="height: 400px; opacity: 0.9; background: #111;"
                             placeholder="Loading config..."></textarea>
                     </div>
                 </div>

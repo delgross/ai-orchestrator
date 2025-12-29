@@ -388,9 +388,9 @@ async def update_models(config: Dict[str, str] = Body(...)):
 
     # Save Persistence
     try:
-        config_path = Path("ai/system_config.json")
+        config_path = Path("system_config.json")
         if not config_path.is_absolute():
-            config_path = Path(os.getcwd()) / "ai" / "system_config.json"
+            config_path = Path(os.getcwd()) / "system_config.json"
         
         with open(config_path, "w") as f:
             json.dump({
