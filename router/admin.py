@@ -425,3 +425,14 @@ async def get_budget():
         "last_reset": b.last_reset,
         "percent_used": (b.current_spend / max(0.01, b.daily_limit_usd)) * 100
     }
+
+@router.get("/config/yaml")
+async def get_config_yaml():
+    """Read config.yaml content."""
+    import os
+    # Assuming CONFIG_FILE is global or we find it
+    config_path = os.path.expanduser("~/Sync/Antigravity/ai/config/config.yaml") 
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            return {"ok": True, "content": f.read()}
+    return {"ok": False, "error": "File not found"}

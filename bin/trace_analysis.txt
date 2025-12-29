@@ -1,0 +1,9 @@
+2025-12-28 20:04:29 [INFO] agent_runner: REQ [5e44d611] Agent Execution: Model='agent:mcp'
+2025-12-28 20:04:29 [INFO] agent_runner: DEBUG: Internal Query Gen. History=2. Last Role=user
+2025-12-28 20:04:30 [INFO] agent_runner: Query Refinement: 'Please add this MCP configuration:
+
+https://github...' -> 'MCP configuration for GitHub URL "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"' (749.77ms)
+2025-12-28 20:04:30 [INFO] agent_runner: Memory Retrieval took 123.04ms
+2025-12-28 20:05:02 [ERROR] agent_runner: Execution error in tool_mcp_proxy for playwright::browser_navigate: Separator is found, but chunk is longer than limit
+2025-12-28 20:05:08 [INFO] agent_runner: Finalizer Handover: openai:gpt-4o-mini -> openai:gpt-5.2
+2025-12-28 20:05:12 [INFO] agent_runner: Storing request 5e44d611 with 21 messages

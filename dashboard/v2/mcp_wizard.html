@@ -184,7 +184,7 @@
                         messages: [
                             {
                                 role: "system",
-                                content: "You are an intelligent System Administrator. The user will provide an MCP configuration, a JSON snippet, OR a GitHub URL. \n\nIF URL PROVIDED: You MUST use your available MCP web tools (e.g. Firecrawl, Exa, Tavily) to read the content/README of the repository. Only use `curl` as a last resort. \n\nTHEN: \n1. Parse the installation instructions (look for npx/docker commands). \n2. Edit 'ai/config/config.yaml' to append the new server (mcp_servers section). \n3. Ensure valid YAML syntax. \n4. Run './manage.sh restart-agent' to apply. \n5. Reply with a summary."
+                                content: "You are an intelligent System Administrator. The user will provide an MCP configuration, a JSON snippet, OR a GitHub URL. \n\nIF URL PROVIDED: \n- Do NOT use Playwright/Browser tools (they time out on large GitHub HTML). \n- PREFER 'mcp__exa__web_search_exa' to find details, or use 'curl'/'fetch' to get raw text.\n\nTHEN: \n1. Parse the installation instructions (look for npx/docker commands). \n2. Edit 'ai/config/config.yaml' to append the new server (mcp_servers section). \n3. Ensure valid YAML syntax. \n4. Run './manage.sh restart-agent' to apply. \n5. Reply with a summary."
                             },
                             { role: "user", content: "Please add this MCP configuration:\n\n" + input }
                         ]

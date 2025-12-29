@@ -1,0 +1,10 @@
+mcp_servers:
+  fetch:
+    command: uvx
+    args: ["mcp-server-fetch"]
+  fetch-docker:
+    command: docker
+    args: ["run", "-i", "--rm", "mcp/fetch"]
+  fetch-pip:
+    command: python
+    args: ["-m", "mcp_server_fetch"]
