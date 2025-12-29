@@ -871,19 +871,19 @@ async function refreshCost() {
     try {
         const response = await fetch('/admin/budget', { headers: { 'Authorization': getAuthToken() } });
         const data = await response.json();
-        
+
         if (data.ok) {
             const spend = data.current_spend.toFixed(4);
             const limit = data.daily_limit_usd.toFixed(2);
             const percent = data.percent_used.toFixed(1);
-            
+
             document.getElementById('costDisplay').innerText = '$' + spend;
             document.getElementById('limitDisplay').innerText = 'Limit: $' + limit;
             document.getElementById('percentDisplay').innerText = percent + '%';
-            
+
             const bar = document.getElementById('costBar');
             bar.style.width = Math.min(100, data.percent_used) + '%';
-            
+
             if (data.percent_used > 90) bar.style.background = 'var(--accent-warn)';
             else if (data.percent_used > 100) bar.style.background = 'var(--accent-error)';
             else bar.style.background = 'var(--success)';
@@ -910,30 +910,39 @@ async function runSmartConfig() {
 
     const btn = document.getElementById('btn-smart-config');
     const log = document.getElementById('smart-config-log');
-    
+
     btn.disabled = true;
     btn.innerHTML = "🤖 Processing...";
     log.innerText = "🚀 Asking Agent to edit config... (This takes ~30s)\n";
-    
+
     try {
         const response = await fetch('/v1/chat/completions', {
             method: 'POST',
-            headers: { 
+            headers: {
                 'Content-Type': 'application/json',
-                'Authorization': getAuthToken() 
+                'Authorization': getAuthToken()
             },
             body: JSON.stringify({
                 model: "agent:mcp",
                 messages: [
                     {
                         role: "system",
-                        content: "You are the Antigravity Config Manager. You must edit 'ai/config/config.yaml'. \n1. Read the file. \n2. Apply the user's requested changes. \n3. Write the file back. \n4. Run './manage.sh restart-agent' to apply changes. \n5. Reply with a summary of changes."
+                        content: `You are the Antigravity Config Manager. You must edit 'ai/config/config.yaml'.
+                        
+                        SAFETY RULES:
+                        1. NEVER use 'write_to_file' to overwrite the file. It causes data loss.
+                        2. ALWAYS use 'replace_file_content' to make surgical edits.
+                        3. Process:
+                           a. Read 'ai/config/config.yaml'.
+                           b. Identify the exact block to change.
+                           c. Use 'replace_file_content' to swap ONLY that block.
+                           d. Run './manage.sh restart-agent'.`
                     },
                     { role: "user", content: "Instruction: " + input }
                 ]
             })
         });
-        
+
         const data = await response.json();
         if (data.choices && data.choices[0]) {
             log.innerText += "\n✅ Done! Agent says:\n" + data.choices[0].message.content;

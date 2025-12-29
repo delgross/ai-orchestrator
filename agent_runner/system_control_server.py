@@ -243,6 +243,51 @@ class SystemControlServer:
             except Exception as e:
                 return {"error": str(e)}
 
+    async def add_mcp_server(self, name: str, config: dict):
+        """Add or update an MCP server configuration safely."""
+        import yaml
+        config_path = WORKSPACE_ROOT / "config" / "config.yaml"
+        if not config_path.exists():
+            return {"error": f"Config not found at {config_path}"}
+            
+        try:
+            with open(config_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+            
+            if "mcp_servers" not in data:
+                data["mcp_servers"] = {}
+                
+            data["mcp_servers"][name] = config
+            
+            with open(config_path, "w") as f:
+                yaml.dump(data, f, sort_keys=False, indent=2)
+                
+            return {"ok": True, "message": f"Added server '{name}' to config.yaml"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def remove_mcp_server(self, name: str):
+        """Remove an MCP server configuration."""
+        import yaml
+        config_path = WORKSPACE_ROOT / "config" / "config.yaml"
+        if not config_path.exists():
+            return {"error": f"Config not found at {config_path}"}
+            
+        try:
+            with open(config_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+            
+            if "mcp_servers" in data and name in data["mcp_servers"]:
+                del data["mcp_servers"][name]
+                
+                with open(config_path, "w") as f:
+                    yaml.dump(data, f, sort_keys=False, indent=2)
+                return {"ok": True, "message": f"Removed server '{name}'"}
+            else:
+                return {"error": f"Server '{name}' not found"}
+        except Exception as e:
+            return {"error": str(e)}
+
 async def main():
     server = Server("system-control")
     controller = SystemControlServer()
@@ -256,6 +301,8 @@ async def main():
             Tool(name="trigger_maintenance", description="Trigger 'backup' or 'consolidation' tasks.", inputSchema={"type":"object","properties":{"type":{"type":"string","enum":["backup","consolidation"]}},"required":["type"]}),
             Tool(name="speak_text", description="Audio Output: Speak text aloud on the host machine using macOS or OpenAI.", inputSchema={"type":"object","properties":{"text":{"type":"string"},"provider":{"type":"string","enum":["default","macos","openai"],"default":"default"},"voice":{"type":"string","default":""}},"required":["text"]}),
             Tool(name="set_voice_preference", description="Configure default voice provider (macos/openai).", inputSchema={"type":"object","properties":{"provider":{"type":"string","enum":["macos","openai"]},"voice":{"type":"string","default":"alloy"}},"required":["provider"]}),
+            Tool(name="add_mcp_server", description="Safely add/update an MCP server in config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"},"config":{"type":"object"}},"required":["name","config"]}),
+            Tool(name="remove_mcp_server", description="Safely remove an MCP server from config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
         ]
 
     @server.call_tool()
@@ -273,6 +320,10 @@ async def main():
                 res = await controller.speak_text(**args)
             elif name == "set_voice_preference":
                 res = await controller.set_voice_preference(**args)
+            elif name == "add_mcp_server":
+                res = await controller.add_mcp_server(**args)
+            elif name == "remove_mcp_server":
+                res = await controller.remove_mcp_server(**args)
             else:
                 raise ValueError(f"Unknown tool: {name}")
                 
