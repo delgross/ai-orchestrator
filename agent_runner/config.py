@@ -118,3 +118,29 @@ def load_agent_runner_limits(state: AgentState) -> None:
                         state.max_tool_steps = int(limits.get("max_tool_steps", state.max_tool_steps))
         except Exception as e:
             logger.error(f"Failed to load config.yaml for limits: {e}")
+
+async def save_mcp_to_config(new_servers: Dict[str, Any]) -> bool:
+    """Save/Merge new MCP servers into config.yaml."""
+    config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+    if not config_path.exists():
+        logger.error(f"config.yaml not found at {config_path}")
+        return False
+        
+    try:
+        with open(config_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+            
+        if "mcp_servers" not in data:
+            data["mcp_servers"] = {}
+            
+        # Merge
+        for name, cfg in new_servers.items():
+            data["mcp_servers"][name] = cfg
+            
+        with open(config_path, "w") as f:
+            yaml.dump(data, f, sort_keys=False, indent=2)
+            
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save MCP to config.yaml: {e}")
+        return False
