@@ -105,3 +105,79 @@ class AgentState:
         if self.http_client:
             await self.http_client.aclose()
             self.http_client = None
+
+    async def add_mcp_server(self, name: str, config: Dict[str, Any]) -> None:
+        """Dynamically add or update an MCP server at runtime."""
+        from agent_runner.transports.stdio import get_or_create_stdio_process, initialize_stdio_process
+        
+        # 1. Update In-Memory State
+        self.mcp_servers[name] = config
+        
+        # 2. Persist to config.yaml (so it survives restart)
+        try:
+            import yaml
+            config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    data = yaml.safe_load(f) or {}
+                
+                if "mcp_servers" not in data:
+                    data["mcp_servers"] = {}
+                
+                # Normalize command/args for storage if needed, but usually we store as is
+                data["mcp_servers"][name] = config
+                
+                with open(config_path, "w") as f:
+                    yaml.dump(data, f, default_flow_style=False)
+        except Exception as e:
+            print(f"Failed to persist MCP server '{name}': {e}")
+
+        # 3. If it's a STDIO server, try to warm it up immediately (Optional but good for feedback)
+        if config.get("type") == "stdio":
+            # Just try to get process, it will auto-start
+            try:
+                proc = await get_or_create_stdio_process(self, name, config["cmd"], config.get("env", {}))
+                if proc:
+                    await initialize_stdio_process(self, name, proc)
+            except Exception as e:
+                print(f"Failed to warm/init new MCP server '{name}': {e}")
+    
+    async def remove_mcp_server(self, name: str) -> bool:
+        """Dynamically remove an MCP server at runtime."""
+        if name not in self.mcp_servers:
+            return False
+            
+        # 1. Terminate Process if STDIO
+        if name in self.stdio_processes:
+            try:
+                process = self.stdio_processes[name]
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    process.kill()
+                
+                del self.stdio_processes[name]
+            except Exception as e:
+                print(f"Error terminating MCP server '{name}': {e}")
+                
+        # 2. Update In-Memory State
+        del self.mcp_servers[name]
+        
+        # 3. Persist to config.yaml
+        try:
+            import yaml
+            config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    data = yaml.safe_load(f) or {}
+                
+                if "mcp_servers" in data and name in data["mcp_servers"]:
+                    del data["mcp_servers"][name]
+                    
+                    with open(config_path, "w") as f:
+                        yaml.dump(data, f, default_flow_style=False)
+        except Exception as e:
+            print(f"Failed to persist MCP removal '{name}': {e}")
+            
+        return True

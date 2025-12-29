@@ -62,7 +62,13 @@ This document logs identified problems and test failures discovered during the s
 - **Vision Cost Safety**: [x] FIXED (Paid remote fallbacks for vision analysis removed from automated ingestion).
 - **Persistent Deferral**: [x] FIXED (Failed night shift tasks now return to `/deferred` instead of `/review`, ensuring they wait for the next free window).
 - **Modal Offloading**: [x] VERIFIED (Automated tasks exclusively use Modal or Local fallbacks; paid LLMs reserved for high-value reasoning).
-### 11. Plumbing & Interconnects (CLEAR)
+
+### 11. Observability & Debugging (Active)
+- **Deep Circuit Tracking**: [x] ENHANCED (Circuit breakers now log specific error messages, e.g., "Connection Timeout", not just failure counts).
+- **Unified Health Alerts**: [x] INTEGRATED (Tripped breakers now trigger immediate critical alerts via UnifiedTracker).
+- **Error Visibility**: [x] VERIFIED (Admin API `/admin/circuit-breaker/status` now returns `last_error` and `last_error_time` for instant debugging).
+
+### 12. Plumbing & Interconnects (CLEAR)
 - **Network Pipes**: [x] VERIFIED (Router ↔ Agent ↔ RAG ↔ DB all reporting 200 OK/Healthy).
 - **Leak Detection**: [x] VERIFIED (Log sizes stable, no zombie processes, handle counts normal).
 - **Blockage Scan**: [x] VERIFIED (Ingestion queues flowing; deferral logic active for 1 AM shift).

@@ -240,9 +240,40 @@ class NotificationManager:
             print(f"[{notification.level.value.upper()}] {notification.title}: {notification.message}")
         
         elif channel == NotificationChannel.WEBHOOK and self.webhook_url:
-            # TODO: Implement webhook sending (future enhancement)
-            # Would send HTTP POST to self.webhook_url with notification payload
-            pass
+            try:
+                import httpx
+                # Fire and forget webhook
+                payload = {
+                    "level": notification.level.value,
+                    "title": notification.title,
+                    "message": notification.message,
+                    "category": notification.category,
+                    "source": notification.source,
+                    "timestamp": notification.timestamp,
+                    "metadata": notification.metadata
+                }
+                # Using a short timeout to prevent blocking
+                # Ideally this should be async, but this method internal is sync currently.
+                # In a full async loop we'd use create_task.
+                try:
+                    # Quick synchronous hack or better: fire task if loop running
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            async def _async_post():
+                                async with httpx.AsyncClient(timeout=5.0) as client:
+                                    await client.post(self.webhook_url, json=payload)
+                            loop.create_task(_async_post())
+                        else:
+                            # Fallback for sync contexts
+                            httpx.post(self.webhook_url, json=payload, timeout=5.0)
+                    except RuntimeError:
+                         httpx.post(self.webhook_url, json=payload, timeout=5.0)
+                except Exception as e:
+                    logger.warning(f"Failed to send webhook: {e}")
+
+            except ImportError:
+                logger.warning("httpx not installed, cannot send webhook")
         
         elif channel == NotificationChannel.DASHBOARD:
             # Dashboard notifications are stored and retrieved via API

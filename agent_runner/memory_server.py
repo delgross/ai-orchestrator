@@ -129,6 +129,41 @@ class MemoryServer:
 
 
 
+    async def correct_fact(self, entity: str, relation: str, target: str, correction: str):
+        """
+        Explicitly correct a fact. 
+        1. Finds any facts matching the entity/relation but with the OLD target.
+        2. Penalizes their confidence (set to 0.1).
+        3. Stores the NEW target with high confidence (0.95).
+        """
+        await self.ensure_connected()
+        if not self.initialized: return {"ok": False, "error": "DB not connected"}
+        
+        try:
+            # 1. Penalize old facts (Constraint: Same entity, Same relation, Different target)
+            # This invalidates "Sky is Green" when we learn "Sky is Blue"
+            penalize_sql = """
+            BEGIN TRANSACTION;
+            UPDATE fact SET confidence = 0.1, context = string::concat(context, ' [CORRECTED]') 
+            WHERE entity = $e 
+            AND relation = $r 
+            AND target != $new_target 
+            AND confidence > 0.1;
+            COMMIT TRANSACTION;
+            """
+            await self._execute_query(penalize_sql, {
+                "e": entity,
+                "r": relation,
+                "new_target": correction
+            })
+            
+            # 2. Store new fact
+            return await self.store_fact(entity, relation, correction, context="User Correction", confidence=0.95)
+            
+        except Exception as e:
+            log(f"Failed to correct fact: {e}", "ERROR")
+            return {"ok": False, "error": str(e)}
+
     async def store_fact(self, entity: str, relation: str, target: str, context: Any = "", confidence: float = 1.0):
         """
         Store or update a fact with a 'truth/confidence' score.

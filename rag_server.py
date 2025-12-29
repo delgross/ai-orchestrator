@@ -169,9 +169,7 @@ class RAGServer:
         DEFINE FIELD IF NOT EXISTS authority ON TABLE chunk TYPE number DEFAULT 1.0;
         DEFINE FIELD IF NOT EXISTS timestamp ON TABLE chunk TYPE datetime DEFAULT time::now();
         
-        -- Remove legacy MTREE index if it exists (for migration to HNSW)
-        REMOVE INDEX IF EXISTS chunk_embedding_index ON TABLE chunk;
-
+        -- HNSW Vector Index (Persist unless schema change required)
         DEFINE INDEX IF NOT EXISTS chunk_embedding_index ON TABLE chunk FIELDS embedding HNSW DIMENSION 1024 DIST EUCLIDEAN TYPE F32;
 
         -- Graph Schema
