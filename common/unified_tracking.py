@@ -105,7 +105,6 @@ class UnifiedTracker:
                 from agent_runner.dashboard_tracker import get_dashboard_tracker, DashboardErrorType
                 self._dashboard_tracker = get_dashboard_tracker()
                 # Map categories to dashboard error types
-                from agent_runner.dashboard_tracker import DashboardErrorType
                 self._category_to_dashboard_type = {
                     EventCategory.ERROR: DashboardErrorType.JAVASCRIPT_ERROR,
                     EventCategory.HEALTH: DashboardErrorType.API_ERROR,

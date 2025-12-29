@@ -15,7 +15,7 @@ try:
 except ImportError:
     yaml = None
 
-from agent_runner.task_factory import register_mcp_file_task, create_mcp_file_task
+from agent_runner.task_factory import register_mcp_file_task
 from agent_runner.background_tasks import TaskPriority
 
 logger = logging.getLogger("agent_runner.task_loader")

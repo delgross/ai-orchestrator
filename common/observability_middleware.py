@@ -70,7 +70,6 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
         
         # Also set ContextVar if available (for router logging compatibility)
         try:
-            from contextvars import ContextVar
             # Try to get the router's request_id_var if it exists
             import sys
             router_module = sys.modules.get('router.router')

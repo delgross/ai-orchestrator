@@ -2,8 +2,6 @@ import os
 import time
 import logging
 from pathlib import Path
-from typing import Dict, Any, List
-import httpx
 
 logger = logging.getLogger("agent_runner.rag_ingestor")
 
@@ -257,12 +255,12 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     else:
                         raise ImportError("Modal not configured")
 
-                except Exception as e:
+                except Exception:
                     # FALLBACK: Local PyPDF
                     logger.info(f"Processing PDF locally (Fallback): {file_path.name}")
                     import pypdf
                     import base64
-                    reader = pypdf.PdfReader(file_path)
+                    reader: Any = pypdf.PdfReader(file_path)
                     text = []
                     scanned_images = []
                     
@@ -412,7 +410,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
             
             # Inject Shadow Tags into the content stream invisibly (at the end of the last chunk via RAG server logic if we wanted, 
             # but simpler to just append to the content here so it gets chunked in)
-            if shadow_tags:
+            if shadow_tags and isinstance(payload["content"], str):
                 # We append them to the content so they are part of the vector embedding
                 # We label them as 'Keywords' so the AI reading the chunk knows what they are
                 payload["content"] += f"\n\n[Index Keywords: {', '.join(shadow_tags)}]"

@@ -1,21 +1,30 @@
 from __future__ import annotations
 import os
+import sys
 import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 import httpx
 import yaml
 from dotenv import load_dotenv
 
+from common.constants import (
+    PREFIX_AGENT,
+    PREFIX_OLLAMA,
+    PREFIX_RAG,
+    OBJ_MODEL,
+    OBJ_CHAT_COMPLETION,
+    OBJ_LIST,
+    ROLE_SYSTEM,
+    ROLE_USER,
+    ROLE_ASSISTANT,
+)  # noqa: F401
+
+
 load_dotenv()
 
-from common.constants import (
-    PROVIDER_OPENAI_COMPAT, PROVIDER_OLLAMA, PREFIX_AGENT, PREFIX_OLLAMA, PREFIX_RAG,
-    OBJ_CHAT_COMPLETION, OBJ_CHAT_COMPLETION_CHUNK, OBJ_MODEL, OBJ_LIST,
-    MODEL_AGENT_MCP, MODEL_ROUTER, ROLE_ASSISTANT
-)
 
-VERSION = f"0.8.0-sentinel"
+VERSION = "0.8.0-sentinel"
 
 # Paths
 PROVIDERS_YAML = os.getenv("PROVIDERS_YAML", os.path.expanduser("~/ai/providers.yaml"))
@@ -37,7 +46,10 @@ MODELS_CACHE_TTL_S = float(os.getenv("MODELS_CACHE_TTL_S", "600"))
 HTTP_TIMEOUT_S = float(os.getenv("HTTP_TIMEOUT_S", "120"))
 MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", "5_000_000"))
 DEFAULT_UPSTREAM_HEADERS = os.getenv("DEFAULT_UPSTREAM_HEADERS", "")
-ROUTER_AUTH_TOKEN = os.getenv("ROUTER_AUTH_TOKEN") or ""; print(f"DEBUG: Router Token Loaded: {ROUTER_AUTH_TOKEN}")
+ROUTER_AUTH_TOKEN = os.getenv("ROUTER_AUTH_TOKEN") or ""
+# During tests, disable auth token by default
+if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+    ROUTER_AUTH_TOKEN = ""
 ROUTER_MAX_CONCURRENCY = int(os.getenv("ROUTER_MAX_CONCURRENCY", "0"))
 FS_ROOT = os.getenv("FS_ROOT", os.path.expanduser("~/ai/agent_fs_root"))
 

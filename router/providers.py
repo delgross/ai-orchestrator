@@ -1,12 +1,11 @@
 import os
 import yaml
 import logging
-import httpx
 import time
-from typing import Any, Dict, List, Optional, Tuple, AsyncIterator
+from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
-from router.config import Provider, state, PROVIDERS_YAML, DEFAULT_UPSTREAM_HEADERS, OLLAMA_BASE, PREFIX_OLLAMA, PREFIX_RAG, OBJ_CHAT_COMPLETION, ROLE_ASSISTANT
-from router.utils import join_url, parse_default_headers, merge_headers, estimate_token_count
+from router.config import Provider, state, PROVIDERS_YAML, DEFAULT_UPSTREAM_HEADERS, OLLAMA_BASE, PREFIX_OLLAMA, OBJ_CHAT_COMPLETION, ROLE_ASSISTANT
+from router.utils import join_url, parse_default_headers, merge_headers
 
 logger = logging.getLogger("router.providers")
 
@@ -36,10 +35,12 @@ def load_providers() -> Dict[str, Provider]:
 
     out: Dict[str, Provider] = {}
     for name, cfg in data.items():
-        if not isinstance(cfg, dict): continue
+        if not isinstance(cfg, dict):
+            continue
         ptype = str(cfg.get("type", "openai-compat"))
         base_url = str(cfg.get("base_url", "")).rstrip("/")
-        if not base_url: continue
+        if not base_url:
+            continue
         
         out[str(name)] = Provider(
             name=str(name),
@@ -74,7 +75,8 @@ async def call_ollama_chat(
     if state.ollama_model_options:
         model_opts = state.ollama_model_options.get(model_id, state.ollama_model_options.get("default", {}))
         for k, v in model_opts.items():
-            if k not in options: options[k] = v
+            if k not in options:
+                options[k] = v
             
     if options:
         ollama_body["options"] = options

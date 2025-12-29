@@ -1,6 +1,4 @@
 import requests
-import json
-import os
 
 TOKEN = "9sYBjBLjAHKG8g8ZzzsUeBOvtzgQFHmX7oIeygdpzic"
 URL = "http://127.0.0.1:5455/v1/chat/completions"

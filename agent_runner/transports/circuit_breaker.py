@@ -1,6 +1,5 @@
 import logging
 from typing import Dict, Any, Optional
-from common.logging_utils import log_json_event as _log_json_event
 from agent_runner.state import AgentState
 
 logger = logging.getLogger("agent_runner")

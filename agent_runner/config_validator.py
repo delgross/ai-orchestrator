@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from pathlib import Path
 
 logger = logging.getLogger("agent_runner.config_validator")

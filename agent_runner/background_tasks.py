@@ -18,8 +18,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 from enum import Enum
-from pathlib import Path
-import json
 
 logger = logging.getLogger("agent_runner.background_tasks")
 

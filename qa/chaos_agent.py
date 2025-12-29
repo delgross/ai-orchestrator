@@ -2,10 +2,9 @@ import asyncio
 import httpx
 import json
 import os
-import random
 import time
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import Dict, Any
 
 # CONFIG
 TARGET_URL = "http://127.0.0.1:5455/v1/chat/completions"

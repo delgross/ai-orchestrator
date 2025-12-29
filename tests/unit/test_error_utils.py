@@ -1,4 +1,3 @@
-import pytest
 from common.error_utils import get_error_message, create_error_response, ErrorCode, get_error_suggestions
 
 def test_get_error_message_standard():

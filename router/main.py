@@ -3,11 +3,11 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -17,14 +17,14 @@ import shutil
 from common.logging_setup import setup_logger
 from common.unified_tracking import track_event, EventCategory, EventSeverity
 from common.constants import (
-    PROVIDER_OPENAI_COMPAT, PROVIDER_OLLAMA, PREFIX_AGENT, PREFIX_OLLAMA, PREFIX_RAG,
-    OBJ_CHAT_COMPLETION, OBJ_CHAT_COMPLETION_CHUNK, OBJ_MODEL, OBJ_LIST,
-    MODEL_AGENT_MCP, MODEL_ROUTER, ROLE_ASSISTANT
+    PREFIX_AGENT, PREFIX_OLLAMA, PREFIX_RAG,
+    OBJ_MODEL, OBJ_LIST,
+    MODEL_AGENT_MCP, MODEL_ROUTER
 )
 
 from router.config import state, VERSION, OLLAMA_BASE, AGENT_RUNNER_URL, AGENT_RUNNER_CHAT_PATH, MODELS_CACHE_TTL_S, MAX_REQUEST_BODY_BYTES, FS_ROOT, RAG_BASE
-from router.utils import join_url, sse_line, sanitize_messages, parse_model_string
-from router.middleware import RequestIDMiddleware, require_auth
+from router.utils import join_url, sanitize_messages, parse_model_string
+from router.middleware import require_auth
 from router.providers import load_providers, call_ollama_chat, provider_headers
 from router.rag import call_rag
 from router.agent_manager import check_agent_runner_health, get_agent_models
@@ -73,7 +73,7 @@ async def run_environment_watchdog():
                 r = await state.client.get(f"{AGENT_RUNNER_URL}/health", timeout=1.0)
                 if r.status_code != 200:
                     logger.warning(f"⚠️ Watchdog: Agent Runner returned {r.status_code}")
-            except Exception as e:
+            except Exception:
                 pass # Agent runner offline, logged elsewhere or just retry
 
             # 3. Check RAG Server
@@ -141,7 +141,17 @@ if os.path.exists(dashboard_v2_path):
 app.include_router(admin_router)
 
 @app.get("/")
-async def root():
+async def root(request: Request):
+    # Return JSON health info when client explicitly requests JSON
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept.lower():
+        return {"ok": True, "version": VERSION}
+    # Default: redirect to dashboard UI
+    return RedirectResponse(url="/v2/index.html")
+
+@app.get("/dashboard")
+async def dashboard_redirect():
+    """Redirect /dashboard to the UI index page."""
     return RedirectResponse(url="/v2/index.html")
 
 @app.get("/sw.js")
@@ -167,7 +177,8 @@ async def health(request: Request):
     try:
         r = await state.client.get(f"{OLLAMA_BASE}/api/tags", timeout=2.0)
         ollama_ok = r.status_code < 400
-    except: pass
+    except Exception:
+        pass
     
     agent_ok = await check_agent_runner_health()
     overall_ok = ollama_ok and agent_ok
@@ -227,7 +238,8 @@ async def v1_models(request: Request):
             for m in r.json().get("models", []):
                 name = m.get("name", "")
                 data.append({"id": f"{PREFIX_OLLAMA}:{name}", "object": OBJ_MODEL, "owned_by": "ollama"})
-    except: pass
+    except Exception:
+        pass
 
     # 4. Providers
     for p_name, prov in state.providers.items():
@@ -239,7 +251,8 @@ async def v1_models(request: Request):
                 for m in p_models:
                     m_id = m.get("id", "")
                     data.append({"id": f"{p_name}:{m_id}", "object": OBJ_MODEL, "owned_by": p_name})
-        except: pass
+        except Exception:
+            pass
     
     payload = {"object": OBJ_LIST, "data": data}
     state.models_cache = (time.time(), payload)
@@ -255,7 +268,8 @@ async def embeddings(request: Request):
         raise HTTPException(status_code=413, detail="Request body too large")
 
     body = await request.json()
-    model = body.get("model", ""); print(f"DEBUG: ROUTER Received Model: {model}")
+    model = body.get("model", "")
+    logger.debug(f"ROUTER Received Model: {model}")
     prefix, model_id = parse_model_string(model, default_prefix="")
     
     # 0. Default / Fallback Handling
@@ -264,7 +278,8 @@ async def embeddings(request: Request):
     if not prefix or model == "default":
         logger.info(f"Using default embedding model '{state.default_embedding_model}' for request '{model}'")
         model = state.default_embedding_model
-        prefix, model_id = parse_model_string(model); print(f"DEBUG: Parsed Prefix: {prefix}, ID: {model_id}")
+        prefix, model_id = parse_model_string(model)
+        logger.debug(f"Parsed Prefix: {prefix}, ID: {model_id}")
     
     # Update body to use the stripped model ID
     body["model"] = model_id
@@ -284,7 +299,8 @@ async def embeddings(request: Request):
             # If explicit ollama prefix, fail hard. If implicit, maybe we could try providers? 
             # But let's keep it simple.
             logger.error(f"Ollama embedding failed: {e}")
-            if isinstance(e, HTTPException): raise
+            if isinstance(e, HTTPException):
+                raise
             raise HTTPException(status_code=500, detail=str(e))
 
     # 2. Providers
@@ -305,7 +321,8 @@ async def embeddings(request: Request):
         except Exception as e:
             state.circuit_breakers.record_failure(prefix)
             logger.error(f"Provider {prefix} embedding failed: {e}")
-            if isinstance(e, HTTPException): raise
+            if isinstance(e, HTTPException):
+                raise
             raise HTTPException(status_code=500, detail=str(e))
             
     raise HTTPException(status_code=404, detail=f"Provider not found for embedding model: {model}")
@@ -356,7 +373,7 @@ async def audio_transcriptions(request: Request):
                 
         # 3. Call Upstream
         async with state.client.stream("POST", url, headers=provider_headers(prov), data=data, files=files, timeout=60.0) as r:
-            body = await r.read()
+            body = await r.aread()
             return JSONResponse(json.loads(body), status_code=r.status_code)
             
     except Exception as e:
@@ -374,9 +391,9 @@ async def upload_file(request: Request, file: UploadFile = File(...), purpose: s
     os.makedirs(upload_dir, exist_ok=True)
     
     file_id = f"file-{uuid.uuid4().hex[:12]}"
-    file_ext = os.path.splitext(file.filename)[1]
     # Sanitize filename
-    safe_name = "".join([c for c in file.filename if c.isalnum() or c in "._-"]).strip()
+    orig_name = file.filename or "unknown"
+    safe_name = "".join([c for c in orig_name if c.isalnum() or c in "._-"]).strip()
     stored_name = f"{file_id}_{safe_name}"
     stored_path = os.path.join(upload_dir, stored_name)
     
@@ -525,9 +542,12 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                         try:
                             # Try to parse if it's already JSON
                             err_json = r.json()
-                            if "detail" in err_json: err_msg = err_json["detail"]
-                            elif "error" in err_json: err_msg = err_json["error"]
-                        except: pass
+                            if "detail" in err_json:
+                                err_msg = err_json["detail"]
+                            elif "error" in err_json:
+                                err_msg = err_json["error"]
+                        except Exception:
+                            pass
                         
                         error_obj = {"error": {"message": err_msg, "type": "agent_runner_error", "code": r.status_code}}
                         yield f"data: {json.dumps(error_obj)}\n\n"
@@ -657,16 +677,20 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                         cost = budget.estimate_cost(body.get("model", ""), in_tok, out_tok)
                         if cost > 0:
                             budget.record_usage(prefix, cost)
-                    except: pass
+                    except Exception:
+                        pass
                     
                     return JSONResponse(data)
                 except Exception as e:
                     state.circuit_breakers.record_failure(prefix)
                     logger.error(f"Provider {prefix} non-streaming call failed: {e}")
-                    if isinstance(e, HTTPException): raise
+                    if isinstance(e, HTTPException):
+                        raise
                     raise HTTPException(status_code=500, detail=str(e))
             
     raise HTTPException(status_code=404, detail=f"Provider or model not found: {prefix}:{model_id}")
+
+
 
 @app.get("/stats")
 async def stats(request: Request):

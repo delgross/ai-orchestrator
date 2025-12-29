@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 logger = logging.getLogger("agent_runner.cache_manager")
 

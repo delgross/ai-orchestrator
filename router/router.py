@@ -8,8 +8,8 @@ Internal logic has been moved to:
 - router/utils.py (Helpers)
 """
 
-from router.main import app
-from router.config import state, VERSION
+from router.main import app, state  # noqa: F401
+from router.config import ROUTER_AUTH_TOKEN  # noqa: F401
 
 if __name__ == "__main__":
     import uvicorn

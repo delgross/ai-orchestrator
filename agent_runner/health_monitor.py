@@ -9,7 +9,6 @@ Monitors:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Dict, Any, Optional
@@ -18,11 +17,11 @@ import httpx
 logger = logging.getLogger("agent_runner.health_monitor")
 
 # Notification system
-from common.notifications import notify_health, notify_high, notify_critical
+from common.notifications import notify_health
 
 # Import from agent_runner (will be available at runtime)
 MCP_SERVERS: Dict[str, Any] = {}
-_mcp_circuit_breaker: Dict[str, Dict[str, Any]] = {}
+_mcp_circuit_breaker: Any = None
 GATEWAY_BASE: str = "http://127.0.0.1:5455"
 _http_client: Optional[httpx.AsyncClient] = None
 _state: Optional[Any] = None # Will store AgentState

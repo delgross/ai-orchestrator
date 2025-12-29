@@ -2,7 +2,7 @@ import asyncio
 import time
 import logging
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,17 +13,14 @@ from agent_runner.config import load_mcp_servers, load_agent_runner_limits
 from agent_runner.tasks import internet_check_task, stdio_process_health_monitor
 from agent_runner.background_tasks import get_task_manager, TaskPriority
 from agent_runner.health_monitor import initialize_health_monitor, health_check_task
-from agent_runner.memory_tasks import memory_consolidation_task, memory_backup_task, optimize_memory_task, memory_audit_task
+from agent_runner.memory_tasks import memory_consolidation_task, optimize_memory_task, memory_audit_task
 from agent_runner.rag_ingestor import rag_ingestion_task
 from agent_runner.dashboard_tracker import get_dashboard_tracker, DashboardErrorType
-from common.observability import ComponentType, get_observability
+from common.observability import ComponentType
 from common.observability_middleware import ObservabilityMiddleware
 from common.constants import (
     OBJ_CHAT_COMPLETION,
-    OBJ_MODEL,
-    ROLE_SYSTEM,
-    ROLE_USER,
-    ROLE_ASSISTANT
+    OBJ_MODEL
 )
 from common.logging_setup import setup_logger
 
@@ -170,7 +167,7 @@ async def on_startup():
         idle_only=True
     )
 
-    from agent_runner.maintenance_tasks import code_janitor_task, auto_tagger_task, graph_optimization_task, morning_briefing_task, daily_research_task, stale_memory_pruner_task, visual_sentry_task
+    from agent_runner.maintenance_tasks import graph_optimization_task, morning_briefing_task, daily_research_task, stale_memory_pruner_task, visual_sentry_task
 
     # ... (existing registrations) ...
 
@@ -218,7 +215,6 @@ async def on_startup():
         idle_only=True
     )
 
-    from agent_runner.maintenance_tasks import morning_briefing_task, stale_memory_pruner_task, daily_research_task
     
     task_manager.register(
         name="morning_briefing",

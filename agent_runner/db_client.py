@@ -23,12 +23,12 @@ class DBClient:
     def close(self) -> None:
         self._conn.close()
 
-    def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
+    def execute(self, sql: str, params: Any = ()) -> None:
         cur = self._conn.cursor()
         cur.execute(sql, params)
         self._conn.commit()
 
-    def query(self, sql: str, params: Iterable[Any] = ()) -> List[Tuple]:
+    def query(self, sql: str, params: Any = ()) -> List[Tuple]:
         cur = self._conn.cursor()
         cur.execute(sql, params)
         return cur.fetchall()

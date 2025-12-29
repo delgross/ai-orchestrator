@@ -4,13 +4,11 @@ import logging
 import time
 from typing import Dict, Any
 from agent_runner.state import AgentState
-from common.logging_utils import log_json_event as _log_json_event
-from common.constants import MCP_SCHEME_HTTP, MCP_SCHEME_SSE, MCP_SCHEME_WS, MCP_SCHEME_STDIO, MCP_SCHEME_UNIX
+from common.constants import MCP_SCHEME_HTTP, MCP_SCHEME_SSE, MCP_SCHEME_STDIO
 from agent_runner.transports.http import call_http_mcp
 from agent_runner.transports.sse import call_sse_mcp
 from agent_runner.transports.stdio import get_or_create_stdio_process, initialize_stdio_process
 
-from common.constants import ROLE_TOOL
 from common.unified_tracking import track_event, EventSeverity, EventCategory
 
 logger = logging.getLogger("agent_runner")

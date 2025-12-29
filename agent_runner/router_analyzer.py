@@ -31,8 +31,16 @@ except ImportError:
     # Fallback if unified_tracking not available
     def track_event(*args, **kwargs):
         pass
-    EventCategory = type('EventCategory', (), {'SYSTEM': 'system'})()
-    EventSeverity = type('EventSeverity', (), {'INFO': 'info', 'DEBUG': 'debug'})()
+    class MockEventCategory:
+        SYSTEM = 'system'
+    class MockEventSeverity:
+        INFO = 'info'
+        DEBUG = 'debug'
+        MEDIUM = 'medium'
+        HIGH = 'high'
+        CRITICAL = 'critical'
+    EventCategory = MockEventCategory()
+    EventSeverity = MockEventSeverity()
 
 # Router model configuration
 ROUTER_MODEL = os.getenv("ROUTER_MODEL", "ollama:qwen3:3b")  # Small, fast model
@@ -42,7 +50,7 @@ ROUTER_TIMEOUT = float(os.getenv("ROUTER_TIMEOUT", "5.0"))  # 5 second timeout
 ROUTER_MAX_RETRIES = int(os.getenv("ROUTER_MAX_RETRIES", "2"))  # Max retries for transient failures
 
 # Circuit breaker for router model
-_router_circuit_breaker = {
+_router_circuit_breaker: Dict[str, Any] = {
     "failures": 0,
     "last_failure": 0.0,
     "half_open": False,
@@ -101,6 +109,30 @@ CATEGORY_SYNONYMS = {
     "document": ["convert", "transform", "export"],
     "ollama": ["model", "llm", "ai"],
 }
+
+# Semantic paraphrasing examples for categories
+TOOL_CATEGORY_EXAMPLES = {
+    "web_search": ["find", "search", "who is", "latest news", "current price of", "lookup", "research", "internet search"],
+    "filesystem": ["read", "write", "list", "save", "delete", "file", "folder", "path", "directory"],
+    "code": ["run", "execute", "python", "script", "thinking", "sequential", "logic", "debug"],
+    "browser": ["navigate", "click", "scrape", "screenshot", "form", "web page", "browser"],
+    "memory": ["remember", "recall", "store", "fact", "base", "semantic"],
+    "scraping": ["extract", "parse", "crawl", "structured data"],
+    "automation": ["workflow", "macos", "shortcut", "automate"],
+    "http": ["api", "request", "endpoint", "webhook"],
+    "weather": ["forecast", "temperature", "rain", "sun"],
+    "document": ["pdf", "markdown", "convert", "transform"],
+    "ollama": ["models", "pull", "list models", "embeddings"]
+}
+
+# Negative constraint examples to prevent misclassification
+NEGATIVE_CONSTRAINT_EXAMPLES = [
+    {"query": "read file.txt", "wrong_category": "web_search", "correct_category": "filesystem", "reason": "Query is about local files, not internet search"},
+    {"query": "search for python tutorials", "wrong_category": "code", "correct_category": "web_search", "reason": "Query is a search for information, not code execution"},
+    {"query": "save this to my memory", "wrong_category": "filesystem", "correct_category": "memory", "reason": "Query is about long-term episodic memory, not local files"},
+    {"query": "run a python script", "wrong_category": "automation", "correct_category": "code", "reason": "Explicit code execution should use the code category"},
+    {"query": "what is the weather", "wrong_category": "web_search", "correct_category": "weather", "reason": "Specific weather category exists"},
+]
 
 
 @dataclass

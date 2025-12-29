@@ -1,7 +1,7 @@
 import asyncio
 import httpx
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from common.logging_utils import log_json_event as _log_json_event
 from agent_runner.state import AgentState
 from agent_runner.transports.circuit_breaker import record_mcp_failure, reset_mcp_success

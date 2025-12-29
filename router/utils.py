@@ -1,8 +1,6 @@
 import json
-import time
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException
-from common.error_utils import get_error_message as _get_error_message
 
 def parse_default_headers(env_str: str) -> Dict[str, str]:
     out: Dict[str, str] = {}

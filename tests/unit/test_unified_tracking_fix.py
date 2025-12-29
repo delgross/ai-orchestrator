@@ -1,6 +1,5 @@
 import pytest
-import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from common.unified_tracking import track_event, EventCategory, EventSeverity, get_unified_tracker
 
 @pytest.mark.asyncio

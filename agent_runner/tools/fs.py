@@ -166,7 +166,13 @@ def tool_find_files(state: AgentState, path: str = ".", pattern: Optional[str] =
     base = _safe_path(state, path)
     if not base.exists() or not base.is_dir(): return {"root": str(root), "path": str(base.relative_to(root)), "ok": False, "error": "Path does not exist", "files": []}
     files: List[Dict[str, Any]] = []
-    search_pattern = pattern if pattern else (f"**/*{extension if extension.startswith('.') else f'.{extension}'}" if extension else "**/*")
+    if pattern:
+        search_pattern = pattern
+    elif extension:
+        ext = extension if extension.startswith('.') else f'.{extension}'
+        search_pattern = f"**/*{ext}"
+    else:
+        search_pattern = "**/*"
     for file_path in base.glob(search_pattern):
         if file_path.is_file() and len(files) < max_results:
             files.append({"name": file_path.name, "path": str(file_path.relative_to(root)), "size": file_path.stat().st_size, "modified": file_path.stat().st_mtime})
@@ -187,7 +193,7 @@ def tool_batch_operations(state: AgentState, operations: List[Dict[str, Any]]) -
             else: res = {"ok": False, "error": f"Unknown operation: {op_type}"}
             results.append({"index": i, "operation": op_type, "result": res})
         except Exception as e: results.append({"index": i, "operation": op_type, "result": {"ok": False, "error": str(e)}})
-    success_count = sum(1 for r in results if r["result"].get("ok", False))
+    success_count = sum(1 for r in results if isinstance(r["result"], dict) and r["result"].get("ok", False))
     return {"root": str(state.agent_fs_root), "ok": True, "total": len(operations), "succeeded": success_count, "failed": len(operations) - success_count, "results": results}
 
 def tool_query_static_resources(state: AgentState, query: Optional[str] = None, resource_name: Optional[str] = None, list_all: bool = False, max_content_length: int = 500000) -> Dict[str, Any]:
@@ -203,13 +209,14 @@ def tool_query_static_resources(state: AgentState, query: Optional[str] = None, 
     result = {"ok": True, "resources_dir": str(static_resources_dir.relative_to(root)), "total_resources": len(all_resources)}
     if list_all: result["resources"] = all_resources; return result
     if resource_name:
-        matching = [r for r in all_resources if r["name"] == resource_name or r["name"].lower() == resource_name.lower()]
+        rn_lower = resource_name.lower()
+        matching = [r for r in all_resources if r["name"] == resource_name or str(r["name"]).lower() == rn_lower]
         if not matching: return {"ok": False, "error": f"Resource '{resource_name}' not found", "available_resources": [r["name"] for r in all_resources]}
         resource = matching[0]
         try:
             content = (root / resource["path"]).read_text(encoding="utf-8", errors="replace")
             truncated = len(content) > max_content_length
-            if truncated: content = content[:max_content_length] + f"\n\n... (truncated)"
+            if truncated: content = content[:max_content_length] + "\n\n... (truncated)"
             result.update({"resource": resource, "content": content, "content_length": len(content), "truncated": truncated})
         except Exception as e: return {"ok": False, "error": f"Failed to read resource: {str(e)}", "resource": resource}
         return result
@@ -217,10 +224,10 @@ def tool_query_static_resources(state: AgentState, query: Optional[str] = None, 
         ql = query.lower()
         matching_resources = []
         for r in all_resources:
-            if ql in r["name"].lower(): matching_resources.append(r); continue
+            if ql in str(r["name"]).lower(): matching_resources.append(r); continue
             try:
                 content = (root / r["path"]).read_text(encoding="utf-8", errors="replace")
-                if ql in content.lower():
+                if ql in str(content).lower():
                     idx = content.lower().find(ql)
                     snippet = content[max(0, idx - 100):min(len(content), idx + len(query) + 100)]
                     matching_resources.append({**r, "snippet": snippet})
@@ -229,7 +236,7 @@ def tool_query_static_resources(state: AgentState, query: Optional[str] = None, 
         return result
     result["resources"] = all_resources; return result
 
-_watch_state = {}
+_watch_state: Dict[str, Any] = {}
 def tool_watch_path(state: AgentState, path: str = ".") -> Dict[str, Any]:
     # Placeholder for simple watcher
     root = _ensure_fs_root(state)

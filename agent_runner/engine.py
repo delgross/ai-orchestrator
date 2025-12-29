@@ -1,15 +1,14 @@
 import logging
 import os
 import time
-import uuid
 import json
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 from fastapi import HTTPException
 import httpx
 import asyncio
 
 from agent_runner.state import AgentState
-from common.constants import OBJ_MODEL, ROLE_USER, ROLE_ASSISTANT, ROLE_SYSTEM, ROLE_TOOL
+from common.constants import OBJ_MODEL, ROLE_SYSTEM, ROLE_TOOL
 from common.unified_tracking import track_event, EventSeverity, EventCategory
 from agent_runner.tools import fs as fs_tools
 from agent_runner.tools import mcp as mcp_tools
@@ -214,7 +213,7 @@ class AgentEngine:
         if self.state.fallback_enabled and fallback not in candidates:
             candidates.append(fallback)
             
-        last_error = None
+        last_error: Any = None
         
         headers = {}
         if self.state.router_auth_token:
@@ -258,7 +257,7 @@ class AgentEngine:
                 # 5. Failure -> Record
                 logger.error(f"Model call failed for '{attempt_model}': {e}")
                 self.state.mcp_circuit_breaker.record_failure(attempt_model)
-                last_error = e
+                last_error = str(e)
                 # Continue to next candidate (fallback)
 
         # If we get here, all candidates failed
@@ -270,8 +269,8 @@ class AgentEngine:
         name = fn.get("name")
         args_str = fn.get("arguments") or "{}"
         
-        if name.startswith("mcp__"):
-            parts = name.split("__")
+        if name and str(name).startswith("mcp__"):
+            parts = str(name).split("__")
             if len(parts) >= 3:
                 server = parts[1]
                 tool = "__".join(parts[2:])
@@ -700,10 +699,12 @@ class AgentEngine:
                     tool_call = message["tool_calls"][i]
                     
                     # Handle crash inside tool execution wrapper
-                    if isinstance(result, Exception):
+                    if isinstance(result, BaseException):
                         content = json.dumps({"ok": False, "error": str(result)})
-                    else:
+                    elif isinstance(result, dict):
                         content = json.dumps(result.get("result", result.get("error")))
+                    else:
+                        content = json.dumps(result)
                         
                     messages.append({
                         "role": ROLE_TOOL,
@@ -799,7 +800,7 @@ class AgentEngine:
         # Wait for all
         all_results = await asyncio.gather(fact_task, *rag_tasks, return_exceptions=True)
         
-        fact_res = all_results[0] if not isinstance(all_results[0], Exception) else {"ok": False}
+        fact_res = all_results[0] if not isinstance(all_results[0], BaseException) else {"ok": False}
         rag_results = all_results[1:]
         
         combined_context = f"SEARCH MODE: Hybrid (Domains: {', '.join(target_kbs)})\n\n"

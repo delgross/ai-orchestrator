@@ -11,7 +11,7 @@ This makes it easy to create periodic tasks that:
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 from agent_runner.background_tasks import TaskPriority
 
 logger = logging.getLogger("agent_runner.task_factory")

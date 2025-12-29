@@ -1,13 +1,9 @@
 import asyncio
 import json
-import time
 import logging
-import httpx
-from typing import Dict, Any, Optional
-from common.logging_utils import log_json_event as _log_json_event
+from typing import Dict, Any
 from agent_runner.state import AgentState
 from agent_runner.transports.circuit_breaker import record_mcp_failure, reset_mcp_success
-from common.constants import MCP_SCHEME_SSE
 
 logger = logging.getLogger("agent_runner")
 

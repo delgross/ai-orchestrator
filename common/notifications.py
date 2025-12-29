@@ -13,11 +13,8 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
-from pathlib import Path
-import json
 
 logger = logging.getLogger("agent_runner.notifications")
 
@@ -300,11 +297,11 @@ class NotificationManager:
         total = len(self.notifications)
         unacknowledged = sum(1 for n in self.notifications if not n.acknowledged)
         
-        by_level = {}
+        by_level: Dict[str, int] = {}
         for level in NotificationLevel:
             by_level[level.value] = sum(1 for n in self.notifications if n.level == level)
         
-        by_category = {}
+        by_category: Dict[str, int] = {}
         for notification in self.notifications:
             cat = notification.category
             by_category[cat] = by_category.get(cat, 0) + 1

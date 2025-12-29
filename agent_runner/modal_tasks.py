@@ -1,7 +1,5 @@
 
 import logging
-import json
-import os
 
 # Try importing modal
 try:
@@ -12,8 +10,11 @@ except ImportError:
 
 logger = logging.getLogger("agent_runner.modal")
 
+from typing import Any, Dict, List, Optional
+
 # We define the App. 
 # Important: If Modal is not installed, we create a dummy to prevent import errors.
+app: Any
 if has_modal:
     # We name the app "antigravity-night-shift"
     app = modal.App("antigravity-night-shift")
@@ -98,7 +99,7 @@ if has_modal:
     # 4. Heavy Image Analysis (Cloud Offload)
     # Uses a vision model to describe images with structured metadata
     @app.function(image=image, timeout=300)
-    def cloud_process_image(image_bytes: bytes, prompt: str = None):
+    def cloud_process_image(image_bytes: bytes, prompt: Optional[str] = None):
         """
         Analyzes an image in the cloud.
         Returns JSON-formatted string with:
@@ -115,7 +116,6 @@ if has_modal:
                 "Return JSON keys: 'description', 'objects', 'animals', 'plants' (list of details), 'people', 'camera_data'."
             )
             
-        import base64
         # Real GPU Logic would go here (e.g. Qwen-VL or LLaVA with json enforcement)
         
         # Mock Response for now (until you deploy with actual model code)
@@ -189,7 +189,6 @@ if has_modal:
         """
         Compare two images and identify significant visual anomalies/defects.
         """
-        import base64
         # In real usage:
         # prompt = "Compare Image 1 (Reference) and Image 2 (Current). List mechanical defects, rust, or damage."
         # model.generate([img1, img2], prompt)
@@ -221,15 +220,31 @@ if has_modal:
 else:
     # Dummy mock
     class MockApp:
-        def function(self, *args, **kwargs):
-            def decorator(f):
+        def function(self, *args: Any, **kwargs: Any) -> Any:
+            def decorator(f: Any) -> Any:
                 return f
             return decorator
     app = MockApp()
     
-    def graph_community_detection(*args, **kwargs):
+    # These will be the same functions but without the @app.function decorator
+    def graph_community_detection(nodes: List[Any], edges: List[Any]) -> Dict[str, Any]:
         logger.warning("Modal library not found. Skipping Cloud Graph Processing.")
         return {}
     
-    def cloud_heavy_reasoning(*args, **kwargs):
+    def cloud_heavy_reasoning(context_text: str, query: str) -> Dict[str, Any]:
         return {"result": "Modal not active."}
+    
+    def cloud_process_pdf(file_bytes: bytes, filename: str) -> str:
+        return "Modal not active."
+        
+    def cloud_process_image(image_bytes: bytes, prompt: Optional[str] = None) -> str:
+        return "Modal not active."
+        
+    def rerank_search_results(query: str, candidates: List[str]) -> List[Any]:
+        return []
+        
+    def verify_fact(fact: str, evidence: str) -> Dict[str, Any]:
+        return {"judgment": "NEUTRAL", "confidence": 0.0}
+        
+    def detect_visual_anomaly(reference_bytes: bytes, candidate_bytes: bytes) -> Dict[str, Any]:
+        return {"detected_changes": [], "severity": "NONE", "confidence": 0.0}

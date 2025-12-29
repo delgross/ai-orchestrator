@@ -3,8 +3,6 @@ import json
 import logging
 import time
 import os
-from pathlib import Path
-from typing import Dict, Any, List
 
 # Simple file-based budget tracker because we don't want a full database
 BUDGET_FILE = os.path.expanduser("~/ai/budget.json")

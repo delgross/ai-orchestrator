@@ -1,4 +1,3 @@
-import pytest
 import json
 from common.logging_utils import log_json_event
 

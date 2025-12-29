@@ -1,13 +1,11 @@
 import os
 import time
 import logging
-import uuid
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import httpx
 import uvicorn
-import sys
 
 # Configuration
 SURREAL_URL = os.getenv("SURREAL_URL", "http://localhost:8000")

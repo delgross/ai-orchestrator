@@ -1,9 +1,6 @@
-import time
 import logging
-import httpx
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from router.config import state, AGENT_RUNNER_URL
-from common.notifications import notify_critical
 
 logger = logging.getLogger("router.agent_manager")
 

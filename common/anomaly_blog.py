@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional
+from pathlib import Path
 
 from common.system_blog import (
     BlogCategory,

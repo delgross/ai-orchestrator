@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 import logging
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict
 from common.logging_utils import log_json_event as _log_json_event
 from agent_runner.state import AgentState
 

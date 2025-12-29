@@ -16,8 +16,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
-from pathlib import Path
+from typing import Any, Dict, Optional
 import httpx
 import time
 

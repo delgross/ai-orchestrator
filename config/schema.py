@@ -5,7 +5,7 @@ This defines all configuration options and their types/defaults.
 This will be used for validation when unified config is implemented.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 from dataclasses import dataclass, field
 
 

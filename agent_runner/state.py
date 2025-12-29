@@ -2,18 +2,13 @@ import os
 import time
 import asyncio
 import httpx
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
 
 # Load env from project root
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from common.constants import (
-    PREFIX_OLLAMA,
-    ROLE_USER,
-    ROLE_ASSISTANT,
-)
 
 class AgentState:
     def __init__(self):

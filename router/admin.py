@@ -1,9 +1,11 @@
+import os
+import shutil
 import time
 import logging
-from typing import Dict, Any
+from typing import Any, Optional
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
-from router.config import state, VERSION, PROVIDERS_YAML
+from router.config import state, VERSION
 from router.providers import load_providers
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -88,7 +90,7 @@ async def proxy_dash_insights():
     return await _proxy_agent_runner("GET", "/dashboard/insights")
 
 @router.get("/mcp/tools")
-async def proxy_mcp_tools(server: str = None):
+async def proxy_mcp_tools(server: Optional[str] = None):
     path = "/mcp/tools"
     if server:
         path += f"?server={server}"
@@ -186,8 +188,6 @@ async def reset_all_circuit_breakers():
 @router.get("/config/files")
 async def list_config_files():
     """List available configuration files."""
-    import glob
-    import os
     
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = {
@@ -226,7 +226,6 @@ async def write_config_file(request: Request):
         
     try:
         # Create backup
-        import shutil
         if os.path.exists(path):
             shutil.copy2(path, f"{path}.bak.{int(time.time())}")
             
@@ -236,7 +235,7 @@ async def write_config_file(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-from router.providers import load_providers, provider_headers
+from router.providers import provider_headers
 
 @router.get("/llm/status")
 async def get_llm_status():
@@ -327,7 +326,7 @@ async def set_active_ollama_model(model: str):
     """Update the active Ollama model in runtime state."""
     # Note: In a persistent system, we'd write this to config too.
     # For now, we update the runtime state used by logic.
-    state.ollama_model = model
+    state.system_router_model = model
     return {"ok": True, "message": f"Active Ollama model set to {model}"}
 
 @router.post("/llm/embedding/default")
@@ -351,7 +350,7 @@ async def proxy_docs_read(path: str):
     return await _proxy_agent_runner("GET", f"/docs/read?path={encoded_path}")
 
 @router.get("/notifications")
-async def proxy_notifications(priority: str = None, unread: bool = False, limit: int = 50):
+async def proxy_notifications(priority: Optional[str] = None, unread: bool = False, limit: int = 50):
     path = f"/notifications?unread={str(unread).lower()}&limit={limit}"
     if priority:
         path += f"&priority={priority}"

@@ -1,6 +1,5 @@
-import pytest
 from fastapi.testclient import TestClient
-from router.router import app, state
+from router.router import app
 import router.config as config
 
 client = TestClient(app)

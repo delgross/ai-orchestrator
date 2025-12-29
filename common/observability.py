@@ -17,13 +17,12 @@ import asyncio
 import json
 import logging
 import time
-import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger("observability")
@@ -243,7 +242,7 @@ class ObservabilitySystem:
             self.anomaly_detector: Optional[AnomalyDetector] = AnomalyDetector()
             logger.info("Anomaly detector initialized and integrated")
         except ImportError:
-            self.anomaly_detector: Optional[Any] = None
+            self.anomaly_detector = None
             logger.warning("Anomaly detector not available")
         
         self.learning_system: Optional[Any] = None  # Will be set by learning system
@@ -801,9 +800,9 @@ def get_observability() -> ObservabilitySystem:
 async def track_request(request_id: str, method: str, path: str, metadata: Optional[Dict[str, Any]] = None):
     """Context manager for tracking a request lifecycle."""
     obs = get_observability()
-    lifecycle = obs.start_request(request_id, method, path, metadata)
+    lifecycle = await obs.start_request(request_id, method, path, metadata)
     try:
         yield lifecycle
     finally:
-        obs.complete_request(request_id)
+        await obs.complete_request(request_id)
 

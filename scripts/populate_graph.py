@@ -1,6 +1,4 @@
 import requests
-import json
-import time
 
 RAG_URL = "http://localhost:5555"
 

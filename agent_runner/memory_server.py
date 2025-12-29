@@ -1,18 +1,13 @@
 import asyncio
 import json
-import logging
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import sys
-from pathlib import Path
-import yaml
-from surrealdb import AsyncSurreal, RecordID
 import httpx
 from datetime import datetime
 
 # Configuration
-import sys
 SURREAL_URL = os.getenv("SURREAL_URL", "http://localhost:8000")
 SURREAL_USER = os.getenv("SURREAL_USER", "root")
 SURREAL_PASS = os.getenv("SURREAL_PASS", "root")
@@ -318,7 +313,6 @@ class MemoryServer:
 
     async def trigger_backup(self):
         """Execute the backup shell script."""
-        import subprocess
         try:
             # Path to the backup script
             script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "backup_memory.sh")
