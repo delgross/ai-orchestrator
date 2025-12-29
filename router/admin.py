@@ -467,6 +467,7 @@ async def get_config_yaml():
 @router.get("/logs/tail")
 async def tail_log(lines: int = 10, service: str = "agent_runner"):
     """Tail the last N lines of a service log file."""
+    import os
     if service not in ["agent_runner", "router", "ollama"]:
          return {"ok": False, "error": "Invalid service name"}
           
