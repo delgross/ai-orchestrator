@@ -230,13 +230,23 @@ class AgentEngine:
                 continue
                 
             # 2. Prepare Payload
+            active_tools = tools or self.tool_definitions
             payload = {
                 OBJ_MODEL: attempt_model,
                 "messages": messages,
-                "tools": tools or self.tool_definitions,
+                "tools": active_tools,
                 "tool_choice": "auto",
                 "stream": False,
             }
+            
+            # [COST-AUDIT] Log estimated token usage
+            try:
+                msg_len = len(json.dumps(messages))
+                tool_len = len(json.dumps(active_tools))
+                est_msg_tok = msg_len // 4
+                est_tool_tok = tool_len // 4
+                logger.info(f"[COST-AUDIT] Model: {attempt_model} | Msgs: ~{est_msg_tok} toks | Tools: ~{est_tool_tok} toks | Total Est: ~{est_msg_tok + est_tool_tok}")
+            except: pass
             
             try:
                 # 3. Attempt Call
@@ -596,7 +606,8 @@ class AgentEngine:
             f"{service_alerts}\n"
             "You are a helpful, intelligent assistant. Engage naturally with the user.\n"
             "When you use a tool, weave the result or confirmation naturally into your answer. Avoid robotic 'I have done X' statements unless necessary for clarity. Be concise.\n"
-            "Use the tools provided to you to be the most helpful assistant possible."
+            "Use the tools provided to you to be the most helpful assistant possible.\n"
+            "IMPORTANT: Focus on the user's LATEST message. Do not maintain context from unrelated previous topics (e.g., if the user switches from stock prices to dogs, forget the stocks)."
             f"{memory_facts}"
             f"{files_info}"
         )
