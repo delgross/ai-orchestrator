@@ -20,14 +20,14 @@ PROMPT = (
 )
 
 async def test():
-    print(f"Testing Maître d' with model: ollama:mistral:latest")
+    print(f"Testing Maître d' with model: ollama:llama3.3:70b-instruct-q8_0")
     async with httpx.AsyncClient() as client:
         try:
             r = await client.post(
                 "http://127.0.0.1:5455/v1/chat/completions",
                 headers={"Authorization": "Bearer 9sYBjBLjAHKG8g8ZzzsUeBOvtzgQFHmX7oIeygdpzic"},
                 json={
-                    "model": "ollama:mistral:latest",
+                    "model": "ollama:llama3.3:70b-instruct-q8_0",
                     "messages": [{"role": "user", "content": PROMPT}],
                     "stream": False,
                     "response_format": {"type": "json_object"}

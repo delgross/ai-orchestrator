@@ -317,7 +317,7 @@ model_intelligence:
     weaknesses:
     - Creative Depth
     - Deep Reasoning
-  openai:gpt-5.2:
+  ollama:llama3.3:70b-instruct-q8_0:
     preferred_for:
     - architect
     - mission_controller
@@ -359,7 +359,7 @@ personas:
     mission: Expert in project structure, modular design, and high-level coding standards.
       Focus on scalability and system integrity.
     name: The Architect
-    preferred_model: openai:gpt-5.2
+    preferred_model: ollama:llama3.3:70b-instruct-q8_0
     tools:
     - list_dir
     - read_text
@@ -409,7 +409,7 @@ personas:
     mission: Strategic partner focused on project continuity, milestone tracking,
       and identifying operational patterns.
     name: The Mission Controller
-    preferred_model: openai:gpt-5.2
+    preferred_model: ollama:llama3.3:70b-instruct-q8_0
     tools:
     - mcp__project_memory__record_system_state
     - mcp__project_memory__query_facts
@@ -488,7 +488,7 @@ router:
   - openai:gpt-4o-mini
   - openai:o1
   - openai:o3-mini
-  - openai:gpt-5.2
+  - ollama:llama3.3:70b-instruct-q8_0
   - claude-3-5-sonnet
   - claude-3-opus
   - gemini-1.5-pro
