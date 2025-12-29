@@ -24,8 +24,8 @@ for d in [INGEST_DIR, DEFERRED_DIR, PROCESSED_BASE_DIR, REVIEW_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 SUPPORTED_EXTENSIONS = ('.txt', '.md', '.pdf', '.docx', '.csv', '.png', '.jpg', '.jpeg', '.mp3', '.m4a', '.mp4')
-NIGHT_SHIFT_START = 1 # 1 AM
-NIGHT_SHIFT_END = 6   # 6 AM
+NIGHT_SHIFT_START = int(os.getenv("NIGHT_SHIFT_START", "1"))
+NIGHT_SHIFT_END = int(os.getenv("NIGHT_SHIFT_END", "6"))
 
 # State tracking for smart logging
 _last_connection_ok = True
@@ -105,14 +105,19 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
         
         try:
             from zoneinfo import ZoneInfo
-            # Default to Eastern Time if not specified, as that matches the user's likely locale or a safe US default
             tz = ZoneInfo(os.getenv("AGENT_TIMEZONE", "America/New_York"))
             current_hour = datetime.datetime.now(tz).hour
         except ImportError:
-            # Fallback for old python or missing data
             current_hour = datetime.datetime.now().hour
 
-        is_night = (NIGHT_SHIFT_START <= current_hour < NIGHT_SHIFT_END)
+        # Robust Midnight Logic
+        if NIGHT_SHIFT_START <= NIGHT_SHIFT_END:
+            # Standard: 1 AM to 6 AM
+            is_night = (NIGHT_SHIFT_START <= current_hour < NIGHT_SHIFT_END)
+        else:
+            # Wrap-around: 23 PM to 5 AM
+            is_night = (current_hour >= NIGHT_SHIFT_START) or (current_hour < NIGHT_SHIFT_END)
+
         trigger_file = INGEST_DIR / ".trigger_now"
         force_run = trigger_file.exists()
         
