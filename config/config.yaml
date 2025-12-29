@@ -316,6 +316,11 @@ agent:
     attempts: 2
     backoff_factor: 0.5
 mcp_servers:
+  fetch:
+    type: stdio
+    command: uvx
+    args:
+    - mcp-server-fetch
   filesystem:
     type: stdio
     command: npx
@@ -358,6 +363,7 @@ mcp_servers:
     args:
     - '@scrapezy/mcp'
     - --api-key=REDACTED
+    - --json
     env:
       SCRAPEZY_API_KEY: REDACTED
     requires_internet: true
@@ -474,7 +480,7 @@ agent_runner:
 
         - Week number
 
-        Format it nicely.
+        - Format it nicely.
 
         '
       output_file: time/current_time.txt
