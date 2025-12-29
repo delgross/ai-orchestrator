@@ -463,3 +463,39 @@ async def get_config_yaml():
         with open(config_path, "r") as f:
             return {"ok": True, "content": f.read()}
     return {"ok": False, "error": "File not found"}
+
+@router.get("/logs/tail")
+async def tail_log(lines: int = 10, service: str = "agent_runner"):
+    """Tail the last N lines of a service log file."""
+    if service not in ["agent_runner", "router", "ollama"]:
+         return {"ok": False, "error": "Invalid service name"}
+          
+    # Try finding logs in standard locations
+    paths = [
+        f"logs/{service}.log",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", f"{service}.log")
+    ]
+    
+    log_file = None
+    for p in paths:
+        if os.path.exists(p):
+            log_file = p
+            break
+            
+    if not log_file:
+        return {"ok": False, "lines": ["Log file not found"]}
+        
+    try:
+        file_size = os.path.getsize(log_file)
+        read_size = min(file_size, 8192)
+        
+        with open(log_file, "rb") as f:
+            if file_size > read_size:
+                f.seek(file_size - read_size)
+            data = f.read()
+            
+        text = data.decode('utf-8', errors='replace')
+        all_lines = text.splitlines()
+        return {"ok": True, "lines": all_lines[-lines:]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
