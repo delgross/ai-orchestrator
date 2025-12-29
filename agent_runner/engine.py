@@ -44,6 +44,7 @@ class AgentEngine:
             "search": self.tool_unified_search,
             "ingest_knowledge": self.tool_ingest_knowledge,
             "ingest_file": self.tool_ingest_file,
+            "save_fact": self.tool_save_fact,
         }
         return impls
 
@@ -183,6 +184,22 @@ class AgentEngine:
                             "kb_id": {"type": "string", "description": "Knowledge base ID (default 'default')."}
                         },
                         "required": ["path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "save_fact",
+                    "description": "Explicitly save a fact to long-term memory. Use this when the user tells you something about themselves or the project that should be remembered.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "entity": {"type": "string", "description": "The subject (e.g. 'User', 'Project', 'Server')."},
+                            "relation": {"type": "string", "description": "The verb/relationship (e.g. 'likes', 'is_configured_as', 'located_at')."},
+                            "target": {"type": "string", "description": "The object/value (e.g. 'Blue', 'Production', '192.168.1.1')."}
+                        },
+                        "required": ["entity", "relation", "target"]
                     }
                 }
             }
@@ -594,6 +611,8 @@ class AgentEngine:
             f"Current System Time: {current_time_str}\n"
             f"{env_instructions}\n"
             f"{service_alerts}\n"
+            "INTERACTION STYLE: You are a helpful, responsive assistant. When you perform an action (like saving a memory or ingesting a file), you MUST reply to the user confirming the action. Do not be silent.\n"
+            "MEMORY: When the user states a fact (e.g., 'My favorite color is blue'), use the 'save_fact' tool to store it, and then explicitly tell the user 'I have verified and saved that fact for you.'\n"
             "Use the tools provided to you to be the most helpful assistant possible."
             f"{memory_facts}"
             f"{files_info}"
@@ -896,6 +915,22 @@ class AgentEngine:
                 if r.status_code == 200:
                     return {"ok": True, "message": f"Successfully ingested {len(text)} chars into KB '{kb_id}'"}
                 return {"ok": False, "error": f"RAG server error: {r.status_code}"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def tool_save_fact(self, state: AgentState, entity: str, relation: str, target: str) -> Dict[str, Any]:
+        """Save a specific fact to long-term memory."""
+        try:
+            from agent_runner.tools.mcp import tool_mcp_proxy
+            # Call project-memory:store_fact
+            # We assume confidence 1.0 since it comes from explicit user interaction via this tool
+            args = {"entity": entity, "relation": relation, "target": target, "confidence": 1.0, "context": "User Chat"}
+            res = await tool_mcp_proxy(state, "project-memory", "store_fact", args)
+            
+            if res.get("ok"):
+                return {"ok": True, "message": f"Fact saved: {entity} {relation} {target}"}
+            else:
+                return {"ok": False, "error": f"Failed to save fact: {res.get('error')}"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
