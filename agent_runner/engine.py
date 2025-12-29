@@ -646,7 +646,8 @@ class AgentEngine:
             "You are a helpful, intelligent assistant. Engage naturally with the user.\n"
             "When you use a tool, weave the result or confirmation naturally into your answer. Avoid robotic 'I have done X' statements unless necessary for clarity. Be concise.\n"
             "Use the tools provided to you to be the most helpful assistant possible.\n"
-            "IMPORTANT: Focus on the user's LATEST message. Do not maintain context from unrelated previous topics (e.g., if the user switches from stock prices to dogs, forget the stocks)."
+            "IMPORTANT: Focus on the user's LATEST message. Do not maintain context from unrelated previous topics.\n"
+            "MEMORY CONSTRAINT: You have access to retrieved memory/facts below. Do NOT mention them unless they are DIRECTLY relevant to answering the CURRENT question. Do not say 'Regarding X...' if the user didn't ask about X."
             f"{memory_facts}"
             f"{files_info}"
         )
