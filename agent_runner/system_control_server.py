@@ -291,6 +291,7 @@ async def main():
             Tool(name="set_voice_preference", description="Configure default voice provider (macos/openai).", inputSchema={"type":"object","properties":{"provider":{"type":"string","enum":["macos","openai"]},"voice":{"type":"string","default":"alloy"}},"required":["provider"]}),
             Tool(name="add_mcp_server", description="Safely add/update an MCP server in config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"},"config":{"type":"object"}},"required":["name","config"]}),
             Tool(name="remove_mcp_server", description="Safely remove an MCP server from config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
+            Tool(name="read_clipboard", description="Read text directly from the macOS system clipboard.", inputSchema={"type":"object","properties":{}}),
         ]
 
     @server.call_tool()
@@ -312,6 +313,27 @@ async def main():
                 res = await controller.add_mcp_server(**args)
             elif name == "remove_mcp_server":
                 res = await controller.remove_mcp_server(**args)
+            elif name == "read_clipboard":
+                # New Clipboard Tool
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "pbpaste",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout, stderr = await proc.communicate()
+                    if proc.returncode != 0:
+                        res = {"error": f"Clipboard read failed: {stderr.decode()}"}
+                    else:
+                        content = stdout.decode().strip()
+                        res = {
+                            "ok": True, 
+                            "content": content,
+                            "length": len(content), 
+                            "preview": content[:200] + "..." if len(content) > 200 else content
+                        }
+                except Exception as e:
+                    res = {"error": str(e)}
             else:
                 raise ValueError(f"Unknown tool: {name}")
                 
