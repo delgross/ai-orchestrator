@@ -49,7 +49,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
     # --- NIGHT SHIFT LOGIC ---
     import datetime
     current_hour = datetime.datetime.now().hour
-    is_night = (1 <= current_hour < 5) # Night shift is 1 AM to 5 AM
+    is_night = (NIGHT_SHIFT_START <= current_hour < NIGHT_SHIFT_END) # Night shift logic
     
     trigger_file = INGEST_DIR / ".trigger_now"
     force_run = trigger_file.exists()

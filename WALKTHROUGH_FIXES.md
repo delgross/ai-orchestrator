@@ -44,3 +44,23 @@ render_diffs(file:///Users/bee/Sync/Antigravity/ai/agent_runner/agent_runner.py)
 render_diffs(file:///Users/bee/Sync/Antigravity/ai/agent_runner/weather_task_implementation.py)
 render_diffs(file:///Users/bee/Sync/Antigravity/ai/agent_runner/main.py)
 render_diffs(file:///Users/bee/Sync/Antigravity/ai/agent_runner/background_tasks.py)
+
+## Dashboard & Configuration Stabilization (Dec 28/29)
+The dashboard was stabilized after identifying a critical initialization crash and several missing features.
+
+1.  **Resolved Javascript Initialization Crash**:
+    *   Added null checks (optional chaining) to `app.js` to handle missing DOM elements gracefully.
+    *   Synchronized `index.html` with `app.js` by adding the required **File Manager** (selector and save buttons) to the Config tab.
+2.  **Restored System Metrics**:
+    *   Updated `app.js` to correctly parse metrics (Total Requests, Latency, Cache Hit Rate) from the router's refined JSON schema.
+3.  **Corrected Header & Clock Layout**:
+    *   Shifted the clock to be positioned correctly next to the "Questionable Insight" title.
+    *   Cleaned up redundant CSS and layout markers.
+4.  **Implemented Configuration Persistence**:
+    *   Fixed absolute path management for `system_config.json` in the Agent Runner to ensure compatibility with `launchd` execution.
+    *   Added `save_system_config()` logic to the model update endpoint, ensuring Dashboard changes survive system restarts.
+5.  **Verified System Health**:
+    *   Performed full verification using the browser subagent. All services (Router, Agent, Ollama, DB, Internet) now report **ONLINE/CONNECTED** with real-time feedback.
+
+![Fixed Dashboard](file:///Users/bee/.gemini/antigravity/brain/8b63c4c0-eb56-4823-952b-9f21cdfac67e/dashboard_verification_1766978049364.png)
+
