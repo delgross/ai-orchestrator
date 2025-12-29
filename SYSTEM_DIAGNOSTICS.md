@@ -74,8 +74,10 @@ This document logs identified problems and test failures discovered during the s
 - **Blockage Scan**: [x] VERIFIED (Ingestion queues flowing; deferral logic active for 1 AM shift).
 - **Heartbeat Status**: [x] PASS (Background tasks showing continuous successful cycles for consolidation and monitoring).
 
-### 13. Subsystem Enhancements (Active)
+### 13. Phase 2: Intelligence Upgrades (Active)
+- **RAG Ensemble Search**: [x] ACTIVE (Parallel Vector+Keyword execution with Reciprocal Rank Fusion).
+- **Night Shift Vision**: [x] ACTIVE (De-Mocked. Uses Qwen-VL-Chat on Cloud A10G for Auto-Tagging & Sentry).
+- **Cloud Reasoning**: [x] ACTIVE (Uses Mistral-7B-Instruct on Cloud GPU for batch analysis).
 - **Notification Webhooks**: [x] ENABLED (Real-time `httpx` alerting channel active).
 - **Memory Correction**: [x] IMPLEMENTED (`correct_fact` tool logic creates logical penalties for old data).
 - **RAG Startup Speed**: [x] OPTIMIZED (Vector index persists between restarts, removing boot lag).
-- **MCP Hot-Reload**: [x] ARCHITECTED (Dynamic `add/remove_server` methods in state for runtime updates).

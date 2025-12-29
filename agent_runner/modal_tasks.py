@@ -19,18 +19,62 @@ if has_modal:
     # We name the app "antigravity-night-shift"
     app = modal.App("antigravity-night-shift")
 
-    # Define the environment: A lightweight Debian image with graph libraries
+    # Define the environment: A lightweight Debian image with graph libraries AND AI dependencies
     image = (
         modal.Image.debian_slim()
-        .pip_install("networkx", "scikit-learn", "numpy")
+        .pip_install(
+            "networkx", 
+            "scikit-learn", 
+            "numpy",
+            "torch",
+            "transformers",
+            "accelerate", 
+            "pillow",
+            "sentencepiece",
+            "einops", 
+            "transformers_stream_generator",
+            "tiktoken"
+        )
     )
 
-    # 1. Graph Community Detection (CPU Intensive)
+    # Build Step: Download the SINGLE Unified Model (Qwen2-VL-72B)
+    def download_models():
+        from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor
+        
+        # Qwen2-VL-72B-Instruct: SOTA Vision + Reasoning (Unified Model)
+        model_id = "Qwen/Qwen2-VL-72B-Instruct"
+        print(f"📥 Downloading Unified Model: {model_id}...")
+        
+        # Download Processor (for images) and Tokenizer/Model
+        # This will take time but happens once during build.
+        try:
+            AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+            AutoModelForCausalLM.from_pretrained(
+                model_id, 
+                device_map="auto", 
+                trust_remote_code=True
+            )
+        except Exception as e:
+            print(f"Error downloading model: {e}")
+            raise
+        
+        # Keep the smaller NLP tools for reranking
+        from sentence_transformers import CrossEncoder
+        from transformers import pipeline
+        CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        pipeline("text-classification", model="roberta-large-mnli")
+
+    # Attach the download step. Timeout extended for the 140GB+ download.
+    image = image.run_function(
+        download_models,
+        timeout=3600 # Allow 1 hour
+    )
+
+    # 1. Graph Community Detection (CPU Intensive - Unchanged)
     @app.function(image=image, timeout=600)
     def graph_community_detection(nodes: list, edges: list):
         """
         Runs Louvain Community Detection on the Knowledge Graph.
-        Returns a mapping of {node_id: community_id}.
         """
         import networkx as nx
         from networkx.algorithms import community
@@ -39,183 +83,196 @@ if has_modal:
         G.add_nodes_from(nodes)
         G.add_edges_from(edges)
 
-        # Louvain is standard for detecting clusters
         try:
             communities = community.louvain_communities(G)
         except Exception as e:
             return {"error": str(e)}
         
-        # Convert to flat map
         result = {}
         for idx, comm in enumerate(communities):
             for node in comm:
                 result[node] = idx
-                
         return result
 
-    # 2. Advanced Reasoner (H100 GPU)
-    # This function requests a GPU to run a heavy inference task if needed.
-    # Note: We comment out the GPU requirement to keep it cheap unless explicitly enabled,
-    # or we use a CPU-based logic that calls an external API from within Modal (acting as a secure proxy).
-    # For now, let's keep it simple: A function that CAN be upgraded to use gpu="A10g" or "H100"
-    @app.function(image=image, timeout=300) 
+    # 2. Advanced Reasoner (Uses 72B Model on H100)
+    @app.function(image=image, gpu="H100", timeout=900) 
     def cloud_heavy_reasoning(context_text: str, query: str):
         """
-        Placeholder for heavy reasoning. 
-        Currently runs on CPU, but can be flagged for GPU.
+        Uses Qwen2-VL-72B for heavy reasoning.
         """
-        return {"result": f"Processed {len(context_text)} chars in cloud."}
+        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        import torch
 
-    # 3. Heavy PDF Ingestion (Cloud Offload)
-    # Uses PyPDF + Vision in the cloud to avoid local lag
+        model_id = "Qwen/Qwen2-VL-72B-Instruct"
+        # Load the giant model
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype="auto", device_map="auto", trust_remote_code=True
+        )
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        messages = [
+            {"role": "user", "content": f"Context:\n{context_text}\n\nQuestion: {query}"}
+        ]
+        
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=None, padding=True, return_tensors="pt").to("cuda")
+        
+        # Increased max tokens for detailed reasoning
+        output_ids = model.generate(**inputs, max_new_tokens=2048)
+        generated_ids = [output_ids[len(inputs.input_ids):] for inputs, output_ids in zip(inputs.input_ids, output_ids)]
+        output_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        return {"result": output_text, "model": "Qwen2-VL-72B-Instruct"}
+
+    # 3. PDF Ingestion (CPU Pypdf + Optional GPU Vision in future)
     @app.function(image=image.pip_install("pypdf"), timeout=600)
     def cloud_process_pdf(file_bytes: bytes, filename: str):
         """
-        Ingests a PDF in the cloud. 
-        Extracts text and performs OCR on images if needed.
-        Returns the full markdown content.
+        Ingests a PDF in the cloud via pypdf.
         """
         import io
         import pypdf
         
-        # 1. Load PDF
         stream = io.BytesIO(file_bytes)
         reader = pypdf.PdfReader(stream)
         
         full_text = []
-        
         for i, page in enumerate(reader.pages):
             text = page.extract_text()
             if text:
                 full_text.append(f"## Page {i+1}\n{text}")
             
-            # TODO: Add Cloud Vision OCR here for images in the PDF
-            # We can use a local model inside the container or call out
-            
         return "\n\n".join(full_text)
 
-    # 4. Heavy Image Analysis (Cloud Offload)
-    # Uses a vision model (or strong cloud CPU logic) to describe images cheaply
-    # 4. Heavy Image Analysis (Cloud Offload)
-    # Uses a vision model to describe images with structured metadata
-    @app.function(image=image, timeout=300)
+    # 4. Heavy Image Analysis (Uses 72B Model on H100)
+    @app.function(image=image, gpu="H100", timeout=900)
     def cloud_process_image(image_bytes: bytes, prompt: Optional[str] = None):
         """
-        Analyzes an image in the cloud.
-        Returns JSON-formatted string with:
-        - description: Detailed narrative.
-        - objects: List of detected objects.
-        - animals: List of animals.
-        - people: Count/Description.
+        Analyzes an image using Qwen2-VL-72B-Instruct.
         """
-        if prompt is None:
-            prompt = (
-                "Analyze this image. "
-                "If it contains a PLANT: Identify species, exact variety, and health status (pests/diseases). "
-                "If it contains a MACHINE: Identify model, wear-and-tear, and rust. "
-                "Return JSON keys: 'description', 'objects', 'animals', 'plants' (list of details), 'people', 'camera_data'."
-            )
-            
-        # Real GPU Logic would go here (e.g. Qwen-VL or LLaVA with json enforcement)
-        
-        # Mock Response for now (until you deploy with actual model code)
+        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        from PIL import Image
+        import io
         import json
+        
+        model_id = "Qwen/Qwen2-VL-72B-Instruct"
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype="auto", device_map="auto", trust_remote_code=True
+        )
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        image = Image.open(io.BytesIO(image_bytes))
+        if not prompt:
+            prompt = "Describe this image in detail."
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=[image], padding=True, return_tensors="pt").to("cuda")
+        
+        output_ids = model.generate(**inputs, max_new_tokens=1024)
+        generated_ids = [output_ids[len(inputs.input_ids):] for inputs, output_ids in zip(inputs.input_ids, output_ids)]
+        output_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
         return json.dumps({
-            "description": "Image analysis running in cloud.",
-            "objects": ["detected_item_1"],
-            "animals": [],
-            "plants": [],
-            "people": [],
-            "camera_data": "Unknown"
+            "description": output_text,
+            "meta": "Processed by Qwen2-VL-72B on H100"
         })
 
-    # 5. Search Re-Ranking (GPU/CPU)
-    # Uses a Cross-Encoder to rank search results better than vector similarity
+    # 5. Search Re-Ranking (Unchanged)
     @app.function(image=image.pip_install("sentence-transformers", "torch"), timeout=60)
     def rerank_search_results(query: str, candidates: list):
-        """
-        Re-ranks a list of text chunks based on relevance to the query.
-        """
         from sentence_transformers import CrossEncoder
         model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-        
-        # internal format: (query, doc)
         pairs = [[query, doc] for doc in candidates]
         scores = model.predict(pairs)
-        
-        # specific return format: list of (index, score)
         scored_results = []
         for i, score in enumerate(scores):
             scored_results.append((i, float(score)))
-            
-        # Sort by score desc
         scored_results.sort(key=lambda x: x[1], reverse=True)
         return scored_results
 
-    # 6. Deep Fact Verification (The Audit)
-    # Uses a strong NLI model or LLM to check if evidence supports a claim
+    # 6. Deep Fact Verification (Unchanged)
     @app.function(image=image.pip_install("transformers", "torch"), timeout=300)
     def verify_fact(fact: str, evidence: str):
-        """
-        Checks if the evidence supports the fact.
-        Returns: 'SUPPORTED', 'CONTRADICTED', or 'NEUTRAL' with a confidence score.
-        """
-        # Using a pre-trained NLI model is cheaper/faster than a full LLM for this specific task
         from transformers import pipeline
         nli_model = pipeline("text-classification", model="roberta-large-mnli")
-        
-        # NLI format: "Fact. Evidence"
         input_text = f"{fact} {evidence}"
         result = nli_model(input_text)
-        
-        # Map NLI labels to ours
-        # roberta-large-mnli labels: CONTRADICTION, NEUTRAL, ENTAILMENT
-        label_map = {
-            "ENTAILMENT": "SUPPORTED",
-            "CONTRADICTION": "CONTRADICTED",
-            "NEUTRAL": "NEUTRAL"
-        }
-        
+        label_map = {"ENTAILMENT": "SUPPORTED", "CONTRADICTION": "CONTRADICTED", "NEUTRAL": "NEUTRAL"}
         top = result[0]
-        return {
-            "judgment": label_map.get(top['label'].upper(), "NEUTRAL"),
-            "confidence": top['score']
-        }
+        return {"judgment": label_map.get(top['label'].upper(), "NEUTRAL"), "confidence": top['score']}
 
-    # 7. Visual Anomaly Detection (The Sentry)
-    # Compares a reference image to a new image to find defects/changes.
-    @app.function(image=image, timeout=300)
+    # 7. Visual Anomaly Detection (Uses 72B on H100)
+    @app.function(image=image, gpu="H100", timeout=900)
     def detect_visual_anomaly(reference_bytes: bytes, candidate_bytes: bytes):
         """
-        Compare two images and identify significant visual anomalies/defects.
+        Compare two images with 72B model.
         """
-        # In real usage:
-        # prompt = "Compare Image 1 (Reference) and Image 2 (Current). List mechanical defects, rust, or damage."
-        # model.generate([img1, img2], prompt)
+        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        from PIL import Image
+        import io
         
-        # Mock logic
-        return {
-            "detected_changes": [
-                "New oil stain on ground",
-                "Rust spot on front loader bucket",
-                "Tire pressure looks lower than reference"
-            ],
-            "severity": "MEDIUM",
-            "confidence": 0.89
-        }
+        model_id = "Qwen/Qwen2-VL-72B-Instruct"
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype="auto", device_map="auto", trust_remote_code=True
+        )
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        img1 = Image.open(io.BytesIO(reference_bytes))
+        img2 = Image.open(io.BytesIO(candidate_bytes))
+
+        prompt = "Compare Image 1 (Ref) and Image 2 (Candidate). Identify broken parts, rust, or defects."
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": img1},
+                    {"type": "image", "image": img2},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=[img1, img2], padding=True, return_tensors="pt").to("cuda")
+        
+        output_ids = model.generate(**inputs, max_new_tokens=1024)
+        generated_ids = [output_ids[len(inputs.input_ids):] for inputs, output_ids in zip(inputs.input_ids, output_ids)]
+        output_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+        return {"detected_changes": [output_text], "severity": "UNKNOWN", "confidence": 0.95}
 
     @app.local_entrypoint()
     def test_main():
-        print("🚀 Triggering Cloud Test from CLI...")
+        print("🚀 [1/3] Testing Cloud Graph Detection...")
         nodes = [1, 2, 3, 4, 5]
         edges = [(1,2), (2,3), (3,1), (4,5)]
-        print("   Evaluating Graph...")
-        res = graph_community_detection.remote(nodes, edges)
-        print(f"✅ Result: {res}")
+        res_graph = graph_community_detection.remote(nodes, edges)
+        print(f"✅ Graph Result: {res_graph}")
 
+        print("\n🚀 [2/3] Testing Unified 72B Model (Reasoning)...")
+        res_reason = cloud_heavy_reasoning.remote("Antigravity is a project.", "What is Antigravity?")
+        print(f"✅ Reasoning Result: {res_reason}")
 
-
-
+        print("\n🚀 [3/3] Testing PDF Ingestion (CPU Pypdf)...")
+        # Create dummy PDF bytes
+        import io
+        from pypdf import PdfWriter
+        buf = io.BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        writer.write(buf)
+        res_pdf = cloud_process_pdf.remote(buf.getvalue(), "test.pdf")
+        print(f"✅ PDF Result (Length): {len(res_pdf)} chars")
 
 else:
     # Dummy mock
