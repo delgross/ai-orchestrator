@@ -744,7 +744,7 @@ my-server-name:
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer 9sYBjBLjAHKG8g8ZzzsUeBOvtzgQFHmX7oIeygdpzic` // Hardcoded/Config token
+                        'Authorization': `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`
                     },
                     body: JSON.stringify({
                         model: model,
