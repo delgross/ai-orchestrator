@@ -27,6 +27,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from agent_runner.state import AgentState
 from common.notifications import notify_info, notify_error, notify_health
+from agent_runner.rag_helpers import _process_locally, _ingest_content
 
 # State tracking for smart logging (suppress repetitive errors)
 _last_connection_ok = True
