@@ -172,7 +172,7 @@ async def on_startup():
     task_manager.register(
         name="rag_ingestion",
         func=lambda: rag_ingestion_task("http://127.0.0.1:5555", state),
-        interval=10, # Check every 10 seconds for responsiveness
+        interval=60, # Check every 60 seconds
         description="Auto-ingestion of files into RAG server",
         priority=TaskPriority.LOW,
         idle_only=True
