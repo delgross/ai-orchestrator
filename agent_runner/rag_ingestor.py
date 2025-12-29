@@ -252,44 +252,67 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 
                 content = ""
                 try:
-                    # CLOUD OFFLOAD STRATEGY
-                    from agent_runner.modal_tasks import cloud_process_image, has_modal
-                    if has_modal:
-                        logger.info(f"CLOUD GPU: Offloading Image {file_path.name} to Modal...")
-                        raw_result = cloud_process_image.remote(file_path.read_bytes())
-                        
-                        # Parse Structured Output
-                        try:
-                            import json
-                            data = json.loads(raw_result)
-                            content = data.get("description", "")
-                            
-                            # Merge strict metadata
-                            if "objects" in data: filename_meta["objects"] = data["objects"]
-                            if "animals" in data: filename_meta["animals"] = data["animals"]
-                            if "plants" in data: filename_meta["plants"] = data["plants"]
-                            if "people" in data: filename_meta["people"] = data["people"]
-                            if "camera_data" in data: filename_meta["camera_data"] = data["camera_data"]
-                            
-                            logger.info(f"CLOUD SUCCESS: Received structured analysis. Objects: {len(data.get('objects', []))}")
-                        except:
-                            # Fallback if model returns plain text
-                            content = raw_result
-                            logger.info("CLOUD SUCCESS: Received plain text analysis.")
-
+                    # CLOUD OFFLOAD DISABLED: User requested no Modal usage
+                    # from agent_runner.modal_tasks import cloud_process_image, has_modal
+                    has_modal_override = False
+                    
+                    if has_modal_override:
+                        pass 
+                        # ... (Modal code removed/disabled)
                     else:
-                        raise ImportError("Modal not configured")
+                        raise ImportError("Modal disabled by policy")
                         
                 except Exception as cloud_err:
-                    logger.error(f"Image analysis failed: {cloud_err}")
-                    # Re-defer for next night shift instead of expensive fallback
-                    if is_night or force_run:
-                        logger.info(f"ECONOMY GUARD: Deferring image {file_path.name} for next available window.")
-                        if file_path.parent != DEFERRED_DIR:
-                             try: file_path.rename(DEFERRED_DIR / file_path.name)
-                             except: pass
-                    continue
+                    # LOCAL FALLBACK (Standard Vision Model)
+                    pass # We fall through to local if we weren't using it anyway, 
+                         # but here we need to implement the local vision call if it was relying only on cloud.
+                    
+                    # Wait, the original code had NO local fallback for images? 
+                    # Let's check lines 208-216. It just deferred or continued?
+                    # I need to implement local vision here if it's missing.
+                    
+                    # Actually, looking at the previous file view, the original code for images *started* with Modal 
+                    # and if it failed (or didn't exist), it re-deferred. 
+                    # It does NOT look like it had a local Vision fallback for pure images in the snippet I saw?
+                    # Wait, lines 174-216 in the previous `view_file` (Step 690) showed:
+                    # It tried Modal. If exception, "defer to next night shift".
+                    # There was NO local vision implementation for images in that block.
+                    
+                    # I must Implement Local Vision for Images now that Modal is gone.
+                    
+                    try:
+                        import base64
+                        with open(file_path, "rb") as image_file:
+                             img_b64 = base64.b64encode(image_file.read()).decode('utf-8')
+                        
+                        vision_payload = {
+                            "model": state.vision_model,
+                            "messages": [
+                                {"role": "user", "content": [
+                                    {"type": "text", "text": "Describe this image in detail for a knowledge base. Include all visible text and objects."},
+                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+                                ]}
+                            ]
+                        }
+                        v_url = f"{state.gateway_base}/v1/chat/completions"
+                        v_res = await http_client.post(v_url, json=vision_payload, timeout=60.0)
+                        if v_res.status_code == 200:
+                            content = v_res.json()["choices"][0]["message"]["content"]
+                            logger.info(f"LOCAL VISION: Analyzed {file_path.name}")
+                        else:
+                            raise Exception(f"Vision API returned {v_res.status_code}")
+                            
+                    except Exception as e:
+                        logger.error(f"Local Image analysis failed: {e}")
+                        # Defer logic remains
+                        if is_night or force_run:
+                            if file_path.parent != DEFERRED_DIR:
+                                try: file_path.rename(DEFERRED_DIR / file_path.name)
+                                except: pass
+                        continue
+
             elif ext in ('.mp3', '.m4a', '.mp4'):
+                # ... (Audio logic unchanged) ...
                 # AUDIO TRANSCRIPTION (Whisper via Router)
                 logger.info(f"AUDIO: Transcribing {file_path.name}...")
                 try:
@@ -320,26 +343,16 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                             try: file_path.rename(DEFERRED_DIR / file_path.name)
                             except: pass
                     continue
+
             elif ext == '.pdf':
                 try:
-                    # CLOUD OFFLOAD STRATEGY: Use Modal H100/CPU if available
-                    from agent_runner.modal_tasks import cloud_process_pdf, has_modal
-                    
-                    if has_modal:
-                        logger.info(f"CLOUD GPU: Offloading PDF {file_path.name} to Modal...")
-                        # Run remote function
-                        # Note: .remote() creates a container. This is blocking here, 
-                        # but that's fine for the background task.
-                        try:
-                            content = cloud_process_pdf.remote(file_path.read_bytes(), file_path.name)
-                            logger.info(f"CLOUD SUCCESS: Received {len(content)} chars from Modal.")
-                        except Exception as cloud_err:
-                            logger.error(f"Modal Cloud processing failed: {cloud_err}. Falling back to local.")
-                            raise cloud_err # Trigger fallback
-                    else:
-                        raise ImportError("Modal not configured")
+                    # CLOUD OFFLOAD DISABLED: User requested no Modal usage
+                    # from agent_runner.modal_tasks import cloud_process_pdf, has_modal
+                    raise ImportError("Modal disabled by policy")
 
                 except Exception:
+                    # FALLBACK: Local PyPDF
+                    # logic continues...
                     # FALLBACK: Local PyPDF
                     logger.info(f"Processing PDF locally (Fallback): {file_path.name}")
                     import pypdf
