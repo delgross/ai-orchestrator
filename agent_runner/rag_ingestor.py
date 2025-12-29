@@ -252,15 +252,15 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 
                 content = ""
                 try:
-                    # CLOUD OFFLOAD STRATEGY: Only for Night Shift or Forced Runs
+                    # CLOUD OFFLOAD STRATEGY: Use Modal if available (for all permitted files)
                     from agent_runner.modal_tasks import cloud_process_image, has_modal
                     
-                    # Policy: Use Cloud GPU only if it's Night Shift or a Forced Run (Turbo)
-                    # Otherwise, use local/gateway vision API which is cheaper/faster for single images
-                    use_cloud = (is_night or force_run) and has_modal
+                    # Policy: If Modal is configured, use it for everything that passes the gateway
+                    # (Heavy files are already deferred by the logic above, so this applies to light files + night shift items)
+                    use_cloud = has_modal
                     
                     if use_cloud:
-                        logger.info(f"CLOUD GPU: Offloading Image {file_path.name} to Modal (Night/Force Rule)...")
+                        logger.info(f"CLOUD GPU: Offloading Image {file_path.name} to Modal...")
                         try:
                             raw_result = cloud_process_image.remote(file_path.read_bytes())
                             
