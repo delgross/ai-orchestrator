@@ -21,30 +21,105 @@ SUPPORTED_EXTENSIONS = ('.txt', '.md', '.pdf', '.docx', '.csv', '.png', '.jpg', 
 NIGHT_SHIFT_START = 1 # 1 AM
 NIGHT_SHIFT_END = 6   # 6 AM
 
+import httpx
+import asyncio
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 from agent_runner.state import AgentState
 from common.notifications import notify_info, notify_error, notify_health
+
+# State tracking for smart logging (suppress repetitive errors)
+_last_connection_ok = True
+# Lock to prevent concurrent ingestion runs triggered by rapid file events
+_ingestion_lock = asyncio.Lock()
+
+class RAGFileEventHandler(FileSystemEventHandler):
+    """Bridges synchronous file system events to the async ingestion task."""
+    def __init__(self, rag_base_url, state, loop):
+        self.rag_base_url = rag_base_url
+        self.state = state
+        self.loop = loop
+
+    def _trigger_ingest(self):
+        # Fire and forget - the task handles its own locking
+        asyncio.run_coroutine_threadsafe(
+            rag_ingestion_task(self.rag_base_url, self.state), 
+            self.loop
+        )
+
+    def on_created(self, event):
+        if not event.is_directory and not event.src_path.endswith('.tmp'):
+            logger.info(f"WATCHDOG: Detected new file: {Path(event.src_path).name}")
+            self._trigger_ingest()
+
+    def on_moved(self, event):
+        if not event.is_directory and not event.dest_path.endswith('.tmp'):
+             logger.info(f"WATCHDOG: Detected moved file: {Path(event.dest_path).name}")
+             self._trigger_ingest()
+
+def start_rag_watcher(rag_base_url: str, state: AgentState):
+    """Starts the Watchdog observer."""
+    try:
+        loop = asyncio.get_running_loop()
+        event_handler = RAGFileEventHandler(rag_base_url, state, loop)
+        observer = Observer()
+        observer.schedule(event_handler, str(INGEST_DIR), recursive=False)
+        observer.start()
+        logger.info(f"RAG WATCHDOG: Started observer on {INGEST_DIR}")
+        return observer
+    except Exception as e:
+        logger.error(f"Failed to start RAG Watchdog: {e}")
+        return None
 
 async def rag_ingestion_task(rag_base_url: str, state: AgentState):
     """
     Background task to automatically ingest files and extract atomic facts.
     Includes a built-in circuit breaker for system stability.
     """
-    http_client = await state.get_http_client()
-    
-    # CIRCUIT BREAKER: Check RAG health before starting batch
+    # Prevent overlapping runs from multiple events
+    if _ingestion_lock.locked():
+        # Optional: just return if locked, or wait. 
+        # Typically for "run now" we might want to wait, but "debounce" is also fine.
+        # Let's wait to ensure we process the file that just arrived.
+        pass
+
+    async with _ingestion_lock:
+        http_client = await state.get_http_client()
+        
+        # CIRCUIT BREAKER: Check RAG health before starting batch
+    global _last_connection_ok
     try:
         if not state.internet_available:
-             logger.warning("RAG Ingestor: Internet unavailable. Skipping batch.")
+             if _last_connection_ok:
+                 logger.warning("RAG Ingestor: Internet unavailable. Pausing ingestion.")
+                 _last_connection_ok = False
              return
 
         health = await http_client.get(f"{rag_base_url}/health", timeout=5.0)
+        
         if health.status_code != 200:
-            logger.warning("RAG Ingestor: Circuit Breaker TRIPPED (Server unhealthy). Skipping batch.")
-            notify_health("RAG Ingestor Suspended", "Circuit breaker tripped: RAG server is report unhealthy.", source="RAG Ingestor")
+            if _last_connection_ok:
+                logger.warning(f"RAG Ingestor: Server returned unhealthy status ({health.status_code}). Pausing ingestion.")
+                notify_health("RAG Ingestor Suspended", f"Server status: {health.status_code}", source="RAG Ingestor")
+                _last_connection_ok = False
             return
+            
+        # If we reach here, we are back online
+        if not _last_connection_ok:
+            logger.info("RAG Ingestor: Connection restored. Resuming operations.")
+            notify_info("RAG Ingestor Restored", "Connection to RAG server re-established.", source="RAG Ingestor")
+            _last_connection_ok = True
+            
+    except (httpx.ConnectError, httpx.TimeoutException, ConnectionRefusedError) as e:
+        # Expected offline states - Silent handling unless state changed
+        if _last_connection_ok:
+            logger.warning(f"RAG Ingestor: Connection failed ({type(e).__name__}). Pausing ingestion.")
+            _last_connection_ok = False
+        return
     except Exception as e:
-        logger.warning(f"RAG Ingestor: Circuit Breaker TRIPPED (Connection failed: {e}). Skipping batch.")
-        notify_health("RAG Ingestor Offline", f"RAG server connection failed: {e}", source="RAG Ingestor")
+        # Unexpected crashes - Always log
+        logger.error(f"RAG Ingestor: Unexpected Circuit Breaker Error: {e}", exc_info=True)
+        notify_health("RAG Ingestor Error", f"Unexpected error: {e}", source="RAG Ingestor")
         return
         
     if not INGEST_DIR.exists():

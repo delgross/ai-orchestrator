@@ -14,7 +14,7 @@ from agent_runner.tasks import internet_check_task, stdio_process_health_monitor
 from agent_runner.background_tasks import get_task_manager, TaskPriority
 from agent_runner.health_monitor import initialize_health_monitor, health_check_task
 from agent_runner.memory_tasks import memory_consolidation_task, optimize_memory_task, memory_audit_task
-from agent_runner.rag_ingestor import rag_ingestion_task
+from agent_runner.rag_ingestor import rag_ingestion_task, start_rag_watcher
 from agent_runner.weather_task_implementation import register_weather_task
 from agent_runner.dashboard_tracker import get_dashboard_tracker, DashboardErrorType
 from common.observability import ComponentType
@@ -80,6 +80,9 @@ async def on_startup():
     
     # Initialize and start background tasks
     task_manager = get_task_manager()
+    
+    # Start RAG File Watcher (Event-Driven)
+    state.rag_observer = start_rag_watcher("http://127.0.0.1:5555", state)
     
     # Initialize Health Monitor with runtime dependencies
     initialize_health_monitor(
@@ -172,7 +175,7 @@ async def on_startup():
     task_manager.register(
         name="rag_ingestion",
         func=lambda: rag_ingestion_task("http://127.0.0.1:5555", state),
-        interval=60, # Check every 60 seconds
+        interval=300, # Safety poll every 5 mins (Watchdog handles realtime)
         description="Auto-ingestion of files into RAG server",
         priority=TaskPriority.LOW,
         idle_only=True
@@ -250,6 +253,10 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     await get_task_manager().stop()
+    if hasattr(state, "rag_observer") and state.rag_observer:
+        logger.info("Stopping RAG Watchdog...")
+        state.rag_observer.stop()
+        state.rag_observer.join()
     await state.close_http_client()
     logger.info("Agent Runner shutting down.")
 
