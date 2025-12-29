@@ -984,13 +984,11 @@ async function runSmartConfig() {
         log.innerText += "\n❌ Network Error: " + e.message;
     } finally {
         btn.disabled = false;
-        btn.innerHTML = "�� Apply Changes";
+        btn.innerHTML = "✨ Run Smart Config";
     }
 }
 
 async function loadConfigFile() {
-    const editor = document.getElementById('config-editor');
-    if (!editor) return;
     editor.value = "Loading...";
     try {
         const res = await fetch('/admin/config/yaml', { headers: { 'Authorization': getAuthToken() } });
