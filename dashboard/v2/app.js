@@ -865,3 +865,40 @@ my-server-name:
     setupChat();
     setInterval(fetchNotifications, 5000);
 });
+
+// --- Cost Tab Logic ---
+async function refreshCost() {
+    try {
+        const response = await fetch('/admin/budget', { headers: { 'Authorization': getAuthToken() } });
+        const data = await response.json();
+        
+        if (data.ok) {
+            const spend = data.current_spend.toFixed(4);
+            const limit = data.daily_limit_usd.toFixed(2);
+            const percent = data.percent_used.toFixed(1);
+            
+            document.getElementById('costDisplay').innerText = '$' + spend;
+            document.getElementById('limitDisplay').innerText = 'Limit: $' + limit;
+            document.getElementById('percentDisplay').innerText = percent + '%';
+            
+            const bar = document.getElementById('costBar');
+            bar.style.width = Math.min(100, data.percent_used) + '%';
+            
+            if (data.percent_used > 90) bar.style.background = 'var(--accent-warn)';
+            else if (data.percent_used > 100) bar.style.background = 'var(--accent-error)';
+            else bar.style.background = 'var(--success)';
+        }
+    } catch (e) {
+        console.error("Failed to fetch cost", e);
+    }
+}
+
+// Auto-refresh when tab is shown
+document.querySelectorAll('.tab-link[data-tab="cost"]').forEach(btn => {
+    btn.addEventListener('click', () => setTimeout(refreshCost, 100)); // Small delay for DOM
+});
+
+// Helper for auth if not defined globally (it likely is or hardcoded, but let's be safe)
+function getAuthToken() {
+    return `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`;
+}

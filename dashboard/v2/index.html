@@ -108,6 +108,9 @@
             <button class="tab-link" data-tab="tools">
                 <span class="icon">🔧</span> MCP Servers
             </button>
+            <button class="tab-link" data-tab="cost">
+                <span class="icon">💰</span> Cost
+            </button>
             <button class="tab-link" data-tab="docs">
                 <span class="icon">📚</span> Docs
             </button>
@@ -315,6 +318,35 @@
                     <div id="mcp-servers-list" class="mcp-grid">
                         <div class="placeholder-box">Loading MCP Servers...</div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Cost Tab -->
+            <div id="cost" class="tab-content">
+                <div class="card glass">
+                    <h3>Daily API Budget</h3>
+                    <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:1rem;">
+                        <div>
+                            <div style="font-size:3rem; font-weight:700;" id="costDisplay">Loading...</div>
+                            <div style="color:var(--text-secondary);" id="limitDisplay">Limit: --</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:1.5rem; font-weight:bold;" id="percentDisplay">--%</div>
+                            <div style="font-size:0.8rem; color:var(--text-secondary);">Used Today</div>
+                        </div>
+                    </div>
+
+                    <div style="background:rgba(255,255,255,0.1); height:10px; border-radius:5px; overflow:hidden;">
+                        <div id="costBar"
+                            style="width:0%; height:100%; background:var(--success); transition:width 0.5s;"></div>
+                    </div>
+
+                    <p style="margin-top:1rem; font-size:0.9rem; color:var(--text-secondary);">
+                        Estimates based on input/output tokens. Actual provider billing may vary slightly.
+                        Resets daily at 00:00 UTC.
+                    </p>
+                    <button class="action-btn sm" onclick="refreshCost()" style="margin-top:1rem;">🔄 Refresh
+                        Cost</button>
                 </div>
             </div>
 
