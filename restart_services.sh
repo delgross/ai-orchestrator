@@ -81,7 +81,7 @@ restart_router() {
 restart_agent() {
   echo "=== restarting agent_runner ==="
   restart_one "$AGENT_LABEL" "$AGENT_PLIST"
-  sleep 1
+  sleep 5
   curl -sS -H "Accept: application/json" http://127.0.0.1:5460/ | python -m json.tool
 }
 

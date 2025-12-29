@@ -15,6 +15,7 @@ from agent_runner.background_tasks import get_task_manager, TaskPriority
 from agent_runner.health_monitor import initialize_health_monitor, health_check_task
 from agent_runner.memory_tasks import memory_consolidation_task, optimize_memory_task, memory_audit_task
 from agent_runner.rag_ingestor import rag_ingestion_task
+from agent_runner.weather_task_implementation import register_weather_task
 from agent_runner.dashboard_tracker import get_dashboard_tracker, DashboardErrorType
 from common.observability import ComponentType
 from common.observability_middleware import ObservabilityMiddleware
@@ -245,6 +246,9 @@ async def on_startup():
         priority=TaskPriority.LOW,
         idle_only=True
     )
+    
+    # Custom tasks
+    register_weather_task()
     
     await task_manager.start()
     
