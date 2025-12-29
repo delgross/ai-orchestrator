@@ -176,7 +176,28 @@ async def get_anomalies(limit: int = 50):
     try:
         from common.observability import get_observability
         obs = get_observability()
-        return await obs.get_anomalies(limit=limit)
+        # Also try to get from agent runner if local obs is empty
+        local_data = await obs.get_anomalies(limit=limit)
+        
+        # Merge or prioritize agent anomalies (since agent does heavy lifting)
+        # For simplicity, let's just use local for now, but in future perform merge
+        return local_data
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@router.post("/observability/clear")
+async def clear_anomalies_proxy():
+    """Clear anomalies in both router and agent."""
+    try:
+        # Clear local
+        from common.observability import get_observability
+        obs = get_observability()
+        obs.clear_anomalies()
+        
+        # Clear agent
+        await _proxy_agent_runner("POST", "/admin/observability/clear")
+        
+        return {"ok": True, "message": "Anomalies cleared system-wide"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

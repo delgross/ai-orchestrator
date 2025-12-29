@@ -140,6 +140,10 @@ class AnomalyDetector:
             }
             for name, (mean, std_dev) in self.baselines.items()
         }
+    
+    def clear_history(self):
+        """Clear all detected anomalies."""
+        self.recent_anomalies.clear()
 
 
 # Global instance

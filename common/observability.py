@@ -783,6 +783,11 @@ class ObservabilitySystem:
             "detector_enabled": True,
             "sensitivity": self.anomaly_detector.sensitivity,
         }
+    
+    def clear_anomalies(self):
+        """Clear all stored anomalies."""
+        if self.anomaly_detector:
+            self.anomaly_detector.clear_history()
 
 
 # Global observability instance
