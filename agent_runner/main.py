@@ -377,31 +377,12 @@ async def system_status():
 @app.post("/admin/config/models")
 async def update_models(config: Dict[str, str] = Body(...)):
     """Update system models dynamically."""
-    import json
-    from pathlib import Path
-    import os
-
     if "summarization_model" in config: state.summarization_model = config["summarization_model"]
     if "agent_model" in config: state.agent_model = config["agent_model"]
     if "task_model" in config: state.task_model = config["task_model"]
     if "router_model" in config: state.router_model = config["router_model"]
 
-    # Save Persistence
-    try:
-        config_path = Path("system_config.json")
-        if not config_path.is_absolute():
-            config_path = Path(os.getcwd()) / "system_config.json"
-        
-        with open(config_path, "w") as f:
-            json.dump({
-                "agent_model": state.agent_model,
-                "summarization_model": state.summarization_model,
-                "task_model": state.task_model,
-                "router_model": state.router_model
-            }, f, indent=2)
-    except Exception as e:
-        print(f"Failed to save system_config.json: {e}")
-
+    save_system_config()
     return {
         "ok": True, 
         "models": {
@@ -411,6 +392,38 @@ async def update_models(config: Dict[str, str] = Body(...)):
             "router_model": state.router_model
         }
     }
+
+def save_system_config():
+    """Save current state to system_config.json for persistence."""
+    import json
+    from pathlib import Path
+    import os
+
+    try:
+        config_path = Path(__file__).parent.parent / "system_config.json"
+        
+        # Load existing to avoid overwriting unrelated settings
+        cfg = {}
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+        
+        cfg.update({
+            "agent_model": state.agent_model,
+            "summarization_model": state.summarization_model,
+            "task_model": state.task_model,
+            "router_model": state.router_model,
+            "mcp_model": state.mcp_model,
+            "finalizer_model": state.finalizer_model,
+            "embedding_model": state.embedding_model,
+            "vision_model": state.vision_model
+        })
+
+        with open(config_path, "w") as f:
+            json.dump(cfg, f, indent=4)
+        logger.info(f"Saved system configuration to {config_path}")
+    except Exception as e:
+        logger.error(f"Failed to save system_config.json: {e}")
 
 @app.post("/admin/tasks/consolidation")
 async def trigger_consolidation():
@@ -582,6 +595,8 @@ async def get_llm_roles():
 @app.post("/admin/roles")
 async def update_llm_roles(request: Request):
     """Update runtime model assignments."""
+    print("DEBUG: update_llm_roles called")
+    logger.info("DEBUG: update_llm_roles called")
     body = await request.json()
     updates = body.get("updates", {})
     flags = body.get("flags", {})
@@ -609,6 +624,8 @@ async def update_llm_roles(request: Request):
             logger.warning(f"Failed to sync embedding model to Router: {e}")
 
     if "finalizer_enabled" in flags: state.finalizer_enabled = flags["finalizer_enabled"]
+    
+    save_system_config()
     
     return {"ok": True, "roles": {
         "agent_model": state.agent_model,
