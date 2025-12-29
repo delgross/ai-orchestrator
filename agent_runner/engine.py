@@ -12,6 +12,7 @@ from common.constants import OBJ_MODEL, ROLE_SYSTEM, ROLE_TOOL
 from common.unified_tracking import track_event, EventSeverity, EventCategory
 from agent_runner.tools import fs as fs_tools
 from agent_runner.tools import mcp as mcp_tools
+from agent_runner.feedback import record_tool_success, get_suggested_servers
 
 logger = logging.getLogger("agent_runner")
 
@@ -306,6 +307,17 @@ class AgentEngine:
                         metadata={"server": server, "tool": tool},
                         request_id=request_id
                     )
+                    
+                    # [FEATURE-9] Learning Loop: Record successful tool usage
+                    try:
+                        # Find last user query to associate with this tool success
+                        last_user_msg = next((m for m in reversed(self.state.messages) if m.get("role") == "user"), None)
+                        if last_user_msg:
+                            from agent_runner.feedback import record_tool_success
+                            await record_tool_success(str(last_user_msg.get("content", "")), server)
+                    except Exception as e:
+                        logger.warning(f"Failed to record learning: {e}")
+
                     return result
                 except Exception as e:
                     track_event(
@@ -394,21 +406,28 @@ class AgentEngine:
                 logger.warning(f"Failed discovery for {server_name}: {e}")
         
         # [FEATURE-9] Generate Static Tool Menu (The "Maître d' Menu")
-        # We build a concise summary string of all available servers + tool names
-        # Format: "ServerName: Tool1, Tool2 (Description snippet)"
+        # Optimization: Exclude CORE servers that are always loaded.
+        # This keeps the menu focused on "Discretionary" tools (e.g. filesystem, search).
+        # We also removed the manual "Hint" generation in favor of semantic matching (future) or simple tool lists.
         menu_lines = []
+        core_servers = {"project-memory", "time", "weather", "thinking", "system-control"}
+        
         for srv, tools in self.mcp_tool_cache.items():
             if not tools: continue
-            # Get first tool description or server name as hint
-            desc_hint = tools[0]["function"].get("description", "")[:60].replace("\n", " ") + "..."
-            t_names = [t["function"]["name"] for t in tools[:5]] # Limit to first 5 tools to keep menu small
-            if len(tools) > 5:
+            if srv in core_servers: continue # Skip Core
+            
+            # Format: "ServerName: Tool1, Tool2, ..."
+            t_names = [t["function"]["name"] for t in tools[:8]] # Slight bump to 8
+            if len(tools) > 8:
                 t_names.append("...")
-            line = f"{srv}: {', '.join(t_names)} | Hint: {desc_hint}"
+            line = f"{srv}: {', '.join(t_names)}"
             menu_lines.append(line)
         
         self.tool_menu_summary = "\n".join(menu_lines)
-        logger.info(f"Generated Tool Menu ({len(menu_lines)} servers):\n{self.tool_menu_summary}")
+        if not self.tool_menu_summary:
+            self.tool_menu_summary = "(No external tools available)"
+            
+        logger.info(f"Generated Maître d' Menu (Filtered Core, {len(menu_lines)} servers):\n{self.tool_menu_summary}")
 
     async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Combine built-in tools with discovered MCP tools, filtering by environmental constraints."""
@@ -827,18 +846,25 @@ class AgentEngine:
             # Fallback if discovery hasn't run
             return {"target_servers": [], "notes": "No menu available"}
 
+        # [FEATURE-9] Learning Loop: Inject suggestions from history
+        suggestions_str = ""
+        try:
+            suggestions = await get_suggested_servers(query)
+            if suggestions:
+                # We limit to top 3 to avoid bias
+                suggestions_str = f"Recall: User usage history suggests these servers are relevant: {', '.join(suggestions[:3])}\n"
+        except Exception:
+            pass
+
         prompt = (
             "You are the Tool Selector (The Maître d').\n"
             f"User Query: '{query}'\n\n"
-            "Available Toolsets (Menu):\n"
+            "Available Discretionary Tools (Menu):\n"
             f"{menu}\n\n"
-            "Task: Return a JSON object with a list of 'target_servers' that are REQUIRED to answer the query.\n"
-            "Rules:\n"
-            "1. Be minimalistic. Only select servers if absolutely necessary.\n"
-            "2. If the user asks a personal question (e.g. 'my dog'), ONLY select 'project-memory' (or similar).\n"
-            "3. If the user asks a public question (e.g. 'stocks'), select search tools (e.g. 'tavily-search', 'exa').\n"
-            "4. If no tools are needed (chitchat), return empty list.\n"
-            "Response Format: {\"target_servers\": [\"server1\", \"server2\"]}"
+            f"{suggestions_str}"
+            "Task: Select the 'target_servers' from the menu that are required for this query.\n"
+            "Note: Core tools (Memory, Time, Thinking) are ALREADY loaded. Only select from the menu if needed.\n"
+            "Response Format: {\"target_servers\": [\"server1\"]}"
         )
 
         try:
