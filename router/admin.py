@@ -62,6 +62,43 @@ async def system_status():
         "limits": agent_data.get("limits", {})
     }
 
+@router.get("/health/summary")
+async def health_summary():
+    """Aggregate all health indicators for the Dashboard Health Sentinel."""
+    # 1. Get Circuit Breakers (Router + Agent)
+    router_breakers = state.circuit_breakers.get_status()
+    agent_breakers = {}
+    try:
+        agent_cb_data = await _proxy_agent_runner("GET", "/circuit-breaker/status")
+        agent_breakers = agent_cb_data.get("breakers", {})
+    except: pass
+    
+    all_breakers = {**router_breakers, **agent_breakers}
+    
+    # 2. Get Recent Anomalies
+    anomalies = []
+    try:
+        from common.observability import get_observability
+        obs = get_observability()
+        anomalies_data = await obs.get_anomalies(limit=5)
+        anomalies = anomalies_data.get("anomalies", [])
+    except: pass
+    
+    # 3. Check for any 'OPEN' breakers (Critical Degradation)
+    open_breakers = [b for b in all_breakers.values() if b.get("state") == "open"]
+    
+    # 4. Construct Summary
+    return {
+        "ok": True,
+        "timestamp": time.time(),
+        "status": "degraded" if open_breakers or anomalies else "healthy",
+        "critical_count": len(open_breakers),
+        "warning_count": len(anomalies),
+        "open_breakers": open_breakers,
+        "latest_anomaly": anomalies[0] if anomalies else None,
+        "overall_status": all_breakers  # Full dump for UI to parse if needed
+    }
+
 @router.get("/background-tasks")
 async def proxy_background_tasks():
     return await _proxy_agent_runner("GET", "/background-tasks")

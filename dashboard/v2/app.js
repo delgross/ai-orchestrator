@@ -119,16 +119,70 @@ document.addEventListener('DOMContentLoaded', () => {
             console.warn("Health Poll Error: ", err);
         }
 
-        // 2. Fetch Active Tab Data (Isolated from health check failures)
+        // 3. Fetch Health Summary (Sentinel)
         try {
-            if (state.activeTab === 'overview') await fetchOverviewData();
-            if (state.activeTab === 'misc') await fetchMiscLLMData();
-            if (state.activeTab === 'tools') await fetchMCPData();
-            if (state.activeTab === 'logs') await fetchLogTail();
-        } catch (err) {
-            console.error("Tab Data Poll Error: ", err);
+            const resp = await fetch('/admin/health/summary');
+            if (resp.ok) {
+                const data = await resp.json();
+                updateSentinel(data);
+            }
+        } catch (err) { }
+    }
+
+    function updateSentinel(data) {
+        const sentinel = document.getElementById('system-sentinel');
+        const msgEl = document.getElementById('sentinel-msg');
+
+        if (!sentinel) return;
+
+        if (data.status === 'degraded' || data.critical_count > 0) {
+            sentinel.style.display = 'block';
+
+            let msg = "";
+            if (data.critical_count > 0) {
+                const names = data.open_breakers.map(b => b.name).join(', ');
+                msg = `<strong>CRITICAL:</strong> ${data.critical_count} service(s) suspended: [${names}].`;
+                if (data.open_breakers[0]?.last_error) {
+                    msg += `<br><small>Last Error: ${data.open_breakers[0].last_error}</small>`;
+                }
+            } else if (data.latest_anomaly) {
+                msg = `<strong>ANOMALY:</strong> ${data.latest_anomaly.message || 'System behavior irregular.'}`;
+            }
+
+            msgEl.innerHTML = msg;
+        } else {
+            sentinel.style.display = 'none';
         }
     }
+
+    window.testSystemRecovery = async () => {
+        const btn = document.getElementById('btn-sentinel-test');
+        const originalText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="icon">🔃</span> Testing...';
+
+        try {
+            // 1. Reset all circuit breakers
+            await fetch('/admin/circuit-breakers/reset-all', { method: 'POST' });
+
+            // 2. Clear anomalies (Best effort if endpoint exists)
+            try { await fetch('/admin/observability/clear', { method: 'POST' }); } catch (e) { }
+
+            showNotification('Recovery sequence initiated. Checking health...');
+
+            // 3. Wait and re-poll
+            setTimeout(async () => {
+                await fetchSystemData();
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }, 2000);
+
+        } catch (e) {
+            showNotification('Recovery test failed.');
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    };
 
     function updateIndicators(data) {
         function setInd(bgId, ok) {

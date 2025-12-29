@@ -95,6 +95,7 @@ body {
     letter-spacing: 0.15em;
     background: linear-gradient(to right, #fff, var(--text-muted));
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -736,6 +737,7 @@ body {
     height: 28px !important;
     background: rgba(0, 0, 0, 0.2) !important;
 }
+
 /* --- Chat Styles --- */
 .chat-history {
     background: rgba(0, 0, 0, 0.2);
@@ -763,7 +765,8 @@ body {
 .chat-message.user {
     align-self: flex-end;
     background: var(--accent-blue);
-    color: var(--bg-deep); /* Dark text on Blue */
+    color: var(--bg-deep);
+    /* Dark text on Blue */
     border-bottom-right-radius: 2px;
 }
 
@@ -773,6 +776,69 @@ body {
     color: var(--text-main);
     border-bottom-left-radius: 2px;
     border: 1px solid var(--glass-border);
+}
+
+/* --- System Health Sentinel --- */
+.system-sentinel {
+    position: fixed;
+    top: 75px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 800px;
+    z-index: 999;
+    border-radius: 12px;
+    padding: 1rem 1.5rem;
+    background: hsla(355, 60%, 15%, 0.6);
+    border: 1px solid hsla(355, 100%, 65%, 0.4);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+    animation: slideDownSentinel 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes slideDownSentinel {
+    from {
+        transform: translate(-50%, -100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translate(-50%, 0);
+        opacity: 1;
+    }
+}
+
+.sentinel-content {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+}
+
+.sentinel-icon {
+    font-size: 1.8rem;
+    filter: drop-shadow(0 0 8px var(--accent-error));
+}
+
+.sentinel-body {
+    flex-grow: 1;
+}
+
+.sentinel-title {
+    font-weight: 700;
+    color: var(--accent-error);
+    font-size: 0.9rem;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
+}
+
+.sentinel-message {
+    font-size: 0.85rem;
+    color: var(--text-main);
+    line-height: 1.4;
+}
+
+.sentinel-actions {
+    display: flex;
+    gap: 0.8rem;
 }
 
 .chat-controls {

@@ -479,11 +479,31 @@ async def list_tasks():
         }
     }
 
-@app.post("/admin/reload-mcp")
+@app.post("/admin/mcp/reload-mcp")
 async def reload_mcp():
     await load_mcp_servers(state)
     await engine.discover_mcp_tools()
     return {"ok": True, "message": "MCP servers and tools reloaded"}
+
+@app.post("/admin/mcp/add")
+async def add_mcp_server_endpoint(name: str = Body(...), config: Dict[str, Any] = Body(...)):
+    """Dynamically add or update an MCP server and discover its tools."""
+    try:
+        # 1. Update In-Memory and Config.yaml
+        await state.add_mcp_server(name, config)
+        
+        # 2. Discover Tools for the new server
+        await engine.discover_mcp_tools()
+        
+        return {
+            "ok": True, 
+            "message": f"Successfully added/updated server '{name}'",
+            "server": name,
+            "tool_count": len(engine.mcp_tool_cache.get(name, []))
+        }
+    except Exception as e:
+        logger.error(f"Failed to dynamically add MCP server '{name}': {e}")
+        return {"ok": False, "error": str(e)}
 
 @app.post("/admin/mcp/upload-config")
 async def upload_mcp_config(

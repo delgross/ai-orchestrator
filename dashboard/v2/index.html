@@ -62,6 +62,26 @@
         <!-- Clock removed -->
     </header>
 
+    <!-- System Health Sentinel (Persistent Alert) -->
+    <div id="system-sentinel" class="system-sentinel glass" style="display: none;">
+        <div class="sentinel-content">
+            <span class="sentinel-icon">⚠️</span>
+            <div class="sentinel-body">
+                <div class="sentinel-title">SYSTEM DEGRADED</div>
+                <div class="sentinel-message" id="sentinel-msg">Loading health context...</div>
+            </div>
+            <div class="sentinel-actions">
+                <button class="action-btn sm primary" id="btn-sentinel-test" onclick="testSystemRecovery()">
+                    <span class="icon">🩺</span> Test Recovery
+                </button>
+                <button class="action-btn sm"
+                    onclick="this.parentElement.parentElement.parentElement.style.display='none'">
+                    Dismiss
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Quick Action / Launch Strip -->
     <div class="launch-strip glass">
         <button class="action-btn sm" onclick="location.reload()" title="Hard Refresh Dashboard">
