@@ -525,6 +525,64 @@ async def remove_mcp_server_endpoint(name: str = Body(..., embed=True)):
         logger.error(f"Failed to dynamically remove MCP server '{name}': {e}")
         return {"ok": False, "error": str(e)}
 
+@app.post("/admin/upload")
+async def upload_file_endpoint(
+    file: UploadFile = File(None),
+    content: str = Form(None),
+    filename: str = Form(None)
+):
+    """
+    Handle uploads from the dashboard (Paste-to-Upload).
+    Accepts specific file uploads OR raw text content.
+    Saves to WORKSPACE_ROOT/uploads/.
+    """
+    try:
+        from pathlib import Path
+        import aiofiles
+        import time
+        
+        # Ensure uploads dir exists
+        upload_dir = Path(__file__).parent.parent / "uploads"
+        upload_dir.mkdir(exist_ok=True)
+
+        final_filename = ""
+        file_path = None
+        
+        # Case 1: File Upload
+        if file:
+            timestamp = int(time.time())
+            # Sanitize filename (basic)
+            safe_name = "".join([c for c in file.filename if c.isalpha() or c.isdigit() or c in (' ','.','_','-')]).rstrip()
+            final_filename = f"{timestamp}_{safe_name}"
+            file_path = upload_dir / final_filename
+            
+            async with aiofiles.open(file_path, 'wb') as out_file:
+                content_bytes = await file.read()
+                await out_file.write(content_bytes)
+
+        # Case 2: Raw Text (Pasted Content)
+        elif content and filename:
+            final_filename = filename
+            file_path = upload_dir / final_filename
+            async with aiofiles.open(file_path, 'w') as out_file:
+                await out_file.write(content)
+        
+        else:
+            return {"ok": False, "error": "No file or content provided"}
+
+        logger.info(f"Saved upload: {file_path}")
+        return {
+            "ok": True, 
+            "message": "Upload successful", 
+            "filename": final_filename,
+            "path": str(file_path),
+            "size": file_path.stat().st_size
+        }
+
+    except Exception as e:
+        logger.error(f"Upload failed: {e}")
+        return {"ok": False, "error": str(e)}
+
 @app.post("/admin/mcp/upload-config")
 async def upload_mcp_config(
     file: UploadFile = File(None),

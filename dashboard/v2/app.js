@@ -472,13 +472,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     : `<option disabled>No tools loaded</option>`;
 
                 return `
-                    <div class="server-card glass">
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <h4>
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap: 8px;">
+                            <h4 style="margin:0; flex-grow:1;">
                                 <span>${name}</span>
                                 <span class="indicator ${stateClass}" title="Circuit Breaker: ${stateClass.toUpperCase()}"></span>
                             </h4>
-                             ${breaker.state === 'OPEN' ? `<button class="action-btn sm primary" onclick="resetBreaker('${name}')">Reset</button>` : ''}
+                            <div style="display:flex; gap:6px;">
+                                ${breaker.state === 'OPEN' ? `<button class="action-btn sm primary" onclick="resetBreaker('${name}')">Reset</button>` : ''}
+                                <button class="action-btn sm danger-hover" onclick="confirmDeleteMCP('${name}')" title="Remove MCP Server">🗑️</button>
+                            </div>
                         </div>
                         <div class="tool-meta">
                             Success: ${breaker.total_successes || 0} | Failures: ${breaker.total_failures || 0}
@@ -502,6 +504,34 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 list.innerHTML = `<div style="text-align:center; padding:20px; color:var(--accent-err);">Connection Failed.<br><small>${e.message}</small><br><button class="action-btn sm" onclick="fetchMCPData()">Retry</button></div>`;
             }
+        }
+    }
+
+    // --- MCP Deletion Handlers ---
+    window.confirmDeleteMCP = (name) => {
+        if (confirm(`Are you sure you want to permanently remove the MCP server '${name}'? This will terminate its process and delete its configuration.`)) {
+            removeMCPServer(name);
+        }
+    };
+
+    async function removeMCPServer(name) {
+        try {
+            const resp = await fetch('/admin/mcp/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name })
+            });
+
+            const data = await resp.json();
+            if (data.ok) {
+                showNotification(`Removed MCP server: ${name}`);
+                fetchMCPData(); // Refresh list
+            } else {
+                showNotification(`Error: ${data.error || 'Failed to remove server'}`, 'error');
+            }
+        } catch (e) {
+            console.error("Failed to remove MCP server", e);
+            showNotification("Connection error during removal", "error");
         }
     }
 
@@ -936,6 +966,74 @@ my-server-name:
             const u = new SpeechSynthesisUtterance(cleanText);
             u.rate = 1.1;
             window.speechSynthesis.speak(u);
+        }
+
+        // Paste-to-Upload Handler
+        chatInput.addEventListener('paste', async (e) => {
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            let hasFile = false;
+
+            // 1. Check for files (images, docs, etc.)
+            for (let index in items) {
+                const item = items[index];
+                if (item.kind === 'file') {
+                    e.preventDefault();
+                    hasFile = true;
+                    const blob = item.getAsFile();
+                    await handleFileUpload(blob);
+                }
+            }
+
+            // 2. If no file, check for massive text that should be a file
+            if (!hasFile) {
+                const text = e.clipboardData.getData('text');
+                if (text.length > 5000) { // Large content threshold
+                    if (confirm("This text is very long. Do you want to upload it as a file to 'uploads/' so I can digest it properly?")) {
+                        e.preventDefault();
+                        await handleFileUpload(new Blob([text], { type: 'text/plain' }), `pasted_text_${Date.now()}.txt`);
+                    }
+                }
+            }
+        });
+
+        async function handleFileUpload(fileArg, textFilename = null) {
+            // Show uploading state
+            chatInput.value = `[Uploading ${textFilename || fileArg.name}...]`;
+            chatInput.disabled = true;
+
+            const formData = new FormData();
+            if (textFilename) {
+                formData.append('content', await fileArg.text());
+                formData.append('filename', textFilename);
+            } else {
+                formData.append('file', fileArg);
+            }
+
+            try {
+                const resp = await fetch('/admin/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await resp.json();
+
+                if (data.ok) {
+                    // Auto-inject system prompt
+                    chatInput.value = `Read the file '${data.filename}' from uploads and digest it to memory.`;
+                    chatInput.disabled = false;
+                    showNotification(`Uploaded: ${data.filename}`);
+                    // Optional: Auto-send? Let's let the user verify first.
+                    // sendMessage(); 
+                } else {
+                    chatInput.value = "";
+                    chatInput.disabled = false;
+                    showNotification(`Upload Failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                console.error("Upload Loop Error", e);
+                chatInput.value = "";
+                chatInput.disabled = false;
+                showNotification("Connection failed during upload", 'error');
+            }
         }
 
         sendBtn.addEventListener('click', sendMessage);

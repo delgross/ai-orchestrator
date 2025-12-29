@@ -738,6 +738,17 @@ body {
     background: rgba(0, 0, 0, 0.2) !important;
 }
 
+.action-btn.danger-hover {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid transparent;
+}
+
+.action-btn.danger-hover:hover {
+    background: hsla(0, 80%, 50%, 0.2);
+    border-color: hsla(0, 80%, 60%, 0.4);
+    color: #ff4444;
+}
+
 /* --- Chat Styles --- */
 .chat-history {
     background: rgba(0, 0, 0, 0.2);
