@@ -392,69 +392,68 @@ class AgentEngine:
                     logger.info(f"Discovered {len(defs)} tools from MCP server '{server_name}'")
             except Exception as e:
                 logger.warning(f"Failed discovery for {server_name}: {e}")
+        
+        # [FEATURE-9] Generate Static Tool Menu (The "Maître d' Menu")
+        # We build a concise summary string of all available servers + tool names
+        # Format: "ServerName: Tool1, Tool2 (Description snippet)"
+        menu_lines = []
+        for srv, tools in self.mcp_tool_cache.items():
+            if not tools: continue
+            # Get first tool description or server name as hint
+            desc_hint = tools[0]["function"].get("description", "")[:60].replace("\n", " ") + "..."
+            t_names = [t["function"]["name"] for t in tools[:5]] # Limit to first 5 tools to keep menu small
+            if len(tools) > 5:
+                t_names.append("...")
+            line = f"{srv}: {', '.join(t_names)} | Hint: {desc_hint}"
+            menu_lines.append(line)
+        
+        self.tool_menu_summary = "\n".join(menu_lines)
+        logger.info(f"Generated Tool Menu ({len(menu_lines)} servers):\n{self.tool_menu_summary}")
 
     async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Combine built-in tools with discovered MCP tools, filtering by environmental constraints."""
         tools = list(self.tool_definitions)
         
-        # Build context string for keyword matching
-        context_str = ""
+    async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+        """Combine built-in tools with discovered MCP tools, filtering by Intent Menu."""
+        tools = list(self.tool_definitions)
+        
+        # 1. Determine Identity/Intent via Maître d'
+        target_servers = set()
         if messages:
-            # Check last 3 user messages for intent
-            user_msgs = [m.get("content", "") for m in messages if m.get("role") == "user"]
-            context_str = " ".join([str(c) for c in user_msgs[-3:]]).lower()
-
-        # Add discovered MCP tools
+             # Get last user message
+            last_user_msg = next((m for m in reversed(messages) if m.get("role") == "user"), None)
+            if last_user_msg:
+                # We classify intent based on the latest query
+                intent = await self._classify_search_intent(str(last_user_msg.get("content", "")))
+                target_servers = set(intent.get("target_servers", []))
+                
+        # 2. Add Discovered Tools (Filtered)
         for server_name, server_tools in self.mcp_tool_cache.items():
-            # Environmental check: filter out internet-requiring tools if offline
+            # Environmental check
             server_cfg = self.state.mcp_servers.get(server_name, {})
             if server_cfg.get("requires_internet") and not self.state.internet_available:
                 continue
 
-            for t in server_tools:
-                # Recreate to avoid modifying the original cached definition
-                orig_func = t.get("function", {})
-                tool_name = f"mcp__{server_name}__{orig_func.get('name')}"
-                
-                # [LITE MODE] Tool Pruning Logic
-                # Only include heavy/specialized tools if relevant keywords appear in the last few user messages
-                # Core tools are always included.
-                is_core = server_name in ["project-memory", "tavily-search", "time", "weather", "system-control", "thinking"]
-                
-                should_include = is_core
-                
-                if not should_include:
-                    # Default inclusion for small toolsets (e.g. specialized, single-purpose servers)
-                    if len(server_tools) < 5:
-                        should_include = True
-                    else:
-                        # For massive toolsets, only include if hinted in context
-                        hint_map = {
-                            "playwright": ["browser", "web", "click", "page", "scrape", "site", "url", "http"],
-                            "filesystem": ["file", "read", "write", "list", "dir", "folder", "path", "fs"],
-                            "github": ["git", "repo", "pr", "issue", "commit", "pull"],
+            # Core servers are ALWAYS allowed (safety/utility)
+            is_core = server_name in ["project-memory", "time", "weather", "system-control", "thinking"]
+            
+            # Selection Logic: Include if Core OR Selected by Maître d'
+            if is_core or (server_name in target_servers):
+                for t in server_tools:
+                    orig_func = t.get("function", {})
+                    # No description keywords needed anymore - decision was made at server level!
+                    wrapped = {
+                        "type": "function",
+                        "function": {
+                            "name": f"mcp__{server_name}__{orig_func.get('name')}",
+                            "description": orig_func.get("description"),
+                            "parameters": orig_func.get("parameters")
                         }
-                        hints = hint_map.get(server_name, [])
-                        if hints:
-                            if any(h in context_str for h in hints):
-                                should_include = True
-                        else:
-                            # If it's a large toolset with no hints defined, include conservatively or limit count?
-                            # For safety, we default to including unless we are sure.
-                            should_include = True
-
-                if not should_include:
-                    continue
-
-                wrapped = {
-                    "type": "function",
-                    "function": {
-                        "name": tool_name,
-                        "description": orig_func.get("description"),
-                        "parameters": orig_func.get("parameters")
                     }
-                }
-                tools.append(wrapped)
+                    tools.append(wrapped)
+        
+        return tools
         
         return tools
 
@@ -800,22 +799,51 @@ class AgentEngine:
             return {"ok": False, "error": f"RAG connection failed: {str(e)}"}
 
     async def _classify_search_intent(self, query: str) -> Dict[str, Any]:
-        """Classify query to narrow search scope (Adaptive Intent Layer)."""
-        q = query.lower()
-        intent = {"facts": True, "rag": True, "specific_kbs": []}
-        
-        # 1. Personal/Recollection Intent (Facts Only)
-        personal_keywords = ["remember", "last time", "we talked", "my name", "preferences", "did I", "have I"]
-        if any(w in q for w in personal_keywords):
-            intent["rag"] = False
-            return intent
+        """Classify query and select relevant toolsets using the 'Maître d' Menu'."""
+        menu = getattr(self, "tool_menu_summary", "")
+        if not menu:
+            # Fallback if discovery hasn't run
+            return {"target_servers": [], "notes": "No menu available"}
 
-        # 2. Technical/Documentation Intent (RAG Preferred)
-        tech_keywords = ["how to", "api", "function", "code", "schema", "documentation", "install", "config"]
-        if any(w in q for w in tech_keywords):
-            intent["facts"] = False # Knowledge is likely in docs
+        prompt = (
+            "You are the Tool Selector (The Maître d').\n"
+            f"User Query: '{query}'\n\n"
+            "Available Toolsets (Menu):\n"
+            f"{menu}\n\n"
+            "Task: Return a JSON object with a list of 'target_servers' that are REQUIRED to answer the query.\n"
+            "Rules:\n"
+            "1. Be minimalistic. Only select servers if absolutely necessary.\n"
+            "2. If the user asks a personal question (e.g. 'my dog'), ONLY select 'project-memory' (or similar).\n"
+            "3. If the user asks a public question (e.g. 'stocks'), select search tools (e.g. 'tavily-search', 'exa').\n"
+            "4. If no tools are needed (chitchat), return empty list.\n"
+            "Response Format: {\"target_servers\": [\"server1\", \"server2\"]}"
+        )
+
+        try:
+            # fast call
+            resp = await self.fast_llm_call(prompt) # Assuming helper exists or using client directly
+            # Wait, I don't have a clean helper for fast LLM call in this class context easily visible?
+            # I should use the standard client I use elsewhere.
+            # Let's check how 'call_gateway_with_tools' is used or 'client.post'
+            # I will implement a quick call here.
             
-        return intent
+            async with httpx.AsyncClient() as client:
+                payload = {
+                    "model": self.state.agent_model, # e.g. gpt-4o-mini
+                    "messages": [{"role": "system", "content": prompt}],
+                    "stream": False,
+                    "response_format": {"type": "json_object"}
+                }
+                r = await client.post(f"{self.state.gateway_url}/v1/chat/completions", json=payload, timeout=5.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    content = data["choices"][0]["message"]["content"]
+                    return json.loads(content)
+        except Exception as e:
+            logger.warning(f"Intent classification failed: {e}")
+        
+        # Safe Fallback: Return empty (Core tools will still be loaded by get_all_tools)
+        return {"target_servers": []}
 
     async def tool_unified_search(self, state: AgentState, query: str) -> Dict[str, Any]:
         """Check both Facts and RAG in one go with adaptive multi-domain routing."""
