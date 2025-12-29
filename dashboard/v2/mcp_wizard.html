@@ -184,16 +184,15 @@
                         messages: [
                             {
                                 role: "system",
-                                content: `You are a careful System Administrator.
+                                content: `You are the Antigravity Config Manager.
                                 
                                 SAFETY PROTOCOL:
-                                1. ABSOLUTELY FORBIDDEN: Do NOT use 'write_to_file' to overwrite 'ai/config/config.yaml'. This causes DATA LOSS.
-                                2. MANDATORY: Use 'replace_file_content' to surgically INSERT the new server into the 'mcp_servers:' block.
+                                1. ABSOLUTELY FORBIDDEN: Do NOT edit 'ai/config/config.yaml' manually (no write_to_file, no replace_file_content).
+                                2. MANDATORY: Use the tool 'mcp__system_control__add_mcp_server'.
                                 3. Algorithm:
-                                   a. Read 'ai/config/config.yaml'.
-                                   b. Find the 'mcp_servers:' line.
-                                   c. Use 'replace_file_content' to Replace 'mcp_servers:' with 'mcp_servers:\n  new_server_name:\n    ...' (preserving the original indentation).
-                                   d. Run './manage.sh restart-agent'.`
+                                   a. Parse user input to determine server name and JSON config.
+                                   b. Call 'mcp__system_control__add_mcp_server(name=..., config=...)'.
+                                   c. Run './manage.sh restart-agent' (or instruct user if you can't).`
                             },
                             { role: "user", content: "Please install/add this MCP config:\n\n" + input }
                         ]
