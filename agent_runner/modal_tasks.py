@@ -37,7 +37,10 @@ if has_modal:
             "einops", 
             "tiktoken",
             "torchvision",
-            "qwen-vl-utils"
+            "qwen-vl-utils",
+            # PDF Layout Analysis
+            "docling", 
+            "docling-core"
         )
     )
 
