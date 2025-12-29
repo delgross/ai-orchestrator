@@ -261,10 +261,10 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     
                     if use_cloud:
                         logger.info(f"CLOUD GPU: Offloading Image {file_path.name} to Modal (Night/Force Rule)...")
-                        raw_result = cloud_process_image.remote(file_path.read_bytes())
-                        
-                        # Parse Structured Output
                         try:
+                            raw_result = cloud_process_image.remote(file_path.read_bytes())
+                            
+                            # Parse Structured Output
                             import json
                             data = json.loads(raw_result)
                             content = data.get("description", "")
@@ -277,11 +277,13 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                             if "camera_data" in data: filename_meta["camera_data"] = data["camera_data"]
                             
                             logger.info(f"CLOUD SUCCESS: Received structured analysis. Objects: {len(data.get('objects', []))}")
-                        except:
-                            # Fallback if model returns plain text
-                            content = raw_result
-                            logger.info("CLOUD SUCCESS: Received plain text analysis.")
-
+                        except Exception as cloud_err:
+                            logger.error(f"Modal Cloud processing failed: {cloud_err}")
+                            logger.warning(f"STRICT QUALITY: Aborting {file_path.name} to preserve quality. Re-deferring.")
+                            if file_path.parent != DEFERRED_DIR:
+                                try: file_path.rename(DEFERRED_DIR / file_path.name)
+                                except: pass
+                            continue # Skip local fallback
                     else:
                          # Fall through to Local Vision if not Night/Force or Modal missing
                          raise ImportError("Modal skipped by policy (Daytime/Local Pref)")
@@ -368,8 +370,12 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                             content = cloud_process_pdf.remote(file_path.read_bytes(), file_path.name)
                             logger.info(f"CLOUD SUCCESS: Received {len(content)} chars from Modal.")
                         except Exception as cloud_err:
-                            logger.error(f"Modal Cloud processing failed: {cloud_err}. Falling back to local.")
-                            raise cloud_err # Trigger fallback
+                            logger.error(f"Modal Cloud processing failed: {cloud_err}")
+                            logger.warning(f"STRICT QUALITY: Aborting {file_path.name} to preserve quality. Re-deferring.")
+                            if file_path.parent != DEFERRED_DIR:
+                                try: file_path.rename(DEFERRED_DIR / file_path.name)
+                                except: pass
+                            continue # Skip local fallback
                     else:
                         raise ImportError("Modal skipped by policy (Daytime/Local Pref)")
 
