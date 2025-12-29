@@ -36,8 +36,7 @@ class AgentState:
         self.http_timeout = float(os.getenv("AGENT_HTTP_TIMEOUT_S", "120.0"))
         self.router_auth_token = os.getenv("ROUTER_AUTH_TOKEN")
         
-        # Performance & Economy
-        self.economic_mode = os.getenv("ECONOMIC_MODE", "true").lower() == "true"
+        # Performance & Readiness
         self.cloud_gpu_ready = False # Dynamic state
         
         # Load Overrides from Disk
@@ -56,7 +55,6 @@ class AgentState:
                     self.task_model = cfg.get("task_model", self.task_model)
                     self.vision_model = cfg.get("vision_model", self.vision_model)
                     self.router_model = cfg.get("router_model", self.router_model)
-                    self.economic_mode = cfg.get("economic_mode", self.economic_mode)
             except Exception as e:
                 print(f"Failed to load system_config.json: {e}")
 
