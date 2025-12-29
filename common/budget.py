@@ -9,7 +9,7 @@ BUDGET_FILE = os.path.expanduser("~/ai/budget.json")
 logger = logging.getLogger("common.budget")
 
 class BudgetTracker:
-    def __init__(self, daily_limit_usd: float = 1.00):
+    def __init__(self, daily_limit_usd: float = 10.00):
         self.daily_limit_usd = daily_limit_usd
         self.current_spend = 0.0
         self.last_reset = time.time()
@@ -70,12 +70,12 @@ class BudgetTracker:
         rate_in = 0.0
         rate_out = 0.0
         
-        if "gpt-4o" in model:
+        if "gpt-4o" in model and "mini" not in model:
             rate_in = 5.00 / 1_000_000
-            rate_out = 15.00 / 1_000_000
+            rate_out = 20.00 / 1_000_000
         elif "gpt-3.5" in model or "gpt-4o-mini" in model:
-            rate_in = 0.50 / 1_000_000
-            rate_out = 1.50 / 1_000_000
+            rate_in = 0.60 / 1_000_000
+            rate_out = 2.40 / 1_000_000
         elif "claude-3-opus" in model:
             rate_in = 15.00 / 1_000_000
             rate_out = 75.00 / 1_000_000

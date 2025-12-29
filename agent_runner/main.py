@@ -3,7 +3,7 @@ import time
 import logging
 import json
 from typing import Dict, Any
-from fastapi import FastAPI, Request, HTTPException, Body
+from fastapi import FastAPI, Request, HTTPException, Body, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -484,6 +484,43 @@ async def reload_mcp():
     await load_mcp_servers(state)
     await engine.discover_mcp_tools()
     return {"ok": True, "message": "MCP servers and tools reloaded"}
+
+@app.post("/admin/mcp/upload-config")
+async def upload_mcp_config(
+    file: UploadFile = File(None),
+    raw_text: str = Form(None)
+):
+    """LLM-powered endpoint to parse and add MCP servers from raw text/files."""
+    content = ""
+    if file:
+        content = (await file.read()).decode("utf-8")
+    elif raw_text:
+        content = raw_text
+    else:
+        raise HTTPException(status_code=400, detail="No file or text provided")
+
+    # Parse with LLM
+    from agent_runner.mcp_parser import parse_mcp_config_with_llm
+    parsed_servers = await parse_mcp_config_with_llm(state, content)
+    
+    if not parsed_servers:
+        return {"ok": False, "error": "Failed to parse any valid MCP server configurations."}
+        
+    # Save to config
+    from agent_runner.config import save_mcp_to_config
+    success = await save_mcp_to_config(parsed_servers)
+    
+    if success:
+        # Reload
+        await reload_mcp()
+        return {
+            "ok": True, 
+            "message": f"Successfully processed {len(parsed_servers)} server(s)",
+            "added": list(parsed_servers.keys()),
+            "total_servers": len(state.mcp_servers)
+        }
+    else:
+        return {"ok": False, "error": "Failed to save configuration to disk."}
 
 @app.get("/admin/system-prompt")
 async def get_system_prompt():

@@ -108,6 +108,8 @@ async def call_ollama_chat(
         
         state.circuit_breakers.record_success("ollama")
         j = r.json()
+    except HTTPException:
+        raise
     except Exception as e:
         state.circuit_breakers.record_failure("ollama")
         logger.error(f"Ollama call failed: {e}")
