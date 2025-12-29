@@ -565,10 +565,10 @@ class AgentEngine:
                             logger.info(f"Memory Hit: Found {len(facts_data)} facts: {log_facts}")
                             fact_strings = [f"- {s}" for s in log_facts]
                             memory_facts = (
-                                "\n### RETRIEVED MEMORY CONTEXT (High Recall Mode)\n"
-                                "The following facts were retrieved from the database based on the user's query.\n"
-                                "WARNING: The database has returned these with NO relevance filtering (Raw Recall).\n"
-                                "CRITICAL INSTRUCTION: You must act as the filter. Evaluate each fact below. If it is irrelevant to the specific question, IGNORE it. If it is relevant, USE it.\n\n"
+                                "\n### BACKGROUND INFORMATION (Memory Context)\n"
+                                "The following facts may or may not be relevant to the current conversation.\n"
+                                "If a fact is useful for answering the specific question, incorporate it naturally.\n"
+                                "If a fact is irrelevant, IGNORE it completely. Do not mention that you are ignoring it.\n\n"
                                 + "\n".join(fact_strings)
                             )
                     else:
