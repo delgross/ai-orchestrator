@@ -103,7 +103,15 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
         light_batch = []
         heavy_batch = []
         
-        current_hour = datetime.datetime.now().hour
+        try:
+            from zoneinfo import ZoneInfo
+            # Default to Eastern Time if not specified, as that matches the user's likely locale or a safe US default
+            tz = ZoneInfo(os.getenv("AGENT_TIMEZONE", "America/New_York"))
+            current_hour = datetime.datetime.now(tz).hour
+        except ImportError:
+            # Fallback for old python or missing data
+            current_hour = datetime.datetime.now().hour
+
         is_night = (NIGHT_SHIFT_START <= current_hour < NIGHT_SHIFT_END)
         trigger_file = INGEST_DIR / ".trigger_now"
         force_run = trigger_file.exists()
