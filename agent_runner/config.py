@@ -110,12 +110,26 @@ def load_agent_runner_limits(state: AgentState) -> None:
                 if cfg_data:
                     state.config = cfg_data
                     
-                    # Update limits if present
-                    if "agent_runner" in cfg_data and "limits" in cfg_data["agent_runner"]:
-                        limits = cfg_data["agent_runner"]["limits"]
-                        state.max_read_bytes = int(limits.get("max_read_bytes", state.max_read_bytes))
-                        state.max_list_entries = int(limits.get("max_list_entries", state.max_list_entries))
-                        state.max_tool_steps = int(limits.get("max_tool_steps", state.max_tool_steps))
+                    # Handle both 'agent' (correct) and 'agent_runner' (legacy) keys
+                    agent_cfg = cfg_data.get("agent", cfg_data.get("agent_runner", {}))
+                    
+                    if agent_cfg:
+                        # Update Limits
+                        if "limits" in agent_cfg:
+                            limits = agent_cfg["limits"]
+                            state.max_read_bytes = int(limits.get("max_read_bytes", state.max_read_bytes))
+                            state.max_list_entries = int(limits.get("max_list_entries", state.max_list_entries))
+                            state.max_tool_steps = int(limits.get("max_tool_steps", state.max_tool_steps))
+                        
+                        # Update Models
+                        if "model" in agent_cfg:
+                            state.agent_model = agent_cfg["model"]
+                            logger.info(f"Config Override: Set Agent Model to {state.agent_model}")
+                            
+                        if "fallback" in agent_cfg and "model" in agent_cfg["fallback"]:
+                            state.fallback_model = agent_cfg["fallback"]["model"]
+                            state.fallback_enabled = agent_cfg["fallback"].get("enabled", state.fallback_enabled)
+                            
         except Exception as e:
             logger.error(f"Failed to load config.yaml for limits: {e}")
 
