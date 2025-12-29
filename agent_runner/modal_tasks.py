@@ -131,25 +131,48 @@ if has_modal:
         
         return {"result": output_text, "model": "Qwen2-VL-72B-Instruct"}
 
-    # 3. PDF Ingestion (CPU Pypdf + Optional GPU Vision in future)
-    @app.function(image=image.pip_install("pypdf"), timeout=600)
+    # 3. PDF Ingestion (Advanced Layout Analysis via Docling)
+    # Allows H100 GPU usage for OCR if needed, though Docling is often CPU-heavy
+    @app.function(image=image, gpu="H100", timeout=900)
     def cloud_process_pdf(file_bytes: bytes, filename: str):
         """
-        Ingests a PDF in the cloud via pypdf.
+        Ingests a PDF using Docling for full layout preservation (tables, headers).
         """
         import io
-        import pypdf
+        from docling.document_converter import DocumentConverter
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.document import InputDocument
         
-        stream = io.BytesIO(file_bytes)
-        reader = pypdf.PdfReader(stream)
+        # Docling expects a file path or stream
+        # flexible approach: write to temp file
+        import tempfile
+        import os
         
-        full_text = []
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text()
-            if text:
-                full_text.append(f"## Page {i+1}\n{text}")
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+                
+            converter = DocumentConverter()
+            res = converter.convert(tmp_path)
             
-        return "\n\n".join(full_text)
+            # Export to comprehensive Markdown
+            markdown = res.document.export_to_markdown()
+            
+            os.remove(tmp_path)
+            return markdown
+            
+        except Exception as e:
+            # Fallback to simple extraction if Docling explodes on weird encoded PDFs
+            print(f"Docling failed: {e}. Falling back to pypdf.")
+            import pypdf
+            stream = io.BytesIO(file_bytes)
+            reader = pypdf.PdfReader(stream)
+            full_text = []
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text()
+                if text: full_text.append(text)
+            return "\n\n".join(full_text)
 
     # 4. Heavy Image Analysis (Uses 72B Model on H100)
     @app.function(image=image, gpu="H100", timeout=900)
