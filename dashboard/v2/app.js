@@ -902,3 +902,66 @@ document.querySelectorAll('.tab-link[data-tab="cost"]').forEach(btn => {
 function getAuthToken() {
     return `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`;
 }
+
+// --- Smart Config Logic ---
+async function runSmartConfig() {
+    const input = document.getElementById('config-instruction').value;
+    if (!input.trim()) return;
+
+    const btn = document.getElementById('btn-smart-config');
+    const log = document.getElementById('smart-config-log');
+    
+    btn.disabled = true;
+    btn.innerHTML = "🤖 Processing...";
+    log.innerText = "🚀 Asking Agent to edit config... (This takes ~30s)\n";
+    
+    try {
+        const response = await fetch('/v1/chat/completions', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': getAuthToken() 
+            },
+            body: JSON.stringify({
+                model: "agent:mcp",
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are the Antigravity Config Manager. You must edit 'ai/config/config.yaml'. \n1. Read the file. \n2. Apply the user's requested changes. \n3. Write the file back. \n4. Run './manage.sh restart-agent' to apply changes. \n5. Reply with a summary of changes."
+                    },
+                    { role: "user", content: "Instruction: " + input }
+                ]
+            })
+        });
+        
+        const data = await response.json();
+        if (data.choices && data.choices[0]) {
+            log.innerText += "\n✅ Done! Agent says:\n" + data.choices[0].message.content;
+            loadConfigFile(); // Refresh view
+        } else {
+            log.innerText += "\n❌ Error: " + JSON.stringify(data);
+        }
+    } catch (e) {
+        log.innerText += "\n❌ Network Error: " + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = "�� Apply Changes";
+    }
+}
+
+async function loadConfigFile() {
+    const editor = document.getElementById('config-editor');
+    if (!editor) return;
+    editor.value = "Loading...";
+    try {
+        const res = await fetch('/admin/config/yaml', { headers: { 'Authorization': getAuthToken() } });
+        const data = await res.json();
+        if (data.ok) {
+            editor.value = data.content;
+        } else {
+            editor.value = "Error loading config: " + data.error;
+        }
+    } catch (e) {
+        editor.value = "Failed to fetch config: " + e.message;
+    }
+}
