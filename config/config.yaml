@@ -108,6 +108,7 @@ mcp_servers:
     - -y
     - '@modelcontextprotocol/server-filesystem'
     - /Users/bee/Sync/Antigravity/ai
+    - /Users/bee/Downloads
     command: npx
     type: stdio
   firecrawl-mcp:
