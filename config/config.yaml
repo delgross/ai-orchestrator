@@ -326,7 +326,7 @@ mcp_servers:
     command: npx
     args:
     - -y
-    - "@modelcontextprotocol/server-filesystem"
+    - '@modelcontextprotocol/server-filesystem'
     - /Users/bee/Sync/Antigravity/ai
   firecrawl-mcp:
     type: stdio
@@ -432,6 +432,15 @@ mcp_servers:
     - -y
     - '@iflow-mcp/weather-mcp'
     env: {}
+    requires_internet: true
+  memory-search:
+    type: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-memory-search'
+    env:
+      SEARCH_API_KEY: test_key_123
     requires_internet: true
 agent_runner:
   periodic_tasks:

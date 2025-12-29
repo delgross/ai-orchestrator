@@ -575,6 +575,7 @@ Commands:
   restart-rag   Restart only RAG Server
   sync          Sync all code changes to Git
   backup        Trigger a manual memory backup
+  dashboard     High-density system status overview
   pack          Full Brain Backup (DB + Files) to Sync Folder
   unpack        Full Brain Restore from Sync Folder
 EOF
@@ -633,6 +634,49 @@ case "${1:-status}" in
     ;;
   sync) sync_git ;;
   backup) run_backup ;;
+  dashboard)
+    echo -e "${BLUE}=== Antigravity Terminal Dashboard ===${NC}"
+    echo -e "Time: $(date)"
+    echo -e "--------------------------------------"
+    
+    # 1. Budget Stats
+    if [ -f "$HOME/ai/budget.json" ]; then
+        spend=$(cat "$HOME/ai/budget.json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('current_spend', 0))")
+        limit=$(cat "$HOME/ai/budget.json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('daily_limit_usd', 0))")
+        perc=$(python3 -c "print(f'{$spend/$limit*100:.1f}%') if $limit > 0 else print('0%')")
+        echo -e "Budget: ${YELLOW}\$${spend} / \$${limit}${NC} (${perc})"
+    fi
+    
+    # 2. Service Health (Concise)
+    router_http=$(service_responding "http://127.0.0.1:$ROUTER_PORT/" && echo "true" || echo "false")
+    agent_http=$(service_responding "http://127.0.0.1:$AGENT_PORT/" && echo "true" || echo "false")
+    surreal_http=$(service_responding "http://127.0.0.1:$SURREAL_PORT/health" && echo "true" || echo "false")
+    rag_http=$(service_responding "http://127.0.0.1:$RAG_PORT/health" && echo "true" || echo "false")
+    
+    echo -n "Services: "
+    [ "$router_http" = "true" ] && echo -ne "${GREEN}Router ${NC}" || echo -ne "${RED}Router ${NC}"
+    [ "$agent_http" = "true" ] && echo -ne "${GREEN}Agent ${NC}" || echo -ne "${RED}Agent ${NC}"
+    [ "$surreal_http" = "true" ] && echo -ne "${GREEN}Surreal ${NC}" || echo -ne "${RED}Surreal ${NC}"
+    [ "$rag_http" = "true" ] && echo -ne "${GREEN}RAG ${NC}" || echo -ne "${RED}RAG ${NC}"
+    echo ""
+    
+    # 3. Model Status (from Agent API)
+    if [ "$agent_http" = "true" ]; then
+        model=$(curl -s "http://127.0.0.1:$AGENT_PORT/" | python3 -c "import sys, json; print(json.load(sys.stdin).get('model', 'unknown'))")
+        echo -e "Active Model: ${BLUE}${model}${NC}"
+    fi
+    
+    # 4. RAG Stats
+    if [ "$rag_http" = "true" ]; then
+        rag_stats=$(curl -s "http://127.0.0.1:$RAG_PORT/stats")
+        total_docs=$(echo "$rag_stats" | python3 -c "import sys, json; print(json.load(sys.stdin).get('total_documents', 0))")
+        kb_count=$(echo "$rag_stats" | python3 -c "import sys, json; print(json.load(sys.stdin).get('knowledge_bases', {}).__len__())")
+        echo -e "RAG Content: ${GREEN}${total_docs} docs${NC} across ${GREEN}${kb_count} KBs${NC}"
+    fi
+    
+    echo -e "--------------------------------------"
+    echo -e "${BLUE}Logs: tail -f logs/agent_runner.log${NC}"
+    ;;
   -h|--help|help) usage ;;
   *) echo "Unknown command: $1"; usage; exit 2 ;;
 esac

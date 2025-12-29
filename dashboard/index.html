@@ -747,10 +747,18 @@
         <div class="muted" style="margin-bottom:1rem;">Upload MCP server configuration files (JSON, YAML, or text). The
           LLM will analyze and add them automatically.</div>
 
-        <div style="margin-bottom:1rem; display:flex; gap:1rem;">
-          <button onclick="window.open('v2/mcp_wizard.html', '_blank')" class="tag"
-            style="cursor:pointer; background:var(--accent); color:white; border:none; padding: 0.6rem 1.2rem; font-size: 0.9rem;">✨
-            Open Smart Import Wizard</button>
+        <div style="margin-bottom:1rem; display:flex; flex-direction:column; gap:0.5rem;">
+          <input type="file" id="mcp-config-file" style="display:none;" onchange="uploadMCPConfig()">
+          <div style="display:flex; gap:1rem;">
+            <button onclick="$('mcp-config-file').click()" class="tag"
+              style="cursor:pointer; background:var(--accent-soft); border-color:var(--accent); padding: 0.6rem 1.2rem; font-size: 0.9rem;">📁
+              Upload / Paste Config</button>
+            <button onclick="window.open('v2/mcp_wizard.html', '_blank')" class="tag"
+              style="cursor:pointer; background:var(--accent); color:white; border:none; padding: 0.6rem 1.2rem; font-size: 0.9rem;">✨
+              Open Smart Import Wizard</button>
+          </div>
+          <div id="mcp-upload-status" class="muted" style="margin-top:0.5rem; font-size:0.85rem; min-height:1.2em;">
+          </div>
         </div>
 
         <div class="muted" style="margin-bottom:1rem;">Reload MCP servers and rediscover tools without restarting the

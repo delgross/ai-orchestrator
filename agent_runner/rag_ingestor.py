@@ -65,6 +65,27 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
         except Exception as e:
             logger.error(f"Failed to unlink .trigger_now file: {e}")
 
+    # --- PROJECT AUTO-DISCOVERY (Feature 4) ---
+    root_dir = Path(__file__).parent.parent
+    project_knowledge = root_dir / ".agent" / "knowledge"
+    if project_knowledge.exists() and project_knowledge.is_dir():
+        project_name = root_dir.name.lower().replace(" ", "-")
+        kb_id = f"project-{project_name}"
+        logger.info(f"PROJECT DISCOVERY: Syncing {project_knowledge} to KB '{kb_id}'...")
+        
+        pk_files = [p for p in project_knowledge.glob("**/*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
+        for pkf in pk_files:
+            try:
+                # We don't move these, we just read and ingest if they are "new"
+                # (Simple heuristic: if it was modified in the last 15 minutes)
+                if time.time() - pkf.stat().st_mtime < 900: 
+                    logger.info(f"Ingesting project doc: {pkf.name}")
+                    with open(pkf, "rb") as f_data:
+                        files = {"file": (pkf.name, f_data.read())}
+                        await http_client.post(f"{rag_base_url}/ingest?kb_id={kb_id}", files=files)
+            except Exception as e:
+                logger.error(f"Failed to ingest project doc {pkf.name}: {e}")
+
     # Files to process in this run
     batch_files = []
 

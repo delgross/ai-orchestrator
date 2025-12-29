@@ -746,62 +746,98 @@ class AgentEngine:
         except Exception as e:
             return {"ok": False, "error": f"RAG connection failed: {str(e)}"}
 
+    async def _classify_search_intent(self, query: str) -> Dict[str, Any]:
+        """Classify query to narrow search scope (Adaptive Intent Layer)."""
+        q = query.lower()
+        intent = {"facts": True, "rag": True, "specific_kbs": []}
+        
+        # 1. Personal/Recollection Intent (Facts Only)
+        personal_keywords = ["remember", "last time", "we talked", "my name", "preferences", "did I", "have I"]
+        if any(w in q for w in personal_keywords):
+            intent["rag"] = False
+            return intent
+
+        # 2. Technical/Documentation Intent (RAG Preferred)
+        tech_keywords = ["how to", "api", "function", "code", "schema", "documentation", "install", "config"]
+        if any(w in q for w in tech_keywords):
+            intent["facts"] = False # Knowledge is likely in docs
+            
+        return intent
+
     async def tool_unified_search(self, state: AgentState, query: str) -> Dict[str, Any]:
         """Check both Facts and RAG in one go with adaptive multi-domain routing."""
-        # 1. DYNAMIC DISPATCHER
+        # 1. INTENT CLASSIFICATION (Feature 6: Adaptive Search)
+        intent = await self._classify_search_intent(query)
+        
+        # 2. DYNAMIC DISPATCHER
         # Get existing KB stats to see what's actually available
-        target_kbs = ["default"]
+        target_kbs = ["default"] if intent["rag"] else []
         q_lower = query.lower()
         
-        # CIRCUIT BREAKER: Fast health check before committing to complex parallel search
-        try:
-            async with httpx.AsyncClient() as client:
-                # We check stats as it doubles as a health & discovery check
-                stats_res = await client.get("http://127.0.0.1:5555/stats", timeout=2.0)
-                if stats_res.status_code != 200:
-                    logger.warning("UNIFIED SEARCH: RAG Circuit Breaker TRIPPED. Falling back to MEMORY ONLY.")
-                    target_kbs = [] # Disable RAG for this query
-                else:
-                    available_kbs = stats_res.json().get("knowledge_bases", {}).keys()
-                    # Detect if query keywords match any known KB names
-                    for kb in available_kbs:
-                        if kb.replace("farm-", "").replace("osu-", "") in q_lower:
-                            target_kbs.append(kb)
-        except Exception as e:
-            logger.warning(f"UNIFIED SEARCH: RAG Connection Failed ({e}). Falling back to MEMORY ONLY.")
-            target_kbs = []
+        if intent["rag"]:
+            # CIRCUIT BREAKER: Fast health check before committing to complex parallel search
+            try:
+                async with httpx.AsyncClient() as client:
+                    # We check stats as it doubles as a health & discovery check
+                    stats_res = await client.get("http://127.0.0.1:5555/stats", timeout=2.0)
+                    if stats_res.status_code != 200:
+                        logger.warning("UNIFIED SEARCH: RAG Circuit Breaker TRIPPED. Falling back to MEMORY ONLY.")
+                        target_kbs = [] # Disable RAG for this query
+                    else:
+                        available_kbs = stats_res.json().get("knowledge_bases", {}).keys()
+                        # Detect if query keywords match any known KB names
+                        for kb in available_kbs:
+                            if kb.replace("farm-", "").replace("osu-", "") in q_lower:
+                                target_kbs.append(kb)
+            except Exception as e:
+                logger.warning(f"UNIFIED SEARCH: RAG Connection Failed ({e}). Falling back to MEMORY ONLY.")
+                target_kbs = []
 
-        # Hardcoded semantic fallbacks for common aliases
-        domains = {
-            "farm-noc": ["starlink", "router", "noc", "wan", "lan", "ip", "network", "omada"],
-            "osu-med": ["medical", "osu", "clinic", "health", "radiology", "doctor"],
-            "farm-beekeeping": ["bees", "hive", "honey", "queen", "apiary", "pollination"],
-            "farm-agronomy": ["planting", "harvest", "soil", "crop", "seed", "fertilizer", "tractor"],
-            "farm-woodworking": ["woodworking", "wood", "saw", "joint", "joinery", "lathe", "planer", "workshop", "lumber", "species"]
-        }
-        for kb, keywords in domains.items():
-            if any(w in q_lower for w in keywords):
-                target_kbs.append(kb)
-        
-        # Filter duplicates and remove 'default' if we have specific hits
-        target_kbs = list(set(target_kbs))
-        if len(target_kbs) > 1 and "default" in target_kbs:
-            target_kbs.remove("default")
+            # Hardcoded semantic fallbacks for common aliases
+            domains = {
+                "farm-noc": ["starlink", "router", "noc", "wan", "lan", "ip", "network", "omada"],
+                "osu-med": ["medical", "osu", "clinic", "health", "radiology", "doctor"],
+                "farm-beekeeping": ["bees", "hive", "honey", "queen", "apiary", "pollination"],
+                "farm-agronomy": ["planting", "harvest", "soil", "crop", "seed", "fertilizer", "tractor"],
+                "farm-woodworking": ["woodworking", "wood", "saw", "joint", "joinery", "lathe", "planer", "workshop", "lumber", "species"]
+            }
+            for kb, keywords in domains.items():
+                if any(w in q_lower for w in keywords):
+                    target_kbs.append(kb)
+            
+            # Filter duplicates and remove 'default' if we have specific hits
+            target_kbs = list(set(target_kbs))
+            if len(target_kbs) > 1 and "default" in target_kbs:
+                target_kbs.remove("default")
 
-        # 2. Start parallel searches across ALL relevant layers
+        # 3. Start parallel searches across ALL relevant layers
         from agent_runner.tools.mcp import tool_mcp_proxy
         
+        search_tasks = []
+        fact_idx = -1
+        
         # Parallel Fact Search (The Diary)
-        fact_task = asyncio.create_task(tool_mcp_proxy(state, "project-memory", "semantic_search", {"query": query}))
+        if intent["facts"]:
+            fact_idx = len(search_tasks)
+            search_tasks.append(asyncio.create_task(tool_mcp_proxy(state, "project-memory", "semantic_search", {"query": query})))
         
         # Parallel Multi-KB Search (The Library)
-        rag_tasks = [asyncio.create_task(self.tool_knowledge_search(state, query, kb_id=kb)) for kb in target_kbs]
+        rag_start_idx = len(search_tasks)
+        if target_kbs:
+            for kb in target_kbs:
+                search_tasks.append(asyncio.create_task(self.tool_knowledge_search(state, query, kb_id=kb)))
         
+        if not search_tasks:
+             return {"ok": True, "message": "Query classified as out-of-scope for searching."}
+
         # Wait for all
-        all_results = await asyncio.gather(fact_task, *rag_tasks, return_exceptions=True)
+        all_results = await asyncio.gather(*search_tasks, return_exceptions=True)
         
-        fact_res = all_results[0] if not isinstance(all_results[0], BaseException) else {"ok": False}
-        rag_results = all_results[1:]
+        fact_res = {"ok": False}
+        if fact_idx != -1:
+            fact_res = all_results[fact_idx] if not isinstance(all_results[fact_idx], BaseException) else {"ok": False}
+        
+        rag_results = all_results[rag_start_idx:]
         
         combined_context = f"SEARCH MODE: Hybrid (Domains: {', '.join(target_kbs)})\n\n"
         
