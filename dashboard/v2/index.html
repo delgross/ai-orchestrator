@@ -80,6 +80,17 @@
         <button class="action-btn sm" id="btn-health-check">
             <span class="icon">🩺</span> Run Health Check
         </button>
+        <div style="width:1px; height:24px; background:var(--glass-border); margin:0 0.5rem;"></div>
+        <button class="action-btn sm"
+            onclick="fetch('/admin/system/process/router/restart', {method:'POST'}).then(() => alert('Router restarting...'))"
+            title="Restart Router Process">
+            <span class="icon">🔄</span> Router
+        </button>
+        <button class="action-btn sm"
+            onclick="fetch('/admin/system/process/agent/restart', {method:'POST'}).then(() => alert('Agent restarting...'))"
+            title="Restart Agent Process">
+            <span class="icon">🧠</span> Agent
+        </button>
     </div>
 
     <main class="dashboard-container">
@@ -316,9 +327,12 @@
 
                     <div class="card glass">
                         <h3>System Controls</h3>
-                        <button class="action-btn"
-                            onclick="fetch('/admin/reload', {method:'POST'}).then(()=>location.reload())">Reload System
-                            Core</button>
+                        <div style="display:flex; flex-direction:column; gap:0.8rem;">
+                            <button class="action-btn"
+                                onclick="fetch('/admin/reload', {method:'POST'}).then(()=>location.reload())">
+                                ⚡ Hot Reload Config
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
