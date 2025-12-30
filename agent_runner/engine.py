@@ -136,7 +136,8 @@ class AgentEngine:
                         "type": "object",
                         "properties": {
                             "query": {"type": "string", "description": "The specific question or topic to search for."},
-                            "kb_id": {"type": "string", "description": "The specific knowledge base to search (default 'default'). Use 'farm-noc' for equipment/infrastructure data."}
+                            "kb_id": {"type": "string", "description": "The specific knowledge base to search (default 'default')."},
+                            "filters": {"type": "object", "description": "Optional metadata filters (e.g. {'brand': 'TIME', 'visual_credibility': {'$gt': 0.8}})."}
                         },
                         "required": ["query"]
                     }
@@ -818,13 +819,15 @@ class AgentEngine:
 
         return {"error": "Max tool steps reached"}
 
-    async def tool_knowledge_search(self, state: AgentState, query: str, kb_id: str = "default") -> Dict[str, Any]:
+    async def tool_knowledge_search(self, state: AgentState, query: str, kb_id: str = "default", filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Query the RAG server for deep content."""
         rag_url = "http://127.0.0.1:5555/query"
         try:
             async with httpx.AsyncClient() as client:
                 # Use query-specific limit for depth
                 payload = {"query": query, "kb_id": kb_id, "limit": 7}
+                if filters:
+                    payload["filters"] = filters
                 r = await client.post(rag_url, json=payload, timeout=25.0)
                 if r.status_code == 200:
                     data = r.json()
