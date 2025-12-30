@@ -51,7 +51,7 @@ Format it nicely and make it readable."""
         
         # Call agent loop
         await _agent_loop(
-            user_messages=[{"role": "user", "content": weather_prompt}],
+            messages=[{"role": "user", "content": weather_prompt}],
             model=local_model,
             tools=weather_tools if weather_tools else None
         )
