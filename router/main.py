@@ -579,8 +579,18 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                 raise HTTPException(status_code=502, detail=f"Agent Runner Unavailable: {str(e)}")
     
     elif prefix == PREFIX_OLLAMA:
-        res = await call_ollama_chat(model_id, body["messages"], request_id)
-        return JSONResponse(res)
+        if body.get("stream"):
+            from router.providers import call_ollama_chat_stream
+            
+            async def sse_generator():
+                async for chunk in call_ollama_chat_stream(model_id, body["messages"], request_id):
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+            
+            return StreamingResponse(sse_generator(), media_type="text/event-stream")
+        else:
+            res = await call_ollama_chat(model_id, body["messages"], request_id)
+            return JSONResponse(res)
         
     elif prefix == PREFIX_RAG:
         res = await call_rag(model_id, body)

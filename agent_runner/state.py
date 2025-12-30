@@ -39,7 +39,10 @@ class AgentState:
         # Performance & Readiness
         self.cloud_gpu_ready = False # Dynamic state
         
-        # Load Overrides from Disk
+        # 1. Load Base Config (config.yaml) - Static/Default
+        self._load_base_config()
+        
+        # 2. Load User Overrides (system_config.json) - Dynamic/Dashboard
         self._load_config_file()
 
     def _load_config_file(self):
@@ -57,6 +60,44 @@ class AgentState:
                     self.router_model = cfg.get("router_model", self.router_model)
             except Exception as e:
                 print(f"Failed to load system_config.json: {e}")
+
+    def _load_base_config(self):
+        """Load limits and general config from config.yaml as the baseline."""
+        import yaml
+        config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    cfg_data = yaml.safe_load(f)
+                    if cfg_data:
+                        self.config = cfg_data
+                        
+                        # Handle both 'agent' (correct) and 'agent_runner' (legacy) keys
+                        agent_cfg = cfg_data.get("agent", cfg_data.get("agent_runner", {}))
+                        
+                        if agent_cfg:
+                            # Update Limits
+                            if "limits" in agent_cfg:
+                                limits = agent_cfg["limits"]
+                                self.max_read_bytes = int(limits.get("max_read_bytes", self.max_read_bytes))
+                                self.max_list_entries = int(limits.get("max_list_entries", self.max_list_entries))
+                                self.max_tool_steps = int(limits.get("max_tool_steps", self.max_tool_steps))
+                            
+                            # Models
+                            self.agent_model = agent_cfg.get("model", self.agent_model)
+                            
+                            if "fallback" in agent_cfg and "model" in agent_cfg["fallback"]:
+                                self.fallback_model = agent_cfg["fallback"]["model"]
+                                self.fallback_enabled = agent_cfg["fallback"].get("enabled", self.fallback_enabled)
+                                
+                            if "summarization" in agent_cfg and "model" in agent_cfg["summarization"]:
+                                self.summarization_model = agent_cfg["summarization"]["model"]
+
+                            if "tasks" in agent_cfg and "model" in agent_cfg["tasks"]:
+                                self.task_model = agent_cfg["tasks"]["model"]
+                                
+            except Exception as e:
+                print(f"Failed to load config.yaml as base: {e}")
 
         # Global Registries (Formerly module-level globals)
         self.config: Dict[str, Any] = {}

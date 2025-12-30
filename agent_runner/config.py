@@ -101,37 +101,11 @@ async def load_mcp_servers(state: AgentState) -> None:
             logger.warning(f"Exception during MCP pruning: {e}")
 
 def load_agent_runner_limits(state: AgentState) -> None:
-    """Load limits and general config from config.yaml."""
-    config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-    if config_path.exists():
-        try:
-            with open(config_path, "r") as f:
-                cfg_data = yaml.safe_load(f)
-                if cfg_data:
-                    state.config = cfg_data
-                    
-                    # Handle both 'agent' (correct) and 'agent_runner' (legacy) keys
-                    agent_cfg = cfg_data.get("agent", cfg_data.get("agent_runner", {}))
-                    
-                    if agent_cfg:
-                        # Update Limits
-                        if "limits" in agent_cfg:
-                            limits = agent_cfg["limits"]
-                            state.max_read_bytes = int(limits.get("max_read_bytes", state.max_read_bytes))
-                            state.max_list_entries = int(limits.get("max_list_entries", state.max_list_entries))
-                            state.max_tool_steps = int(limits.get("max_tool_steps", state.max_tool_steps))
-                        
-                        # Update Models
-                        if "model" in agent_cfg:
-                            state.agent_model = agent_cfg["model"]
-                            logger.info(f"Config Override: Set Agent Model to {state.agent_model}")
-                            
-                        if "fallback" in agent_cfg and "model" in agent_cfg["fallback"]:
-                            state.fallback_model = agent_cfg["fallback"]["model"]
-                            state.fallback_enabled = agent_cfg["fallback"].get("enabled", state.fallback_enabled)
-                            
-        except Exception as e:
-            logger.error(f"Failed to load config.yaml for limits: {e}")
+    """
+    Load limits and general config from config.yaml.
+    Note: Most logic moved to AgentState._load_base_config() for better priority handling.
+    """
+    pass
 
 async def save_mcp_to_config(new_servers: Dict[str, Any]) -> bool:
     """Save/Merge new MCP servers into config.yaml."""

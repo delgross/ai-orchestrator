@@ -101,21 +101,114 @@ async def call_ollama_chat(
 ) -> Dict[str, Any]:
     url = join_url(OLLAMA_BASE, "/api/chat")
     
-    # helper to flatten content
-    def flatten_content(c: Any) -> str:
-        if isinstance(c, str):
-            return c
-        if isinstance(c, list):
-            # Join text parts, ignore images for Ollama (unless using llava, but for now we assume text-only fallback)
-            parts = []
-            for item in c:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    parts.append(item.get("text", ""))
-                elif isinstance(item, str):
-                    parts.append(item)
-            return "\n".join(parts)
-        return str(c)
+# helper to flatten content
+def flatten_content(c: Any) -> str:
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        # Join text parts, ignore images for Ollama (unless using llava, but for now we assume text-only fallback)
+        parts = []
+        for item in c:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return str(c)
 
+async def call_ollama_chat_stream(
+    model_id: str, 
+    messages: List[Dict[str, Any]], 
+    request_id: str,
+    num_ctx: Optional[int] = None
+):
+    """Yields OpenAI-compatible SSE chunks from Ollama stream."""
+    url = join_url(OLLAMA_BASE, "/api/chat")
+    
+    ollama_body = {
+        "model": model_id,
+        "messages": [{"role": m.get("role"), "content": flatten_content(m.get("content", ""))} for m in messages],
+        "stream": True,
+    }
+    
+    options = {}
+    ctx_size = num_ctx or state.ollama_num_ctx
+    if ctx_size:
+        options["num_ctx"] = ctx_size
+    
+    if state.ollama_model_options:
+        model_opts = state.ollama_model_options.get(model_id, state.ollama_model_options.get("default", {}))
+        for k, v in model_opts.items():
+            if k not in options:
+                options[k] = v
+            
+    if options:
+        ollama_body["options"] = options
+
+    if not state.circuit_breakers.is_allowed("ollama"):
+        raise HTTPException(status_code=503, detail="Ollama service is currently disabled via circuit breaker")
+
+    try:
+        async with state.client.stream("POST", url, json=ollama_body, headers={"Content-Type": "application/json"}, timeout=300.0) as r:
+            if r.status_code >= 400:
+                state.circuit_breakers.record_failure("ollama")
+                content = await r.aread()
+                raise HTTPException(status_code=r.status_code, detail=content.decode())
+            
+            state.circuit_breakers.record_success("ollama")
+            
+            # OpenAI Chunk Envelope
+            chunk_id = f"ollama-{int(time.time())}"
+            
+            async for line in r.aiter_lines():
+                if not line.strip(): continue
+                
+                try:
+                    data = json.loads(line)
+                    if data.get("done"):
+                        # Final chunk with finish reason
+                        usage = {
+                            "prompt_tokens": data.get("prompt_eval_count", 0),
+                            "completion_tokens": data.get("eval_count", 0),
+                            "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
+                        }
+                        
+                        yield {
+                            "id": chunk_id,
+                            "object": OBJ_CHAT_COMPLETION_CHUNK,
+                            "created": int(time.time()),
+                            "model": f"{PREFIX_OLLAMA}:{model_id}",
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                            "usage": usage
+                        }
+                        break
+                    
+                    content = data.get("message", {}).get("content", "")
+                    if content:
+                        yield {
+                            "id": chunk_id,
+                            "object": OBJ_CHAT_COMPLETION_CHUNK,
+                            "created": int(time.time()),
+                            "model": f"{PREFIX_OLLAMA}:{model_id}",
+                            "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
+                        }
+                except Exception as e:
+                    logger.warning(f"Failed to parse Ollama stream line: {e}")
+                    continue
+
+    except Exception as e:
+        state.circuit_breakers.record_failure("ollama")
+        logger.error(f"Ollama stream call failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def call_ollama_chat(
+    model_id: str, 
+    messages: List[Dict[str, Any]], 
+    request_id: str,
+    num_ctx: Optional[int] = None
+) -> Dict[str, Any]:
+    url = join_url(OLLAMA_BASE, "/api/chat")
+    
     ollama_body = {
         "model": model_id,
         "messages": [{"role": m.get("role"), "content": flatten_content(m.get("content", ""))} for m in messages],
