@@ -1166,7 +1166,10 @@ class AgentEngine:
             current_content = ""
             
             # 1. Call Gateway (Streaming)
+            has_started_thinking = False
             async for chunk in self.call_gateway_streaming(messages, model, active_tools):
+                if not chunk.get("choices"): continue
+                
                 delta = chunk["choices"][0].get("delta", {})
                 
                 # A. Content Token
@@ -1177,8 +1180,14 @@ class AgentEngine:
                 
                 # B. Tool Calls (Accumulation)
                 if "tool_calls" in delta and delta["tool_calls"]:
+                    # Emit one-time thinking start signal
+                    if not has_started_thinking:
+                        yield {"type": "thinking_start", "count": 1}
+                        has_started_thinking = True
+                        
                     for tc_chunk in delta["tool_calls"]:
-                        idx = tc_chunk.get("index")
+                        idx = tc_chunk.get("index") # usually 0 or int
+                        if idx is None: idx = 0 # Safety for some providers
                         
                         # Expand list if needed
                         while len(current_tool_calls) <= idx:
