@@ -317,12 +317,36 @@ async def chat_completions(body: Dict[str, Any], request: Request):
                 try:
                     async with log_time(f"Agent Stream [{request_id}]", level=logging.INFO):
                         async for event in engine.agent_stream(messages, model=requested_model, request_id=request_id):
-                            yield f"data: {json.dumps(event)}\n\n"
+                            # Wrap in OpenAI-compatible chunk
+                            chunk = {
+                                "id": f"chatcmpl-{request_id}",
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": requested_model or "agent",
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": event, # Inject custom event fields into delta
+                                        "finish_reason": None
+                                    }
+                                ]
+                            }
+                            # Special handling for 'done' event? 
+                            if event.get("type") == "done":
+                                chunk["choices"][0]["delta"] = {}
+                                chunk["choices"][0]["finish_reason"] = event.get("stop_reason", "stop")
+                                if "usage" in event: chunk["usage"] = event["usage"]
+
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                            
                     yield "data: [DONE]\n\n"
                 except Exception as e:
                     logger.error(f"Stream Error [{request_id}]: {e}")
                     # Try to yield error if stream is still open
-                    yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                    err_chunk = {
+                        "error": {"message": str(e), "type": "internal_server_error", "code": 500}
+                    }
+                    yield f"data: {json.dumps(err_chunk)}\n\n"
                 finally:
                     state.active_requests -= 1
                     state.last_interaction_time = time.time()

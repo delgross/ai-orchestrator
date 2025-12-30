@@ -868,7 +868,19 @@ my-server-name:
                         if (dataStr === '[DONE]') break;
 
                         try {
-                            const event = JSON.parse(dataStr);
+                            const chunk = JSON.parse(dataStr);
+                            let event = chunk;
+                            if (chunk.choices && chunk.choices.length > 0) {
+                                event = chunk.choices[0].delta || {};
+                            }
+                            if (!event.type && event.content) {
+                                event = { type: 'token', content: event.content };
+                            }
+                            if (event.role) continue;
+                            if (chunk.error) {
+                                assistantDiv.textContent += `\n[Error: ${chunk.error.message}]`;
+                                statusSpan.className = "status-indicator error";
+                            }
 
                             // 1. TOKEN
                             if (event.type === 'token') {

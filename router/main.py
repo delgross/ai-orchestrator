@@ -526,84 +526,31 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
         if body.get("stream"):
             async def stream_wrapper():
                 try:
-                    # Create request task
-                    task = asyncio.create_task(state.client.post(url, json=body, timeout=300.0))
-                    
-                    # Wait for task to complete, sending keep-alives
-                    while not task.done():
-                        yield ": keep-alive\n\n"
-                        await asyncio.sleep(2.0)
-                    
-                    # Get result
-                    r = await task
-                    
-                    if r.status_code != 200:
-                        err_msg = r.text
-                        try:
-                            # Try to parse if it's already JSON
-                            err_json = r.json()
-                            if "detail" in err_json:
-                                err_msg = err_json["detail"]
-                            elif "error" in err_json:
-                                err_msg = err_json["error"]
-                        except Exception:
-                            pass
-                        
-                        error_obj = {"error": {"message": err_msg, "type": "agent_runner_error", "code": r.status_code}}
-                        yield f"data: {json.dumps(error_obj)}\n\n"
-                        yield "data: [DONE]\n\n"
-                        return
+                    # Proper streaming proxy using start.client.stream
+                    async with state.client.stream("POST", url, json=body, timeout=300.0) as r:
+                        if r.status_code >= 400:
+                            # Handle error headers/early exit
+                            err_msg = f"Agent returned {r.status_code}"
+                            try:
+                                content = await r.aread()
+                                err_json = json.loads(content)
+                                if "detail" in err_json: err_msg = err_json["detail"]
+                            except: pass
+                            
+                            error_obj = {"error": {"message": err_msg, "type": "agent_error", "code": r.status_code}}
+                            yield f"data: {json.dumps(error_obj)}\n\n"
+                            yield "data: [DONE]\n\n"
+                            return
 
-                    if r.status_code >= 500:
-                        err_msg = "Agent Runner Unavailable (Warming Up / Building)"
-                        logger.warning(f"Agent stream failed: {r.status_code}")
-                        error_obj = {"error": {"message": err_msg, "type": "service_unavailable", "code": 503}}
-                        yield f"data: {json.dumps(error_obj)}\n\n"
-                        yield "data: [DONE]\n\n"
-                        return
-
-                    data = r.json()
-                    content = data["choices"][0]["message"]["content"] or ""
-                    usage = data.get("usage")
-                    
-                    base_chunk = {
-                        "id": data.get("id"),
-                        "object": "chat.completion.chunk",
-                        "created": data.get("created"),
-                        "model": data.get("model"),
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": None}]
-                    }
-                    
-                    # 1. Yield Role
-                    role_chunk = base_chunk.copy()
-                    role_chunk["choices"] = [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
-                    yield f"data: {json.dumps(role_chunk)}\n\n"
-                    
-                    # 2. Yield Content Chunks (Simulate Stream)
-                    chunk_size = 20 # chars
-                    for i in range(0, len(content), chunk_size):
-                        segment = content[i:i+chunk_size]
-                        delta_chunk = base_chunk.copy()
-                        delta_chunk["choices"] = [{"index": 0, "delta": {"content": segment}, "finish_reason": None}]
-                        yield f"data: {json.dumps(delta_chunk)}\n\n"
-                        # Tiny sleep to allow client UI to update (prevent jank on huge messages)
-                        await asyncio.sleep(0.01)
-
-                    # 3. Yield Finish Reason & Usage
-                    # OpenAI sends usage in a separate chunk usually, or with the final chunk
-                    final_chunk = base_chunk.copy()
-                    final_chunk["choices"] = [{"index": 0, "delta": {}, "finish_reason": data["choices"][0]["finish_reason"]}]
-                    if usage:
-                        final_chunk["usage"] = usage
-                    
-                    yield f"data: {json.dumps(final_chunk)}\n\n"
-                    yield "data: [DONE]\n\n"
-
+                        # Stream the raw bytes from the agent (preserving SSE format)
+                        async for chunk in r.aiter_bytes():
+                            yield chunk
+                            
                 except Exception as e:
                     logger.error(f"Agent request failed: {e}")
                     error_obj = {"error": {"message": str(e), "type": "internal_server_error"}}
                     yield f"data: {json.dumps(error_obj)}\n\n"
-                    yield "data: [DONE]\n\n"
+                    pass
 
             return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
         else:
