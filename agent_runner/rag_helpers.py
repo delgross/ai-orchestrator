@@ -160,8 +160,19 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
     shadow_tags = []
     
     # Capture source context just in case, but don't route by it
-    if file_path.parent.name not in ["ingest", "deferred", "review"]:
-        shadow_tags.append(f"source_folder:{file_path.parent.name}")
+    try:
+        # Calculate relative path from Ingest Root to preserve folder semantics
+        # processed_dir_base is .../ingest/processed, so parent is .../ingest
+        ingest_root = processed_dir_base.parent
+        rel_folder = file_path.parent.relative_to(ingest_root)
+        
+        # Avoid tagging "." or system folders if they are the direct parent
+        if str(rel_folder) != "." and file_path.parent.name not in ["ingest", "deferred", "review"]:
+             shadow_tags.append(f"source_folder:{str(rel_folder)}")
+    except Exception:
+        # Fallback if path math fails
+        if file_path.parent.name not in ["ingest", "deferred", "review"]:
+            shadow_tags.append(f"source_folder:{file_path.parent.name}")
 
     try:
         lib_prompt = (
