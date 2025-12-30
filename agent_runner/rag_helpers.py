@@ -261,11 +261,23 @@ keywords: [{', '.join(shadow_tags)}]
 **Summary:** {global_summary}
 ---
 {content}"""
-        await aio_write_text(target_dir / f"{file_path.stem}_transcript.md", sidecar_content)
-        
-        # Move Original
-        await aio_rename(file_path, target_dir / file_path.name)
-        logger.info(f"FILED: {file_path.name} -> {target_dir.name}")
+        # Move Original with Collision Handling
+        target_file = target_dir / file_path.name
+        if target_file.exists():
+            # Collision detected! e.g. "gas.pdf" already exists.
+            # We rename the NEW file to "gas_{timestamp}.pdf" to preserve history.
+            timestamp = int(time.time())
+            new_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
+            target_file = target_dir / new_name
+            # Update sidecar logic to match? The sidecar filename is derived from file_path.stem above.
+            # We need to update the sidecar path too.
+            sidecar_path = target_dir / f"{file_path.stem}_{timestamp}_transcript.md"
+        else:
+            sidecar_path = target_dir / f"{file_path.stem}_transcript.md"
+            
+        await aio_write_text(sidecar_path, sidecar_content)
+        await aio_rename(file_path, target_file)
+        logger.info(f"FILED: {file_path.name} -> {target_file.name}")
         
     except Exception as e:
         logger.error(f"Filing failed for {file_path.name}: {e}")
