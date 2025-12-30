@@ -23,7 +23,7 @@ if has_modal:
     # We pin Python 3.11 because 3.12+ (or 3.14 beta) causes PyO3/Tokenizers build failures.
     image = (
         modal.Image.debian_slim(python_version="3.11")
-        .apt_install("git")
+        .apt_install("git", "poppler-utils")
         .pip_install(
             "networkx", 
             "scikit-learn", 
@@ -40,7 +40,8 @@ if has_modal:
             "qwen-vl-utils",
             # PDF Layout Analysis
             "docling", 
-            "docling-core"
+            "docling-core",
+            "pdf2image"
         )
     )
 
@@ -134,45 +135,110 @@ if has_modal:
     # 3. PDF Ingestion (Advanced Layout Analysis via Docling)
     # Allows H100 GPU usage for OCR if needed, though Docling is often CPU-heavy
     @app.function(image=image, gpu="H100", timeout=900)
+    @app.function(image=image, gpu="H100", timeout=900)
     def cloud_process_pdf(file_bytes: bytes, filename: str):
         """
         Ingests a PDF using Docling for full layout preservation (tables, headers).
+        AND uses Qwen2-VL to extract "Creative Metadata" from the first page (Visual Detective).
         """
         import io
-        from docling.document_converter import DocumentConverter
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.document import InputDocument
-        
-        # Docling expects a file path or stream
-        # flexible approach: write to temp file
-        import tempfile
         import os
-        
+        import json
+        import tempfile
+        from docling.document_converter import DocumentConverter
+        from pdf2image import convert_from_path
+        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        from PIL import Image
+        import torch
+
+        # 1. Setup Files
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        markdown = ""
+        metadata = {}
+
         try:
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(file_bytes)
-                tmp_path = tmp.name
-                
+            # 2. DOCLING (Layout Analysis)
+            # ------------------------------------------------------------------
             converter = DocumentConverter()
             res = converter.convert(tmp_path)
-            
-            # Export to comprehensive Markdown
             markdown = res.document.export_to_markdown()
-            
-            os.remove(tmp_path)
-            return markdown
-            
+
+            # 3. VISUAL DETECTIVE (Metadata extraction via Qwen2-VL)
+            # ------------------------------------------------------------------
+            # Render Page 1
+            images = convert_from_path(tmp_path, first_page=1, last_page=1)
+            if images:
+                page_image = images[0]
+                
+                # Load Model (H100)
+                model_id = "Qwen/Qwen2-VL-72B-Instruct"
+                model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    model_id, torch_dtype="auto", device_map="auto", trust_remote_code=True
+                )
+                processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+                # The "Creative Librarian" Prompt
+                prompt = (
+                    "Analyze this document visually. Return a JSON object with ANY relevant metadata you see. "
+                    "Be creative. Identify: "
+                    "1. Publication/Brand (e.g. TIME, IRS, O'Reilly) "
+                    "2. Document Type (e.g. Invoice, Magazine, Form, Letter) "
+                    "3. Visual Credibility Score (0.0 - 1.0) "
+                    "4. Bibliographic Info (ISBN, Author, Date) "
+                    "5. Sentiment/Mood "
+                    "6. Any other useful tags (e.g. 'recipe', 'urgent', 'legal'). "
+                    "Return ONLY valid JSON."
+                )
+
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": page_image},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ]
+                
+                text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                inputs = processor(text=[text], images=[page_image], padding=True, return_tensors="pt").to("cuda")
+                
+                output_ids = model.generate(**inputs, max_new_tokens=1024)
+                generated_ids = [output_ids[len(inputs.input_ids):] for inputs, output_ids in zip(inputs.input_ids, output_ids)]
+                output_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                
+                # Cleanup Code Blocks
+                clean_json = output_text
+                if "```json" in clean_json:
+                    clean_json = clean_json.split("```json")[1].split("```")[0]
+                elif "```" in clean_json:
+                    clean_json = clean_json.split("```")[1].split("```")[0]
+                
+                try:
+                    metadata = json.loads(clean_json.strip())
+                except:
+                    metadata = {"raw_vision_analysis": output_text}
+
         except Exception as e:
-            # Fallback to simple extraction if Docling explodes on weird encoded PDFs
-            print(f"Docling failed: {e}. Falling back to pypdf.")
+            print(f"Cloud Processing Failed: {e}")
+            # Fallback to PyPDF if Docling fails completely, but usually we just want at least Text
             import pypdf
             stream = io.BytesIO(file_bytes)
             reader = pypdf.PdfReader(stream)
             full_text = []
             for i, page in enumerate(reader.pages):
-                text = page.extract_text()
-                if text: full_text.append(text)
-            return "\n\n".join(full_text)
+                txt = page.extract_text()
+                if txt: full_text.append(txt)
+            markdown = "\n\n".join(full_text)
+            metadata = {"error": str(e), "fallback": "pypdf"}
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        return {"markdown": markdown, "metadata": metadata}
 
     # 4. Heavy Image Analysis (Uses 72B Model on H100)
     @app.function(image=image, gpu="H100", timeout=900)
