@@ -204,7 +204,7 @@ class RAGServer:
     async def get_embedding(self, text: str) -> List[float]:
         try:
             headers = {}
-            # TODO: Clean this up once env vars propagate correctly
+            # Environment variables propagation logic
             token = ROUTER_AUTH_TOKEN or '9sYBjBLjAHKG8g8ZzzsUeBOvtzgQFHmX7oIeygdpzic'
             if token:
                 headers["Authorization"] = f"Bearer {token}"

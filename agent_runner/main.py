@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agent_runner.state import AgentState
 from agent_runner.engine import AgentEngine
-from agent_runner.config import load_mcp_servers, load_agent_runner_limits
+from agent_runner.config import load_mcp_servers
 from agent_runner.tasks import internet_check_task, stdio_process_health_monitor, modal_heartbeat_task
 from agent_runner.background_tasks import get_task_manager, TaskPriority
 from agent_runner.health_monitor import initialize_health_monitor, health_check_task
@@ -69,7 +69,6 @@ async def on_startup():
     setup_logger("logging_utils", log_file="agent_runner.log")
     setup_logger("common.circuit_breaker", log_file="agent_runner.log")
     await load_mcp_servers(state)
-    load_agent_runner_limits(state)
     
     # Run startup backup for data safety
     try:

@@ -2,6 +2,7 @@ import json
 import logging
 import yaml
 from pathlib import Path
+from typing import Dict, Any
 from agent_runner.state import AgentState
 
 logger = logging.getLogger("agent_runner")
@@ -100,12 +101,7 @@ async def load_mcp_servers(state: AgentState) -> None:
         except Exception as e:
             logger.warning(f"Exception during MCP pruning: {e}")
 
-def load_agent_runner_limits(state: AgentState) -> None:
-    """
-    Load limits and general config from config.yaml.
-    Note: Most logic moved to AgentState._load_base_config() for better priority handling.
-    """
-    pass
+# Note: load_agent_runner_limits removed as its logic moved to AgentState._load_base_config()
 
 async def save_mcp_to_config(new_servers: Dict[str, Any]) -> bool:
     """Save/Merge new MCP servers into config.yaml."""

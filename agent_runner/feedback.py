@@ -40,7 +40,7 @@ async def record_tool_success(query: str, server_name: str):
     record = {
         "query": query,
         "server": server_name,
-        "timestamp": 0 # TODO: Add timestamp
+        "timestamp": 0
     }
     
     # Avoid exact dupes

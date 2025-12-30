@@ -2,193 +2,47 @@ import logging
 import os
 import time
 import json
+import asyncio
 from typing import Dict, List, Any, Optional
 from fastapi import HTTPException
-import httpx
-import asyncio
 
 from agent_runner.state import AgentState
 from common.constants import OBJ_MODEL, ROLE_SYSTEM, ROLE_TOOL
 from common.unified_tracking import track_event, EventSeverity, EventCategory
-from agent_runner.tools import fs as fs_tools
-from agent_runner.tools import mcp as mcp_tools
-from agent_runner.feedback import record_tool_success, get_suggested_servers
+import agent_runner.intent as intent
+from agent_runner.executor import ToolExecutor
 
 logger = logging.getLogger("agent_runner")
 
 class AgentEngine:
     def __init__(self, state: AgentState):
         self.state = state
-        self.tool_impls = self._init_tool_impls()
-        self.tool_definitions = self._init_tool_definitions()
-        self.mcp_tool_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self.executor = ToolExecutor(state)
 
-    def _init_tool_impls(self):
-        impls = {
-            "list_dir": fs_tools.tool_list_dir,
-            "path_info": fs_tools.tool_path_info,
-            "read_text": fs_tools.tool_read_text,
-            "write_text": fs_tools.tool_write_text,
-            "append_text": fs_tools.tool_append_text,
-            "make_dir": fs_tools.tool_make_dir,
-            "remove_file": fs_tools.tool_remove_file,
-            "remove_dir": fs_tools.tool_remove_dir,
-            "move_path": fs_tools.tool_move_path,
-            "copy_file": fs_tools.tool_copy_file,
-            "copy_path": fs_tools.tool_copy_path,
-            "find_files": fs_tools.tool_find_files,
-            "batch_operations": fs_tools.tool_batch_operations,
-            "watch_path": fs_tools.tool_watch_path,
-            "query_static_resources": fs_tools.tool_query_static_resources,
-            "mcp_proxy": mcp_tools.tool_mcp_proxy,
-            "knowledge_search": self.tool_knowledge_search,
-            "search": self.tool_unified_search,
-            "ingest_knowledge": self.tool_ingest_knowledge,
-            "ingest_file": self.tool_ingest_file,
-        }
-        return impls
+    # --- Delegate Methods to Executor ---
+    
+    async def discover_mcp_tools(self):
+        """Delegate discovery to executor."""
+        await self.executor.discover_mcp_tools()
 
-    def _init_tool_definitions(self):
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_dir",
-                    "description": "List contents of a directory in the sandboxed workspace. Returns file names, sizes, and types.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "Relative path to list (default '.')"},
-                            "recursive": {"type": "boolean", "description": "Whether to list subdirectories", "default": False},
-                            "max_depth": {"type": "integer", "description": "Max recursion depth", "default": 2}
-                        }
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_text",
-                    "description": "Read the text content of a file from the workspace.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "Path to the file to read."},
-                            "max_bytes": {"type": "integer", "description": "Optional limit on bytes to read."}
-                        },
-                        "required": ["path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "write_text",
-                    "description": "Create a new file or overwrite an existing one with text content.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "Path to create/overwrite."},
-                            "content": {"type": "string", "description": "The text content to write."},
-                            "overwrite": {"type": "boolean", "description": "Whether to allow overwriting existing files.", "default": False}
-                        },
-                        "required": ["path", "content"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "mcp_proxy",
-                    "description": "Call a tool on an MCP (Model Context Protocol) server. Useful for external capabilities like weather, search, or specialized databases.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "server": {"type": "string", "description": "The name of the MCP server to call."},
-                            "tool": {"type": "string", "description": "The name of the tool on that server."},
-                            "arguments": {"type": "object", "description": "The arguments to pass to the tool."}
-                        },
-                        "required": ["server", "tool", "arguments"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "query_static_resources",
-                    "description": "Search or read documentation and reference materials from the 'Static Resources' folder.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Optional keyword search query."},
-                            "resource_name": {"type": "string", "description": "Specific file name to read."},
-                            "list_all": {"type": "boolean", "description": "List all available resources."}
-                        }
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "knowledge_search",
-                    "description": "Deep search across uploaded PDFs, manuals, and long-form documents in your knowledge bases (RAG). Use this for complex questions that require more than just short facts.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "The specific question or topic to search for."},
-                            "kb_id": {"type": "string", "description": "The specific knowledge base to search (default 'default')."},
-                            "filters": {"type": "object", "description": "Optional metadata filters (e.g. {'brand': 'TIME', 'visual_credibility': {'$gt': 0.8}})."}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search",
-                    "description": "The ultimate search tool. It automatically checks your short-term facts (SurrealDB) AND your deep-knowledge bases (RAG). Use this first for any question about your project, farm, or past conversations.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "The question or topic to search for."}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "ingest_knowledge",
-                    "description": "Store a piece of text into the deep knowledge base (RAG). Use this for permanent business logic, farm specs, or medical protocols.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "text": {"type": "string", "description": "The content to remember."},
-                            "kb_id": {"type": "string", "description": "Knowledge base ID (default 'default')."},
-                            "source_name": {"type": "string", "description": "Friendly name for the source (e.g. 'Farm Policy 2025')."}
-                        },
-                        "required": ["text"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "ingest_file",
-                    "description": "Take an existing file from the uploads folder and ingest it into the deep knowledge base.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "Path to the file (e.g. 'uploads/data.txt')."},
-                            "kb_id": {"type": "string", "description": "Knowledge base ID (default 'default')."}
-                        },
-                        "required": ["path"]
-                    }
-                }
-            }
-        ]
+    async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+        """Delegate tool gathering to executor."""
+        return await self.executor.get_all_tools(messages)
+
+    async def execute_tool_call(self, tool_call: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
+        """Delegate execution to executor."""
+        return await self.executor.execute_tool_call(tool_call, request_id)
+
+    # --- Delegate Methods to Intent ---
+
+    def _extract_text_content(self, content: Any) -> str:
+        return intent.extract_text_content(content)
+
+    async def _generate_search_query(self, messages: List[Dict[str, Any]]) -> str:
+        return await intent.generate_search_query(messages, self.state, self.call_gateway_with_tools)
+
+    async def _classify_search_intent(self, query: str) -> Dict[str, Any]:
+        return await intent.classify_search_intent(query, self.state, self.executor.tool_menu_summary)
 
     async def call_gateway_with_tools(self, messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         target_model = model or self.state.agent_model
@@ -232,7 +86,7 @@ class AgentEngine:
                 continue
                 
             # 2. Prepare Payload
-            active_tools = tools or self.tool_definitions
+            active_tools = tools or self.executor.tool_definitions
             payload = {
                 OBJ_MODEL: attempt_model,
                 "messages": messages,
@@ -245,9 +99,10 @@ class AgentEngine:
             try:
                 # Basic string length heuristic is sufficient for logging
                 est_msg_tok = sum(len(str(m)) for m in messages) // 4
-                est_tool_tok = sum(len(str(t)) for t in active_tools) // 4
+                est_tool_tok = sum(len(str(t)) for t in (tools or self.executor.tool_definitions)) // 4
                 logger.info(f"[COST-AUDIT] Model: {attempt_model} | Msgs: ~{est_msg_tok} toks | Tools: ~{est_tool_tok} toks | Total Est: ~{est_msg_tok + est_tool_tok}")
-            except: pass
+            except Exception:
+                pass
             
             try:
                 # 3. Attempt Call
@@ -275,276 +130,7 @@ class AgentEngine:
         logger.error(f"All model attempts failed. Last error: {last_error}")
         raise HTTPException(status_code=500, detail=f"All models failed. Last error: {str(last_error)}")
 
-    async def execute_tool_call(self, tool_call: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
-        fn = tool_call.get("function") or {}
-        name = fn.get("name")
-        args_str = fn.get("arguments") or "{}"
-        
-        if name and str(name).startswith("mcp__"):
-            parts = str(name).split("__")
-            if len(parts) >= 3:
-                server = parts[1]
-                tool = "__".join(parts[2:])
-                try:
-                    args = json.loads(args_str)
-                    track_event(
-                        event="mcp_proxy_call",
-                        message=f"Calling MCP tool: {server}::{tool}",
-                        severity=EventSeverity.INFO,
-                        category=EventCategory.MCP,
-                        component="engine",
-                        metadata={"server": server, "tool": tool, "arguments": args},
-                        request_id=request_id
-                    )
-                    from agent_runner.tools.mcp import tool_mcp_proxy
-                    result = await tool_mcp_proxy(self.state, server, tool, args)
-                    track_event(
-                        event="mcp_proxy_ok",
-                        message=f"MCP tool success: {server}::{tool}",
-                        severity=EventSeverity.INFO,
-                        category=EventCategory.MCP,
-                        component="engine",
-                        metadata={"server": server, "tool": tool},
-                        request_id=request_id
-                    )
-                    
-                    # [FEATURE-9] Learning Loop: Record successful tool usage
-                    try:
-                        # Find last user query to associate with this tool success
-                        last_user_msg = next((m for m in reversed(self.state.messages) if m.get("role") == "user"), None)
-                        if last_user_msg:
-                            from agent_runner.feedback import record_tool_success
-                            await record_tool_success(str(last_user_msg.get("content", "")), server)
-                    except Exception as e:
-                        logger.warning(f"Failed to record learning: {e}")
 
-                    return result
-                except Exception as e:
-                    track_event(
-                        event="mcp_proxy_error",
-                        message=f"MCP tool failed: {server}::{tool}",
-                        severity=EventSeverity.HIGH,
-                        category=EventCategory.MCP,
-                        component="engine",
-                        metadata={"server": server, "tool": tool, "error_type": type(e).__name__},
-                        error=e,
-                        request_id=request_id
-                    )
-                    return {"ok": False, "error": str(e)}
-
-        if name not in self.tool_impls:
-            return {"ok": False, "error": f"Unknown tool '{name}'"}
-            
-        try:
-            args = json.loads(args_str)
-            impl = self.tool_impls[name]
-            
-            track_event(
-                event="tool_call",
-                message=f"Calling local tool: {name}",
-                severity=EventSeverity.INFO,
-                category=EventCategory.TASK,
-                component="engine",
-                metadata={"tool_name": name, "arguments": args},
-                request_id=request_id
-            )
-            
-            if asyncio.iscoroutinefunction(impl):
-                result = await impl(self.state, **args)
-            else:
-                result = impl(self.state, **args)
-            
-            track_event(
-                event="tool_ok",
-                message=f"Local tool success: {name}",
-                severity=EventSeverity.INFO,
-                category=EventCategory.TASK,
-                component="engine",
-                metadata={"tool_name": name},
-                request_id=request_id
-            )
-            return {"ok": True, "result": result}
-        except Exception as e:
-            track_event(
-                event="tool_error",
-                message=f"Local tool failed: {name}",
-                severity=EventSeverity.HIGH,
-                category=EventCategory.TASK,
-                component="engine",
-                metadata={"tool_name": name, "error_type": type(e).__name__},
-                error=e,
-                request_id=request_id
-            )
-            return {"ok": False, "error": str(e)}
-
-    async def discover_mcp_tools(self):
-        """Discover tools from all configured MCP servers."""
-        logger.info(f"Starting MCP discovery. Servers: {list(self.state.mcp_servers.keys())}")
-        for server_name in list(self.state.mcp_servers.keys()):
-            cfg = self.state.mcp_servers[server_name]
-            logger.info(f"Discovering tools for {server_name}. Config: {cfg}")
-            try:
-                from agent_runner.tools.mcp import tool_mcp_proxy
-                res = await tool_mcp_proxy(self.state, server_name, "tools/list", {}, bypass_circuit_breaker=True)
-                if res.get("ok"):
-                    # Handle both direct result or nested result
-                    data = res.get("result", res)
-                    remote_tools = data.get("tools", [])
-                    defs = []
-                    for rt in remote_tools:
-                        defs.append({
-                            "type": "function",
-                            "function": {
-                                "name": rt.get("name"),
-                                "description": rt.get("description"),
-                                "parameters": rt.get("inputSchema", {"type": "object", "properties": {}})
-                            }
-                        })
-                    self.mcp_tool_cache[server_name] = defs
-                    logger.info(f"Discovered {len(defs)} tools from MCP server '{server_name}'")
-            except Exception as e:
-                logger.warning(f"Failed discovery for {server_name}: {e}")
-        
-        # [FEATURE-9] Generate Static Tool Menu (The "Maître d' Menu")
-        # Optimization: Exclude CORE servers that are always loaded.
-        # This keeps the menu focused on "Discretionary" tools (e.g. filesystem, search).
-        # We also removed the manual "Hint" generation in favor of semantic matching (future) or simple tool lists.
-        menu_lines = []
-        core_servers = {"project-memory", "time", "weather", "thinking", "system-control"}
-        
-        for srv, tools in self.mcp_tool_cache.items():
-            if not tools: continue
-            if srv in core_servers: continue # Skip Core
-            
-            # Format: "ServerName: Tool1, Tool2, ..."
-            t_names = [t["function"]["name"] for t in tools[:8]] # Slight bump to 8
-            if len(tools) > 8:
-                t_names.append("...")
-            line = f"{srv}: {', '.join(t_names)}"
-            menu_lines.append(line)
-        
-        self.tool_menu_summary = "\n".join(menu_lines)
-        if not self.tool_menu_summary:
-            self.tool_menu_summary = "(No external tools available)"
-            
-        logger.info(f"Generated Maître d' Menu (Filtered Core, {len(menu_lines)} servers):\n{self.tool_menu_summary}")
-
-    async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-        """Combine built-in tools with discovered MCP tools, filtering by environmental constraints."""
-        tools = list(self.tool_definitions)
-        
-    async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-        """Combine built-in tools with discovered MCP tools, filtering by Intent Menu."""
-        tools = list(self.tool_definitions)
-        
-        # 1. Determine Identity/Intent via Maître d'
-        target_servers = set()
-        if messages:
-             # Get last user message
-            last_user_msg = next((m for m in reversed(messages) if m.get("role") == "user"), None)
-            if last_user_msg:
-                # We classify intent based on the latest query
-                intent = await self._classify_search_intent(str(last_user_msg.get("content", "")))
-                target_servers = set(intent.get("target_servers", []))
-                
-        # 2. Add Discovered Tools (Filtered)
-        for server_name, server_tools in self.mcp_tool_cache.items():
-            # Environmental check
-            server_cfg = self.state.mcp_servers.get(server_name, {})
-            if server_cfg.get("requires_internet") and not self.state.internet_available:
-                continue
-
-            # Core servers are ALWAYS allowed (safety/utility)
-            is_core = server_name in ["project-memory", "time", "weather", "system-control", "thinking"]
-            
-            # Selection Logic: Include if Core OR Selected by Maître d'
-            if is_core or (server_name in target_servers):
-                for t in server_tools:
-                    orig_func = t.get("function", {})
-                    # No description keywords needed anymore - decision was made at server level!
-                    wrapped = {
-                        "type": "function",
-                        "function": {
-                            "name": f"mcp__{server_name}__{orig_func.get('name')}",
-                            "description": orig_func.get("description"),
-                            "parameters": orig_func.get("parameters")
-                        }
-                    }
-                    tools.append(wrapped)
-        
-        return tools
-        
-        return tools
-
-    def _extract_text_content(self, content: Any) -> str:
-        """Extract plain text from potential list-based content (common in advanced clients)."""
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            # Extract text from blocks like [{'type': 'text', 'text': 'hi'}]
-            return " ".join([str(block.get("text", "")) for block in content if isinstance(block, dict) and block.get("type") == "text"])
-        return str(content)
-
-    async def _generate_search_query(self, messages: List[Dict[str, Any]]) -> str:
-        """Use LLM to rewrite the latest user message into a standalone search query."""
-        if messages:
-            logger.info(f"DEBUG: Internal Query Gen. History={len(messages)}. Last Role={messages[-1].get('role')}")
-        
-        # Find the last user message
-        last_user_msg = None
-        for m in reversed(messages):
-            if m.get("role") == "user":
-                last_user_msg = m
-                break
-        
-        if not last_user_msg:
-            return ""
-
-        last_user_content = self._extract_text_content(last_user_msg.get("content"))
-
-        # Use the Agent Model (fast) to rewrite
-        sys_prompt = (
-            "You are a Database Search Query Generator. "
-            "Convert the LAST user message into a specific keyword search query for a vector database. "
-            "Resolve pronouns based on context. "
-            "Do NOT answer the question. Do NOT be polite. "
-            "Output ONLY the query string."
-        )
-        
-        # Reduced context for rewriting
-        # Extract text from last 3 messages to avoid passing huge JSON blobs
-        context_text = []
-        for m in messages[-3:]:
-            role = m.get("role")
-            text = self._extract_text_content(m.get("content"))
-            context_text.append(f"{role}: {text}")
-        
-        user_prompt = f"Context:\n{chr(10).join(context_text)}\n\nGenerate Search Query for the last user message:"
-        
-        prompt_msgs = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        
-        try:
-            # We call the gateway without tools
-            t0 = time.time()
-            # Using agent_model (likely gpt-4o-mini) for speed
-            response = await self.call_gateway_with_tools(
-                messages=prompt_msgs,
-                model=self.state.agent_model, 
-                tools=None
-            )
-            rewritten = response["choices"][0]["message"]["content"].strip()
-            # Clean quotes
-            if rewritten.startswith('"') and rewritten.endswith('"'):
-                rewritten = rewritten[1:-1]
-            dur = (time.time() - t0) * 1000
-            logger.info(f"Query Refinement: '{last_user_content[:50]}...' -> '{rewritten}' ({dur:.2f}ms)")
-            return rewritten
-        except Exception as e:
-            logger.warning(f"Query refinement failed: {e}. Falling back to raw content.")
-            return last_user_content
 
     async def get_system_prompt(self, user_messages: Optional[List[Dict[str, Any]]] = None) -> str:
         """Construct the dynamic system prompt with memory context and environmental awareness."""
@@ -818,241 +404,6 @@ class AgentEngine:
 
         return {"error": "Max tool steps reached"}
 
-    async def tool_knowledge_search(self, state: AgentState, query: str, kb_id: str = "default", filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Query the RAG server for deep content."""
-        rag_url = "http://127.0.0.1:5555/query"
-        try:
-            async with httpx.AsyncClient() as client:
-                # Use query-specific limit for depth
-                payload = {"query": query, "kb_id": kb_id, "limit": 7}
-                if filters:
-                    payload["filters"] = filters
-                r = await client.post(rag_url, json=payload, timeout=25.0)
-                if r.status_code == 200:
-                    data = r.json()
-                    # Return both the concatenated text AND the raw chunks for citation building
-                    return {
-                        "ok": True, 
-                        "context_found": data.get("answer", ""), 
-                        "chunks": data.get("context", [])
-                    }
-                else:
-                    return {"ok": False, "error": f"RAG server returned {r.status_code}"}
-        except Exception as e:
-            return {"ok": False, "error": f"RAG connection failed: {str(e)}"}
-
-    async def _classify_search_intent(self, query: str) -> Dict[str, Any]:
-        """Classify query and select relevant toolsets using the 'Maître d' Menu'."""
-        menu = getattr(self, "tool_menu_summary", "")
-        if not menu:
-            # Fallback if discovery hasn't run
-            return {"target_servers": [], "notes": "No menu available"}
-
-        # [FEATURE-9] Learning Loop: Inject suggestions from history
-        suggestions_str = ""
-        try:
-            suggestions = await get_suggested_servers(query)
-            if suggestions:
-                # We limit to top 3 to avoid bias
-                suggestions_str = f"Recall: User usage history suggests these servers are relevant: {', '.join(suggestions[:3])}\n"
-        except Exception:
-            pass
-
-        prompt = (
-            "You are the Tool Selector (The Maître d').\n"
-            f"User Query: '{query}'\n\n"
-            "Available Discretionary Tools (Menu):\n"
-            f"{menu}\n\n"
-            f"{suggestions_str}"
-            "Task: Select the 'target_servers' from the menu that are required for this query.\n"
-            "Note: Core tools (Memory, Time, Thinking) are ALREADY loaded. Only select from the menu if needed.\n"
-            "Response Format: {\"target_servers\": [\"server1\"]}"
-        )
-
-        try:
-            # Helper for explicit fast call
-            async with httpx.AsyncClient() as client:
-                payload = {
-                    "model": self.state.agent_model, # e.g. gpt-4o-mini
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "response_format": {"type": "json_object"}
-                }
-                url = f"{self.state.gateway_base}/v1/chat/completions"
-                logger.info(f"Maître d' URL: {url}")
-                r = await client.post(url, json=payload, timeout=25.0)
-                if r.status_code == 200:
-                    try:
-                        data = r.json()
-                        content = data["choices"][0]["message"]["content"]
-                        return json.loads(content)
-                    except json.JSONDecodeError:
-                        logger.error(f"Maître d' JSON Error. Body: {r.text[:500]}")
-                        return {"target_servers": []}
-                elif r.status_code == 429:
-                    logger.warning("Maître d' Overloaded (429). Bypassing intent classification.")
-                    return {"target_servers": []} # Fail Open
-        except Exception as e:
-            logger.warning(f"Intent classification failed: {e}")
-        
-        # Safe Fallback: Return empty (Core tools will still be loaded by get_all_tools)
-        return {"target_servers": []}
-
-    async def tool_unified_search(self, state: AgentState, query: str) -> Dict[str, Any]:
-        """Check both Facts and RAG in one go with adaptive multi-domain routing."""
-        # 1. INTENT CLASSIFICATION (Feature 6: Adaptive Search)
-        intent = await self._classify_search_intent(query)
-        
-        # 2. DYNAMIC DISPATCHER
-        # Get existing KB stats to see what's actually available
-        target_kbs = ["default"] if intent["rag"] else []
-        q_lower = query.lower()
-        
-        if intent["rag"]:
-            # CIRCUIT BREAKER: Fast health check before committing to complex parallel search
-            try:
-                async with httpx.AsyncClient() as client:
-                    # We check stats as it doubles as a health & discovery check
-                    stats_res = await client.get("http://127.0.0.1:5555/stats", timeout=2.0)
-                    if stats_res.status_code != 200:
-                        logger.warning("UNIFIED SEARCH: RAG Circuit Breaker TRIPPED. Falling back to MEMORY ONLY.")
-                        target_kbs = [] # Disable RAG for this query
-                    else:
-                        available_kbs = stats_res.json().get("knowledge_bases", {}).keys()
-                        # Detect if query keywords match any known KB names
-                        for kb in available_kbs:
-                            if kb.replace("farm-", "").replace("osu-", "") in q_lower:
-                                target_kbs.append(kb)
-            except Exception as e:
-                logger.warning(f"UNIFIED SEARCH: RAG Connection Failed ({e}). Falling back to MEMORY ONLY.")
-                target_kbs = []
-
-            # Hardcoded semantic fallbacks for common aliases
-            domains = {
-                "farm-noc": ["starlink", "router", "noc", "wan", "lan", "ip", "network", "omada"],
-                "osu-med": ["medical", "osu", "clinic", "health", "radiology", "doctor"],
-                "farm-beekeeping": ["bees", "hive", "honey", "queen", "apiary", "pollination"],
-                "farm-agronomy": ["planting", "harvest", "soil", "crop", "seed", "fertilizer", "tractor"],
-                "farm-woodworking": ["woodworking", "wood", "saw", "joint", "joinery", "lathe", "planer", "workshop", "lumber", "species"]
-            }
-            for kb, keywords in domains.items():
-                if any(w in q_lower for w in keywords):
-                    target_kbs.append(kb)
-            
-            # Filter duplicates and remove 'default' if we have specific hits
-            target_kbs = list(set(target_kbs))
-            if len(target_kbs) > 1 and "default" in target_kbs:
-                target_kbs.remove("default")
-
-        # 3. Start parallel searches across ALL relevant layers
-        from agent_runner.tools.mcp import tool_mcp_proxy
-        
-        search_tasks = []
-        fact_idx = -1
-        
-        # Parallel Fact Search (The Diary)
-        if intent["facts"]:
-            fact_idx = len(search_tasks)
-            search_tasks.append(asyncio.create_task(tool_mcp_proxy(state, "project-memory", "semantic_search", {"query": query})))
-        
-        # Parallel Multi-KB Search (The Library)
-        rag_start_idx = len(search_tasks)
-        if target_kbs:
-            for kb in target_kbs:
-                search_tasks.append(asyncio.create_task(self.tool_knowledge_search(state, query, kb_id=kb)))
-        
-        if not search_tasks:
-             return {"ok": True, "message": "Query classified as out-of-scope for searching."}
-
-        # Wait for all
-        all_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-        
-        fact_res = {"ok": False}
-        if fact_idx != -1:
-            fact_res = all_results[fact_idx] if not isinstance(all_results[fact_idx], BaseException) else {"ok": False}
-        
-        rag_results = all_results[rag_start_idx:]
-        
-        combined_context = f"SEARCH MODE: Hybrid (Domains: {', '.join(target_kbs)})\n\n"
-        
-        if fact_res.get("ok"):
-            # Unwrap MCP response
-            try:
-                res_obj = fact_res.get("result", {})
-                if "content" in res_obj:
-                    # Standard MCP TextContent
-                    facts_data = json.loads(res_obj["content"][0]["text"])
-                    facts = facts_data.get("facts", [])
-                else:
-                    facts = res_obj.get("facts", [])
-                
-                if facts:
-                    combined_context += "### [MEMORY DIARY] (Short-term confirmed facts):\n"
-                    # Filter for only high confidence facts in search results
-                    for f in facts[:5]:
-                        if f.get("confidence", 1.0) > 0.4:
-                            combined_context += f"- {f.get('entity')} {f.get('relation')} {f.get('target')} (Confidence: {f.get('confidence', 0.0):.2f})\n"
-                    combined_context += "\n"
-            except: pass
-        
-        # 3. Process Multi-KB results
-        for i, rag_res in enumerate(rag_results):
-            if isinstance(rag_res, Exception) or not rag_res.get("ok"):
-                continue
-                
-            chunks = rag_res.get("chunks", [])
-            kb_name = target_kbs[i]
-            if chunks:
-                combined_context += f"### [DEEP KNOWLEDGE: {kb_name}]\n"
-                for j, c in enumerate(chunks):
-                    fname = c.get("filename", "Unknown Source")
-                    quality = c.get("quality_score", 0.0)
-                    combined_context += f"\n[DOC {j+1} from {fname}] (QoI: {quality:.2f})\n{c.get('content')}\n"
-                combined_context += "\n"
-                
-        if len(combined_context) < 50:
-            return {"ok": True, "message": "No relevant info found in facts or documents."}
-            
-        return {"ok": True, "search_results": combined_context}
-
-    async def tool_ingest_knowledge(self, state: AgentState, text: str, kb_id: str = "default", source_name: str = "Chat") -> Dict[str, Any]:
-        """Manually push text into RAG."""
-        rag_url = "http://127.0.0.1:5555/ingest"
-        try:
-            payload = {
-                "content": text,
-                "kb_id": kb_id,
-                "filename": source_name,
-                "metadata": {"type": "manual_ingest", "timestamp": time.time()}
-            }
-            async with httpx.AsyncClient() as client:
-                r = await client.post(rag_url, json=payload, timeout=30.0)
-                if r.status_code == 200:
-                    return {"ok": True, "message": f"Successfully ingested {len(text)} chars into KB '{kb_id}'"}
-                return {"ok": False, "error": f"RAG server error: {r.status_code}"}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
-
-    async def tool_ingest_file(self, state: AgentState, path: str, kb_id: str = "default") -> Dict[str, Any]:
-        """Ingest a file from the local filesystem (sandbox) into RAG."""
-        full_path = os.path.join(state.agent_fs_root, path)
-        if not os.path.exists(full_path):
-            return {"ok": False, "error": f"File not found: {path}"}
-        
-        try:
-            # Check extension
-            ext = os.path.splitext(path)[1].lower()
-            if ext not in ['.txt', '.md', '.csv']:
-                return {"ok": False, "error": f"Unsupported file type for direct ingestion: {ext}. Currently only text-based files are supported."}
-            
-            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-            
-            return await self.tool_ingest_knowledge(state, content, kb_id, source_name=os.path.basename(path))
-        except Exception as e:
-            return {"ok": False, "error": f"Ingestion failed: {str(e)}"}
-
     async def _handle_fallback(self, messages, active_tools, worker_draft):
         """Centralized fallback logic when primary/finalizer models fail."""
         if self.state.fallback_enabled and self.state.fallback_model:
@@ -1065,12 +416,13 @@ class AgentEngine:
                 messages.append(message)
             except Exception as fb_e:
                 logger.error(f"Fallback Engine failed: {fb_e}")
-                # 3. Revert to Worker
-                if worker_draft: messages.append(worker_draft)
+                if worker_draft:
+                    messages.append(worker_draft)
         else:
             # Fallback disabled, Revert
             logger.warning("Fallback disabled. Reverting to Worker response.")
-            if worker_draft: messages.append(worker_draft)
+            if worker_draft:
+                messages.append(worker_draft)
 
     async def call_gateway_streaming(self, messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None):
         """Yields SSE events from the Model Gateway."""
@@ -1099,7 +451,7 @@ class AgentEngine:
             if not self.state.mcp_circuit_breaker.is_allowed(attempt_model):
                 continue
 
-            active_tools = tools or self.tool_definitions
+            active_tools = tools or self.executor.tool_definitions
             payload = {
                 OBJ_MODEL: attempt_model,
                 "messages": messages,
@@ -1113,14 +465,17 @@ class AgentEngine:
                 async with client.stream("POST", url, json=payload, headers=headers, timeout=self.state.http_timeout) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
-                        if not line.strip(): continue
+                        if not line.strip():
+                            continue
                         if line.startswith("data: "):
                             data_str = line[6:]
-                            if data_str == "[DONE]": break
+                            if data_str == "[DONE]":
+                                break
                             try:
                                 data = json.loads(data_str)
                                 yield data
-                            except: pass
+                            except Exception:
+                                pass
                 
                 # If we finished the stream successfully, return (break loop)
                 self.state.mcp_circuit_breaker.record_success(attempt_model)
@@ -1167,7 +522,8 @@ class AgentEngine:
             # 1. Call Gateway (Streaming)
             has_started_thinking = False
             async for chunk in self.call_gateway_streaming(messages, model, active_tools):
-                if not chunk.get("choices"): continue
+                if not chunk.get("choices"):
+                    continue
                 
                 delta = chunk["choices"][0].get("delta", {})
                 
@@ -1186,18 +542,22 @@ class AgentEngine:
                         
                     for tc_chunk in delta["tool_calls"]:
                         idx = tc_chunk.get("index") # usually 0 or int
-                        if idx is None: idx = 0 # Safety for some providers
+                        if idx is None:
+                            idx = 0 # Safety for some providers
                         
                         # Expand list if needed
                         while len(current_tool_calls) <= idx:
                             current_tool_calls.append({"index": len(current_tool_calls), "id": "", "function": {"name": "", "arguments": ""}})
                         
                         target = current_tool_calls[idx]
-                        if tc_chunk.get("id"): target["id"] += tc_chunk["id"]
+                        if tc_chunk.get("id"):
+                            target["id"] += tc_chunk["id"]
                         
                         fn = tc_chunk.get("function", {})
-                        if fn.get("name"): target["function"]["name"] += fn["name"]
-                        if fn.get("arguments"): target["function"]["arguments"] += fn["arguments"]
+                        if fn.get("name"):
+                            target["function"]["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            target["function"]["arguments"] += fn["arguments"]
 
             # 2. Process Accumulation
             # If we had tool calls, we need to handle them.
