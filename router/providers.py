@@ -4,10 +4,25 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, before_sleep_log
 from router.config import Provider, state, PROVIDERS_YAML, DEFAULT_UPSTREAM_HEADERS, OLLAMA_BASE, PREFIX_OLLAMA, OBJ_CHAT_COMPLETION, ROLE_ASSISTANT
 from router.utils import join_url, parse_default_headers, merge_headers
 
 logger = logging.getLogger("router.providers")
+
+# Retry predicate for 429s (Rate Limits)
+def is_rate_limit_error(e: Exception) -> bool:
+    if isinstance(e, HTTPException) and e.status_code == 429:
+        return True
+    return False
+
+# Retry configuration: Wait 2^x * 1s, up to 10s, max 5 attempts
+retry_policy = retry(
+    retry=retry_if_exception(is_rate_limit_error),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    before_sleep=before_sleep_log(logger, logging.WARNING)
+)
 
 def provider_headers(prov: Provider) -> Dict[str, str]:
     headers: Dict[str, str] = {}

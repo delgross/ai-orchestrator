@@ -25,7 +25,7 @@ from common.constants import (
 from router.config import state, VERSION, OLLAMA_BASE, AGENT_RUNNER_URL, AGENT_RUNNER_CHAT_PATH, MODELS_CACHE_TTL_S, MAX_REQUEST_BODY_BYTES, FS_ROOT, RAG_BASE
 from router.utils import join_url, sanitize_messages, parse_model_string
 from router.middleware import require_auth
-from router.providers import load_providers, call_ollama_chat, provider_headers
+from router.providers import load_providers, call_ollama_chat, provider_headers, retry_policy
 from router.rag import call_rag
 from router.agent_manager import check_agent_runner_health, get_agent_models
 from router.admin import router as admin_router
@@ -622,11 +622,18 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
             else:
                 # Regular non-streaming request
                 try:
-                    # Increased timeout to 120s for serverless cold boots (H100s)
-                    r = await state.client.post(url, headers=provider_headers(prov), json=body, timeout=120.0)
-                    if r.status_code >= 400:
-                        state.circuit_breakers.record_failure(prefix)
-                        raise HTTPException(status_code=r.status_code, detail=r.text)
+                    @retry_policy
+                    async def fetch_provider():
+                        # Increased timeout to 120s for serverless cold boots (H100s)
+                        r = await state.client.post(url, headers=provider_headers(prov), json=body, timeout=120.0)
+                        if r.status_code == 429:
+                           raise HTTPException(status_code=429, detail="Rate Limit")
+                        if r.status_code >= 400:
+                            state.circuit_breakers.record_failure(prefix)
+                            raise HTTPException(status_code=r.status_code, detail=r.text)
+                        return r
+
+                    r = await fetch_provider()
                     
                     state.circuit_breakers.record_success(prefix)
                     data = r.json()
@@ -645,7 +652,7 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                     return JSONResponse(data)
                 except Exception as e:
                     state.circuit_breakers.record_failure(prefix)
-                    logger.error(f"Provider {prefix} non-streaming call failed: {e}")
+                    logger.error(f"Provider {prefix} non-streaming call failed (swallowed 429 retries): {e}")
                     if isinstance(e, HTTPException):
                         raise
                     raise HTTPException(status_code=500, detail=str(e))
