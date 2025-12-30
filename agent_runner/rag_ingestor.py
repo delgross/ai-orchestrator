@@ -176,6 +176,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     raise ImportError("Modal not available")
                     
                 content = ""
+                cloud_meta = {}
                 ext = file_path.suffix.lower()
                 
                 # Async read for upload
@@ -184,7 +185,13 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 if ext == '.pdf':
                      # Modal calls are currently synchronous, user might want to optimize this later
                      # For now run in thread to avoid blocking loop
-                     content = await asyncio.to_thread(cloud_process_pdf.remote, file_bytes, file_path.name)
+                     res = await asyncio.to_thread(cloud_process_pdf.remote, file_bytes, file_path.name)
+                     
+                     if isinstance(res, dict):
+                         content = res.get("markdown", "")
+                         cloud_meta = res.get("metadata", {})
+                     else:
+                         content = str(res)
                 
                 elif ext in ('.png', '.jpg', '.jpeg'):
                     raw = await asyncio.to_thread(cloud_process_image.remote, file_bytes)
@@ -195,7 +202,7 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                     
                 # If we get here with content, finalize
                 if content:
-                    await _ingest_content(file_path, content, state, http_client, rag_base_url, PROCESSED_BASE_DIR, REVIEW_DIR)
+                    await _ingest_content(file_path, content, state, http_client, rag_base_url, PROCESSED_BASE_DIR, REVIEW_DIR, cloud_metadata=cloud_meta)
 
             except Exception as e:
                 logger.error(f"Modal failed for {file_path.name}: {e}. Keeping deferred.")
