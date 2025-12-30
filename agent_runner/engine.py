@@ -879,7 +879,8 @@ class AgentEngine:
                     "stream": False,
                     "response_format": {"type": "json_object"}
                 }
-                r = await client.post(self.state.gateway_url, json=payload, timeout=25.0)
+                url = f"{self.state.gateway_base}/v1/chat/completions"
+                r = await client.post(url, json=payload, timeout=25.0)
                 if r.status_code == 200:
                     data = r.json()
                     content = data["choices"][0]["message"]["content"]
