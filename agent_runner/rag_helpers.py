@@ -138,7 +138,7 @@ async def _process_locally(file_path: Path, state: Any, http_client: Any) -> str
 
 # --- INGESTION PIPELINE ---
 
-async def _ingest_content(file_path: Path, content: str, state: Any, http_client: Any, rag_base_url: str, processed_dir_base: Path, review_dir: Path):
+async def _ingest_content(file_path: Path, content: str, state: Any, http_client: Any, rag_base_url: str, processed_dir_base: Path, review_dir: Path, cloud_metadata: dict = None):
     """
     Submits extracted content to RAG, Librarian, and Knowledge Graph.
     Includes smart filing.
@@ -215,6 +215,10 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
         },
         "prepend_text": f"[DOCUMENT SUMMARY: {global_summary}] " if global_summary else ""
     }
+    
+    # Merge Cloud Metadata (Creative Librarian)
+    if cloud_metadata:
+        payload["metadata"].update(cloud_metadata)
     # Shadow tags injection
     if shadow_tags:
         payload["content"] += f"\n\n[Index Keywords: {', '.join(shadow_tags)}]"
