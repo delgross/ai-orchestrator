@@ -100,7 +100,8 @@ class AgentState:
                 print(f"Failed to load config.yaml as base: {e}")
 
         # Global Registries (Formerly module-level globals)
-        self.config: Dict[str, Any] = {}
+        if not hasattr(self, 'config'):
+            self.config: Dict[str, Any] = {}
         self.mcp_servers: Dict[str, Dict[str, Any]] = {}
         # Stdio Management
         self.stdio_processes: Dict[str, Any] = {}

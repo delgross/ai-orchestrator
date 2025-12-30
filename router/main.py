@@ -25,7 +25,7 @@ from common.constants import (
 from router.config import state, VERSION, OLLAMA_BASE, AGENT_RUNNER_URL, AGENT_RUNNER_CHAT_PATH, MODELS_CACHE_TTL_S, MAX_REQUEST_BODY_BYTES, FS_ROOT, RAG_BASE
 from router.utils import join_url, sanitize_messages, parse_model_string
 from router.middleware import require_auth
-from router.providers import load_providers, call_ollama_chat, provider_headers, retry_policy
+from router.providers import load_providers, call_ollama_chat, call_ollama_chat_stream, provider_headers, retry_policy
 from router.rag import call_rag
 from router.agent_manager import check_agent_runner_health, get_agent_models
 from router.admin import router as admin_router
@@ -242,17 +242,21 @@ async def v1_models(request: Request):
         pass
 
     # 4. Providers
-    for p_name, prov in state.providers.items():
+    async def fetch_provider_models(p_name, p):
         try:
-            url = join_url(prov.base_url, prov.models_path)
-            r = await state.client.get(url, headers=provider_headers(prov), timeout=3.0)
+            url = join_url(p.base_url, p.models_path)
+            r = await state.client.get(url, headers=provider_headers(p), timeout=5.0)
             if r.status_code == 200:
                 p_models = r.json().get("data", [])
-                for m in p_models:
-                    m_id = m.get("id", "")
-                    data.append({"id": f"{p_name}:{m_id}", "object": OBJ_MODEL, "owned_by": p_name})
-        except Exception:
-            pass
+                return [{"id": f"{p_name}:{m.get('id', '')}", "object": OBJ_MODEL, "owned_by": p_name} for m in p_models]
+        except Exception as e:
+            logger.warning(f"Failed to fetch models for provider {p_name}: {e}")
+        return []
+
+    provider_tasks = [fetch_provider_models(name, prov) for name, prov in state.providers.items()]
+    provider_results = await asyncio.gather(*provider_tasks)
+    for res in provider_results:
+        data.extend(res)
     
     payload = {"object": OBJ_LIST, "data": data}
     state.models_cache = (time.time(), payload)
@@ -580,7 +584,6 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
     
     elif prefix == PREFIX_OLLAMA:
         if body.get("stream"):
-            from router.providers import call_ollama_chat_stream
             
             async def sse_generator():
                 async for chunk in call_ollama_chat_stream(model_id, body["messages"], request_id):

@@ -2,10 +2,11 @@ import os
 import yaml
 import logging
 import time
+import json
 from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, before_sleep_log
-from router.config import Provider, state, PROVIDERS_YAML, DEFAULT_UPSTREAM_HEADERS, OLLAMA_BASE, PREFIX_OLLAMA, OBJ_CHAT_COMPLETION, ROLE_ASSISTANT
+from router.config import Provider, state, PROVIDERS_YAML, DEFAULT_UPSTREAM_HEADERS, OLLAMA_BASE, PREFIX_OLLAMA, OBJ_CHAT_COMPLETION, ROLE_ASSISTANT, OBJ_CHAT_COMPLETION_CHUNK
 from router.utils import join_url, parse_default_headers, merge_headers
 
 logger = logging.getLogger("router.providers")
@@ -93,14 +94,7 @@ def load_providers() -> Dict[str, Provider]:
         )
     return out
 
-async def call_ollama_chat(
-    model_id: str,
-    messages: List[Dict[str, Any]],
-    request_id: str,
-    num_ctx: Optional[int] = None
-) -> Dict[str, Any]:
-    url = join_url(OLLAMA_BASE, "/api/chat")
-    
+# Local Model Handlers
 # helper to flatten content
 def flatten_content(c: Any) -> str:
     if isinstance(c, str):

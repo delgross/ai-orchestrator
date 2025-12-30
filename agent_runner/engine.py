@@ -241,12 +241,11 @@ class AgentEngine:
                 "stream": False,
             }
             
-            # [COST-AUDIT] Log estimated token usage
+            # [COST-AUDIT] Log estimated token usage (Low CPU estimation)
             try:
-                msg_len = len(json.dumps(messages))
-                tool_len = len(json.dumps(active_tools))
-                est_msg_tok = msg_len // 4
-                est_tool_tok = tool_len // 4
+                # Basic string length heuristic is sufficient for logging
+                est_msg_tok = sum(len(str(m)) for m in messages) // 4
+                est_tool_tok = sum(len(str(t)) for t in active_tools) // 4
                 logger.info(f"[COST-AUDIT] Model: {attempt_model} | Msgs: ~{est_msg_tok} toks | Tools: ~{est_tool_tok} toks | Total Est: ~{est_msg_tok + est_tool_tok}")
             except: pass
             

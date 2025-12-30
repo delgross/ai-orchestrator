@@ -18,6 +18,7 @@ from common.constants import (
     ROLE_SYSTEM,
     ROLE_USER,
     ROLE_ASSISTANT,
+    OBJ_CHAT_COMPLETION_CHUNK,
 )  # noqa: F401
 
 
