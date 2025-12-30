@@ -96,14 +96,51 @@ async def test_circuit_breaker_recovery() -> None:
                     _mcp_circuit_breaker.record_failure(server)
                     failed_recovery.append(server)
 
+
             except Exception as e:
                 logger.debug(f"Error during recovery test for '{server}': {e}")
-                failed_recovery.append(server)
-    
+
     if recovered:
         logger.info(f"Circuit breaker recovery: {len(recovered)} server(s) entered half-open state: {recovered}")
     if failed_recovery:
         logger.info(f"Circuit breaker recovery: {len(failed_recovery)} server(s) still failing: {failed_recovery}")
+
+
+async def check_critical_services() -> None:
+    """Monitor core services (Router) and trigger self-healing if needed."""
+    try:
+        # Check Router Health
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            try:
+                r = await client.get(f"{GATEWAY_BASE}/health")
+                if r.status_code != 200:
+                    logger.warning(f"Router health check returned {r.status_code}. Potential issue.")
+            except (httpx.ConnectError, httpx.ReadTimeout):
+                logger.error("CRITICAL: Router is unreachable! Triggering self-healing restart...")
+                
+                # Trigger Restart via manage.sh
+                import subprocess
+                try:
+                    # We run this detached or blocking? Blocking is safer to avoid loops.
+                    # We use the absolute path to manage.sh
+                    from agent_runner.config import PROJECT_ROOT
+                    cmd = [f"{PROJECT_ROOT}/bin/manage.sh", "restart", "router"]
+                    
+                    # Log the attempt
+                    logger.info(f"Executing: {' '.join(cmd)}")
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    
+                    if res.returncode == 0:
+                         logger.info("Router restart triggered successfully.")
+                    else:
+                         logger.error(f"Router restart failed: {res.stderr}")
+
+                except Exception as restart_err:
+                    logger.error(f"Self-healing execution failed: {restart_err}")
+
+
+    except Exception as e:
+        logger.error(f"Critical service check failed: {e}")
 
 
 async def check_gateway_health() -> Dict[str, Any]:
@@ -202,7 +239,10 @@ async def health_check_task() -> None:
                 except Exception:
                     pass
 
-    # Check gateway health
+    # Check critical services (Router) - Self Healing
+    await check_critical_services()
+
+    # Check gateway health (Reporting only)
     gateway_health = await check_gateway_health()
     if not gateway_health.get("ok"):
         error_msg = gateway_health.get('error', 'Unknown error')
