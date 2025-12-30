@@ -823,37 +823,13 @@ my-server-name:
 
             const model = modelSelect.value;
             const assistantDiv = appendMessage('assistant', '');
-            let fullResponse = "";
 
-            // Live Log Polling
-            let logPoller = null;
-            const liveLog = document.getElementById('chat-live-log');
-            if (liveLog) {
-                logPoller = setInterval(async () => {
-                    try {
-                        const r = await fetch('/admin/logs/tail?lines=20');
-                        if (r.ok) {
-                            const d = await r.json();
-                            // Filter for activity indicators
-                            const relevant = d.lines.filter(l =>
-                                (l.includes('Calling') || l.includes('Tool') || l.includes('Step') || l.includes('Thinking')) &&
-                                !l.includes('GET /admin/logs/tail')
-                            ).pop();
-
-                            if (relevant) {
-                                let msg = relevant.split('agent_runner: ')[1] || relevant;
-                                // Clean up timestamps if split failed
-                                if (msg.match(/^\d{4}-\d{2}/)) msg = msg.substring(25);
-                                if (msg.length > 50) msg = msg.substring(0, 50) + "...";
-                                liveLog.textContent = "> " + msg;
-                            }
-                        }
-                    } catch (e) { }
-                }, 1000);
-            }
+            // Thinking UI State
+            let thinkingContainer = null;
+            let thinkingBody = null;
+            let currentStepDiv = null;
 
             try {
-                // Use relative path since Dashboard is served by Router
                 const response = await fetch('/v1/chat/completions', {
                     method: 'POST',
                     headers: {
@@ -874,12 +850,15 @@ my-server-name:
                 statusSpan.textContent = "Receiving...";
                 statusSpan.className = "status-indicator ok";
 
+                let buffer = "";
+
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
-                    const chunk = decoder.decode(value, { stream: true });
-                    const lines = chunk.split('\n');
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop(); // Keep partial line
 
                     for (const line of lines) {
                         const trimmed = line.trim();
@@ -889,32 +868,80 @@ my-server-name:
                         if (dataStr === '[DONE]') break;
 
                         try {
-                            const json = JSON.parse(dataStr);
-                            if (json.error) {
-                                fullResponse += `\n[Error: ${json.error.message}]`;
-                            } else {
-                                const content = json.choices[0]?.delta?.content || "";
-                                fullResponse += content;
+                            const event = JSON.parse(dataStr);
+
+                            // 1. TOKEN
+                            if (event.type === 'token') {
+                                assistantDiv.textContent += event.content;
+                                historyDiv.scrollTop = historyDiv.scrollHeight;
                             }
-                            assistantDiv.textContent = fullResponse;
-                            historyDiv.scrollTop = historyDiv.scrollHeight;
+
+                            // 2. THINKING START
+                            else if (event.type === 'thinking_start') {
+                                thinkingContainer = document.createElement('div');
+                                thinkingContainer.className = 'chat-thinking';
+
+                                const header = document.createElement('div');
+                                header.className = 'chat-thinking-header';
+                                header.innerHTML = `<span class="icon spin">⚙️</span> <span>Planning ${event.count} Step(s)...</span>`;
+                                header.onclick = () => {
+                                    thinkingBody.style.display = thinkingBody.style.display === 'none' ? 'flex' : 'none';
+                                };
+
+                                thinkingBody = document.createElement('div');
+                                thinkingBody.className = 'chat-thinking-body';
+
+                                thinkingContainer.appendChild(header);
+                                thinkingContainer.appendChild(thinkingBody);
+                                assistantDiv.appendChild(thinkingContainer);
+                            }
+
+                            // 3. TOOL START
+                            else if (event.type === 'tool_start') {
+                                const step = document.createElement('div');
+                                step.className = 'thinking-step running';
+                                step.innerHTML = `
+                                    <div class="thinking-step-icon">🔄</div>
+                                    <div class="thinking-step-content">
+                                        <div class="thinking-step-name">${event.tool}</div>
+                                        <div class="thinking-step-details">${JSON.stringify(event.input).substring(0, 100)}...</div>
+                                    </div>
+                                `;
+                                thinkingBody.appendChild(step);
+                                currentStepDiv = step;
+                            }
+
+                            // 4. TOOL END
+                            else if (event.type === 'tool_end') {
+                                const steps = thinkingBody.querySelectorAll('.thinking-step.running');
+                                const step = Array.from(steps).find(s => s.querySelector('.thinking-step-name').textContent === event.tool);
+
+                                if (step) {
+                                    step.className = 'thinking-step done';
+                                    step.querySelector('.thinking-step-icon').textContent = '✅';
+                                    step.classList.remove('running');
+                                    const outLen = event.output ? event.output.length : 0;
+                                    step.querySelector('.thinking-step-details').textContent += ` -> Done (${outLen} chars)`;
+                                }
+                            }
+
+                            // 5. ERROR
+                            else if (event.type === 'error') {
+                                assistantDiv.textContent += `\n[System Error: ${event.error}]`;
+                            }
+
                         } catch (e) { }
                     }
                 }
+
                 statusSpan.textContent = "Ready";
                 statusSpan.className = "status-indicator";
-
-                // Speak completed response if enabled
-                speak(fullResponse);
 
             } catch (e) {
                 assistantDiv.textContent += `\n[Failed: ${e.message}]`;
                 statusSpan.textContent = "Error";
                 statusSpan.className = "status-indicator error";
             } finally {
-                if (logPoller) clearInterval(logPoller);
-                if (liveLog) liveLog.textContent = "";
-
                 chatInput.disabled = false;
                 sendBtn.disabled = false;
                 chatInput.focus();

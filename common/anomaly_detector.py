@@ -84,6 +84,16 @@ class AnomalyDetector:
         
         self.baselines[metric_name] = (mean, std_dev)
     
+    # Minimum absolute values required to trigger an anomaly
+    # Prevents "Small Numbers Problem" (e.g., 0.01 -> 0.5 RPS appearing as 50-sigma deviation)
+    METRIC_MIN_THRESHOLDS = {
+        "requests_per_second": 5.0,      # Ignore spikes under 5 RPS
+        "error_rate_1min": 0.05,         # Ignore error rates under 5%
+        "active_requests": 10.0,         # Ignore fewer than 10 active requests
+        "cpu_percent": 10.0,             # Ignore CPU usage under 10%
+        "memory_mb": 100.0,              # Ignore memory usage under 100MB
+    }
+
     def check_anomaly(self, metric_name: str, value: float, metadata: Optional[Dict[str, Any]] = None) -> Optional[Anomaly]:
         """
         Check if a value is anomalous.
@@ -94,6 +104,12 @@ class AnomalyDetector:
         if metric_name not in self.baselines:
             # Not enough data yet
             return None
+        
+        # Check minimum absolute threshold first (Small Numbers Problem)
+        if metric_name in self.METRIC_MIN_THRESHOLDS:
+            threshold = self.METRIC_MIN_THRESHOLDS[metric_name]
+            if value < threshold:
+                return None
         
         mean, std_dev = self.baselines[metric_name]
         

@@ -895,3 +895,100 @@ body {
     font-family: inherit;
     min-height: 50px;
 }
+
+/* --- Chat Thinking UI --- */
+.chat-thinking {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    border-left: 3px solid var(--accent-secondary);
+    font-size: 0.9em;
+    overflow: hidden;
+}
+
+.chat-thinking-header {
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    user-select: none;
+}
+
+.chat-thinking-header:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-thinking-body {
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.thinking-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.thinking-step.running {
+    border-left: 2px solid var(--accent-neon);
+    animation: pulse-bg 1.5s infinite;
+}
+
+.thinking-step.done {
+    border-left: 2px solid var(--success);
+    opacity: 0.8;
+}
+
+.thinking-step.error {
+    border-left: 2px solid var(--accent-error);
+    background: rgba(255, 0, 0, 0.1);
+}
+
+.thinking-step-icon {
+    font-size: 1.1em;
+    min-width: 20px;
+    text-align: center;
+}
+
+.thinking-step-content {
+    flex-grow: 1;
+    overflow-x: auto;
+}
+
+.thinking-step-name {
+    font-weight: 600;
+    color: var(--text-main);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85em;
+}
+
+.thinking-step-details {
+    margin-top: 2px;
+    font-size: 0.8em;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    white-space: pre-wrap;
+}
+
+@keyframes pulse-bg {
+    0% { background: rgba(255, 255, 255, 0.03); }
+    50% { background: rgba(255, 255, 255, 0.08); }
+    100% { background: rgba(255, 255, 255, 0.03); }
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+
+@keyframes spin { 100% { transform: rotate(360deg); } }

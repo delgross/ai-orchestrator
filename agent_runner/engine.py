@@ -1066,3 +1066,188 @@ class AgentEngine:
             # Fallback disabled, Revert
             logger.warning("Fallback disabled. Reverting to Worker response.")
             if worker_draft: messages.append(worker_draft)
+
+    async def call_gateway_streaming(self, messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None):
+        """Yields SSE events from the Model Gateway."""
+        target_model = model or self.state.agent_model
+        
+        # Offline Fallback
+        if not self.state.internet_available:
+            is_safe_local = target_model.startswith(("ollama:", "local:", "test:"))
+            if not is_safe_local:
+                target_model = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+
+        # Prepare candidates (Primary + Fallback)
+        candidates = [target_model]
+        fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+        if self.state.fallback_enabled and fallback not in candidates:
+            candidates.append(fallback)
+            
+        headers = {}
+        if self.state.router_auth_token:
+            headers["Authorization"] = f"Bearer {self.state.router_auth_token}"
+
+        client = await self.state.get_http_client()
+        url = f"{self.state.gateway_base}/v1/chat/completions"
+
+        for attempt_model in candidates:
+            if not self.state.mcp_circuit_breaker.is_allowed(attempt_model):
+                continue
+
+            active_tools = tools or self.tool_definitions
+            payload = {
+                OBJ_MODEL: attempt_model,
+                "messages": messages,
+                "tools": active_tools,
+                "tool_choice": "auto",
+                "stream": True,
+            }
+
+            try:
+                # Streaming Call
+                async with client.stream("POST", url, json=payload, headers=headers, timeout=self.state.http_timeout) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.strip(): continue
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str == "[DONE]": break
+                            try:
+                                data = json.loads(data_str)
+                                yield data
+                            except: pass
+                
+                # If we finished the stream successfully, return (break loop)
+                self.state.mcp_circuit_breaker.record_success(attempt_model)
+                return 
+
+            except Exception as e:
+                logger.error(f"Streaming failed for '{attempt_model}': {e}")
+                self.state.mcp_circuit_breaker.record_failure(attempt_model)
+                # Loop to next candidate
+
+        raise HTTPException(status_code=500, detail="All streaming models failed.")
+
+    async def agent_stream(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, request_id: Optional[str] = None):
+        """
+        Generator that manages the Agent Loop and yields real-time events.
+        Events:
+        - {"type": "token", "content": "..."}
+        - {"type": "tool_start", "tool": "name", "input": {...}}
+        - {"type": "tool_end", "tool": "name", "output": "..."}
+        - {"type": "error", "error": "..."}
+        - {"type": "done", "usage": ...}
+        """
+        # Context Pruning
+        PRUNE_LIMIT = 20
+        if len(user_messages) > PRUNE_LIMIT:
+            user_messages = user_messages[-PRUNE_LIMIT:]
+            # Ensure valid start role
+            while user_messages and user_messages[0].get("role") == "tool":
+                user_messages.pop(0)
+
+        # Context Injection
+        system_prompt = await self.get_system_prompt(user_messages)
+        messages = [{"role": ROLE_SYSTEM, "content": system_prompt}] + user_messages
+        active_tools = await self.get_all_tools(user_messages)
+        
+        steps = 0
+        while steps < self.state.max_tool_steps:
+            steps += 1
+            
+            # --- Stream Consumption State ---
+            current_tool_calls = [] # List of {index, id, function: {name, arguments}}
+            current_content = ""
+            
+            # 1. Call Gateway (Streaming)
+            async for chunk in self.call_gateway_streaming(messages, model, active_tools):
+                delta = chunk["choices"][0].get("delta", {})
+                
+                # A. Content Token
+                if "content" in delta and delta["content"]:
+                    token = delta["content"]
+                    current_content += token
+                    yield {"type": "token", "content": token}
+                
+                # B. Tool Calls (Accumulation)
+                if "tool_calls" in delta and delta["tool_calls"]:
+                    for tc_chunk in delta["tool_calls"]:
+                        idx = tc_chunk.get("index")
+                        
+                        # Expand list if needed
+                        while len(current_tool_calls) <= idx:
+                            current_tool_calls.append({"index": len(current_tool_calls), "id": "", "function": {"name": "", "arguments": ""}})
+                        
+                        target = current_tool_calls[idx]
+                        if tc_chunk.get("id"): target["id"] += tc_chunk["id"]
+                        
+                        fn = tc_chunk.get("function", {})
+                        if fn.get("name"): target["function"]["name"] += fn["name"]
+                        if fn.get("arguments"): target["function"]["arguments"] += fn["arguments"]
+
+            # 2. Process Accumulation
+            # If we had tool calls, we need to handle them.
+            # But first, append ANY content we received to history as the assistant message.
+            assistant_msg = {"role": "assistant", "content": current_content}
+            
+            if current_tool_calls:
+                # Reconstruct tool_calls array for the message history
+                tool_calls_payload = []
+                for tc in current_tool_calls:
+                    tool_calls_payload.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["function"]["name"],
+                            "arguments": tc["function"]["arguments"]
+                        }
+                    })
+                
+                assistant_msg["tool_calls"] = tool_calls_payload
+                messages.append(assistant_msg)
+                
+                # Notify UI of upcoming tools
+                yield {"type": "thinking_start", "count": len(tool_calls_payload)}
+                
+                # Execute Tools (Parallel)
+                tasks = [self.execute_tool_call(tc, request_id=request_id) for tc in tool_calls_payload]
+                
+                # Yield "Running" events (optional, but good for UI to know distinct tools started)
+                for tc in tool_calls_payload:
+                    yield {"type": "tool_start", "tool": tc["function"]["name"], "input": tc["function"]["arguments"]}
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Process Results
+                for i, result in enumerate(results):
+                    tc = tool_calls_payload[i]
+                    output_str = ""
+                    
+                    if isinstance(result, BaseException):
+                        output_str = json.dumps({"ok": False, "error": str(result)})
+                    elif isinstance(result, dict):
+                         # If it's a direct dictionary (from tool impl)
+                         # We try to be helpful and dump the 'result' or whole dict
+                         val = result.get("result", result.get("error", result))
+                         output_str = json.dumps(val)  
+                    else:
+                        output_str = str(result)
+
+                    messages.append({
+                        "tool_call_id": tc["id"],
+                        "role": "tool",
+                        "name": tc["function"]["name"],
+                        "content": output_str
+                    })
+                    
+                    yield {"type": "tool_end", "tool": tc["function"]["name"], "output": output_str}
+
+                # Loop continues to next step (Model observes tool output)
+                
+            else:
+                # No tool calls -> This was the final answer.
+                # We already yielded tokens.
+                # Append to history and break.
+                messages.append(assistant_msg)
+                yield {"type": "done", "stop_reason": "end_turn"}
+                break

@@ -4,7 +4,7 @@ import logging
 import json
 from typing import Dict, Any
 from fastapi import FastAPI, Request, HTTPException, Body, File, UploadFile, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent_runner.state import AgentState
@@ -304,13 +304,31 @@ async def chat_completions(body: Dict[str, Any], request: Request):
     
     try:
         requested_model = body.get(OBJ_MODEL)
+        stream_mode = body.get("stream", False)
         
-        logger.info(f"REQ [{request_id}] Agent Execution: Model='{requested_model}'")
+        logger.info(f"REQ [{request_id}] Agent Execution: Model='{requested_model}' Stream={stream_mode}")
 
         # Prevent infinite recursion / invalid model names
         if requested_model == "agent:mcp" or not requested_model or ":" not in requested_model:
             requested_model = None
             
+        if stream_mode:
+            async def sse_wrapper():
+                try:
+                    async with log_time(f"Agent Stream [{request_id}]", level=logging.INFO):
+                        async for event in engine.agent_stream(messages, model=requested_model, request_id=request_id):
+                            yield f"data: {json.dumps(event)}\n\n"
+                    yield "data: [DONE]\n\n"
+                except Exception as e:
+                    logger.error(f"Stream Error [{request_id}]: {e}")
+                    # Try to yield error if stream is still open
+                    yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                finally:
+                    state.active_requests -= 1
+                    state.last_interaction_time = time.time()
+                    
+            return StreamingResponse(sse_wrapper(), media_type="text/event-stream")
+
         completion = {}
         async with log_time(f"Agent Loop [{request_id}]", level=logging.INFO):
             completion = await engine.agent_loop(messages, model=requested_model, request_id=request_id)
@@ -326,8 +344,9 @@ async def chat_completions(body: Dict[str, Any], request: Request):
         state.last_error = str(e)
         raise e
     finally:
-        state.active_requests -= 1
-        state.last_interaction_time = time.time()
+        if not body.get("stream", False): # Streaming handles its own cleanup
+            state.active_requests -= 1
+            state.last_interaction_time = time.time()
     
     completion[OBJ_MODEL] = body.get(OBJ_MODEL, "agent:mcp")
     completion.setdefault("created", int(time.time()))
