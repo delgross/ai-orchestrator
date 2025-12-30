@@ -150,48 +150,40 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
     content = content.encode('utf-8', 'ignore').decode('utf-8')
     filename_meta = extract_filename_meta(file_path)
 
-    # 1. LIBRARIAN & AUTHORITY STRATEGY
+    # 1. LIBRARIAN (Universal Content-Based Sorting)
+    # We ignore the folder structure for routing/authority and rely 100% on the AI.
     
-    # logic: If file is in a subfolder (e.g. ingest/Physics/file.pdf), 
-    # WE TRUST THE USER -> High Authority (0.9) + Domain = Folder Name
-    # If file is in root (ingest/file.pdf) -> Low Authority (0.5) + AI Guessed Domain
+    kb_id = "default"
+    authority = 0.5 # Default starting score
+    is_volatile = False
+    global_summary = ""
+    shadow_tags = []
     
-    is_rooted = file_path.parent.name in ["ingest", "deferred", "review"] # Direct children of system folders
-    
-    if not is_rooted:
-        # User placed this in a specific folder (e.g. .../ingest/Physics/doc.pdf)
-        kb_id = file_path.parent.name # "Physics"
-        authority = 0.9 # High trust in user organization
-        global_summary = f"Imported from user collection: {kb_id}"
-        shadow_tags = [kb_id]
-        logger.info(f"AUTHORITY: User-curated file in '{kb_id}'. Assigning Authority 0.9.")
-    else:
-        # Root file. Use AI Librarian to guess.
-        kb_id = "default"
-        authority = 0.5 # Default low trust for loose files
-        
-        try:
-            lib_prompt = (
-                f"Categorize this new entry.\nFilename: {file_path.name}\nContent Snippet: {content[:1000]}\n"
-                "Identify domain [farm-noc, osu-med, farm-beekeeping, etc] or new.\n"
-                "Return JSON: {'kb_id': '...', 'authority': 0.5, 'is_volatile': false, 'global_summary': '...', 'shadow_tags': []}"
-            )
-            lib_payload = {
-                "model": state.task_model,
-                "messages": [{"role": "user", "content": lib_prompt}],
-                "response_format": {"type": "json_object"}
-            }
-            lib_resp = await http_client.post(f"{state.gateway_base}/v1/chat/completions", json=lib_payload, timeout=30.0)
-            if lib_resp.status_code == 200:
-                lib_data = json.loads(lib_resp.json()["choices"][0]["message"]["content"])
-                kb_id = lib_data.get("kb_id", "default")
-                # Keep authority at 0.5 for loose files even if AI is confident, 
-                # unless AI sees strong evidence of "Official" source.
-                # But simple is better: Root = 0.5.
-                global_summary = lib_data.get("global_summary", "")
-                shadow_tags = lib_data.get("shadow_tags", [])
-        except Exception as e:
-            logger.warning(f"Librarian classification failed: {e}")
+    # Capture source context just in case, but don't route by it
+    if file_path.parent.name not in ["ingest", "deferred", "review"]:
+        shadow_tags.append(f"source_folder:{file_path.parent.name}")
+
+    try:
+        lib_prompt = (
+            f"Categorize this new entry.\nFilename: {file_path.name}\nContent Snippet: {content[:1000]}\n"
+            "Identify domain [farm-noc, osu-med, farm-beekeeping, etc] or new.\n"
+            "Return JSON: {'kb_id': '...', 'authority': 0.7, 'is_volatile': false, 'global_summary': '...', 'shadow_tags': []}"
+        )
+        lib_payload = {
+            "model": state.task_model,
+            "messages": [{"role": "user", "content": lib_prompt}],
+            "response_format": {"type": "json_object"}
+        }
+        lib_resp = await http_client.post(f"{state.gateway_base}/v1/chat/completions", json=lib_payload, timeout=30.0)
+        if lib_resp.status_code == 200:
+            lib_data = json.loads(lib_resp.json()["choices"][0]["message"]["content"])
+            kb_id = lib_data.get("kb_id", "default")
+            authority = lib_data.get("authority", 0.7)
+            global_summary = lib_data.get("global_summary", "")
+            tags = lib_data.get("shadow_tags", [])
+            if tags: shadow_tags.extend(tags)
+    except Exception as e:
+        logger.warning(f"Librarian classification failed: {e}")
 
     # 2. DEDUPLICATION
     # (Skipped for brevity/latency - we trust RAG to handle updates usually, or we can add it back later)

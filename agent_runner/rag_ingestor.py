@@ -96,7 +96,8 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
 
         # 1. BATCH PREPARATION
         # Use simple os.listdir via thread to avoid blocking if directory is huge (unlikely but safe)
-        inbox_files = [p for p in INGEST_DIR.glob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
+        # Recursive glob to find files in subfolders (even if we ignore folder semantics)
+        inbox_files = [p for p in INGEST_DIR.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
         
         if not inbox_files: return # Fast exit
 
