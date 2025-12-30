@@ -372,9 +372,22 @@ async def audio_transcriptions(request: Request):
                 data[field_name] = value
                 
         # 3. Call Upstream
-        async with state.client.stream("POST", url, headers=provider_headers(prov), data=data, files=files, timeout=60.0) as r:
-            body = await r.aread()
-            return JSONResponse(json.loads(body), status_code=r.status_code)
+        # 3. Call Upstream with Retry
+        @retry_policy
+        async def fetch_audio():
+            # Note: files list is consumable. If we retry, we must ensure it's reusable.
+            # httpx handles list of tuples fine, it doesn't consume valid open files here (we read content already).
+            r = await state.client.post(url, headers=provider_headers(prov), data=data, files=files, timeout=60.0)
+            if r.status_code == 429:
+                raise HTTPException(status_code=429, detail="Rate Limit")
+            if r.status_code >= 400:
+                raise HTTPException(status_code=r.status_code, detail=r.text)
+            return r
+
+        r = await fetch_audio()
+        body = r.content # use .content for bytes from post
+        
+        return JSONResponse(json.loads(body), status_code=r.status_code)
             
     except Exception as e:
         logger.error(f"Audio transcription failed: {e}")
