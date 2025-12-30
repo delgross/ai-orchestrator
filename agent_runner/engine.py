@@ -880,11 +880,16 @@ class AgentEngine:
                     "response_format": {"type": "json_object"}
                 }
                 url = f"{self.state.gateway_base}/v1/chat/completions"
+                logger.info(f"Maître d' URL: {url}")
                 r = await client.post(url, json=payload, timeout=25.0)
                 if r.status_code == 200:
-                    data = r.json()
-                    content = data["choices"][0]["message"]["content"]
-                    return json.loads(content)
+                    try:
+                        data = r.json()
+                        content = data["choices"][0]["message"]["content"]
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        logger.error(f"Maître d' JSON Error. Body: {r.text[:500]}")
+                        return {"target_servers": []}
                 elif r.status_code == 429:
                     logger.warning("Maître d' Overloaded (429). Bypassing intent classification.")
                     return {"target_servers": []} # Fail Open
