@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import Dict, Any, Optional
+import asyncio
 import httpx
 
 logger = logging.getLogger("agent_runner.health_monitor")
@@ -119,21 +120,28 @@ async def check_critical_services() -> None:
                 logger.error("CRITICAL: Router is unreachable! Triggering self-healing restart...")
                 
                 # Trigger Restart via manage.sh
-                import subprocess
                 try:
                     # We run this detached or blocking? Blocking is safer to avoid loops.
                     # We use the absolute path to manage.sh
                     from agent_runner.config import PROJECT_ROOT
-                    cmd = [f"{PROJECT_ROOT}/bin/manage.sh", "restart", "router"]
+                    cmd_path = f"{PROJECT_ROOT}/bin/manage.sh"
                     
                     # Log the attempt
-                    logger.info(f"Executing: {' '.join(cmd)}")
-                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    logger.info(f"Executing self-healing restart: {cmd_path} restart router")
                     
-                    if res.returncode == 0:
+                    # NON-BLOCKING EXECUTION
+                    proc = await asyncio.create_subprocess_exec(
+                        cmd_path, "restart", "router",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    
+                    stdout, stderr = await proc.communicate()
+                    
+                    if proc.returncode == 0:
                          logger.info("Router restart triggered successfully.")
                     else:
-                         logger.error(f"Router restart failed: {res.stderr}")
+                         logger.error(f"Router restart failed (code {proc.returncode}): {stderr.decode()}")
 
                 except Exception as restart_err:
                     logger.error(f"Self-healing execution failed: {restart_err}")
@@ -199,16 +207,36 @@ async def check_dashboard_health() -> Dict[str, Any]:
 
 
 async def check_internet_connectivity() -> bool:
-    """Check if the system has internet access."""
-    global _http_client
-    if not _http_client:
-        return True # Assume online if we can't check
-    
+    """Check if the system has internet access using multiple reliable targets."""
+    # ISOLATION FIX: Use a dedicated, fresh client for connectivity checks.
+    # Do NOT reuse the shared app client (_http_client) to avoid pool exhaustion or deadlocks.
     try:
-        # Try a reliable public DNS service or major site
-        response = await _http_client.head("https://www.google.com", timeout=5.0)
-        return response.status_code < 400
-    except Exception:
+        async with httpx.AsyncClient(timeout=5.0) as private_client:
+            # Robust Multi-Target Check
+            targets = [
+                "https://www.google.com",
+                "https://www.cloudflare.com",
+                "https://www.microsoft.com",
+                "https://1.1.1.1" # Cloudflare DNS (IP fallback)
+            ]
+            
+            # We only need ONE to succeed to be "Online"
+            for target in targets:
+                try:
+                    # Short timeout per target to fail fast (increased to 5.0s for stability)
+                    response = await private_client.head(target, timeout=5.0)
+                    if response.status_code < 400:
+                        return True
+                    else:
+                        logger.debug(f"Internet check target {target} returned {response.status_code}")
+                except Exception as e:
+                    logger.debug(f"Internet check target {target} failed: {e}")
+                    continue
+                    
+            logger.warning("Internet check failed for ALL targets. System is likely OFFLINE.")
+            return False
+    except Exception as e:
+        logger.error(f"Critical error during internet check creation: {e}")
         return False
 
 
@@ -351,6 +379,70 @@ async def health_check_task() -> None:
                 )
 
 
+    # Check for Zombie Processes (stuck CLI commands)
+    await check_zombie_processes()
+
+
+async def check_zombie_processes() -> None:
+    """Scan for and terminate stuck MCP management processes (like curl/npx) running > 5 mins."""
+    try:
+        # Check for curl commands hitting the Agent Runner that are old
+        # ps format: pid, elapsed time (fmt: [[dd-]hh:]mm:ss), command
+        cmd = "ps -eo pid,etime,command | grep 'curl' | grep 'admin/mcp' | grep -v grep"
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        
+        lines = stdout.decode().splitlines()
+        for line in lines:
+            parts = line.split(maxsplit=2)
+            if len(parts) < 3: continue
+            
+            pid, etime, command = parts
+            
+            # Parse elapsed time to minutes
+            minutes = 0
+            try:
+                if "-" in etime: # Days
+                    days, rest = etime.split("-")
+                    minutes += int(days) * 1440
+                    etime = rest
+                
+                time_parts = [int(x) for x in etime.split(":")]
+                if len(time_parts) == 3: # hh:mm:ss
+                    minutes += time_parts[0]*60 + time_parts[1]
+                elif len(time_parts) == 2: # mm:ss
+                    minutes += time_parts[0]
+            except:
+                continue
+                
+            # THRESHOLD: 5 Minutes
+            if minutes > 5:
+                # Kill it
+                logger.warning(f"ZOMBIE DETECTED: PID {pid} running for {etime} mins. Terminating.")
+                kill_proc = await asyncio.create_subprocess_exec("kill", "-9", pid)
+                await kill_proc.wait()
+                
+                # Notify
+                try:
+                    from common.unified_tracking import track_health_event, EventSeverity
+                    track_health_event(
+                        event="zombie_process_killed",
+                        message=f"Terminated stuck process (PID {pid}, running {etime})",
+                        severity=EventSeverity.HIGH,
+                        component="health_monitor",
+                        metadata={"command": command, "elapsed": etime}
+                    )
+                except:
+                    pass
+
+    except Exception as e:
+        logger.debug(f"Zombie check error: {e}")
+
+
 def initialize_health_monitor(
     mcp_servers: Dict[str, Any],
     mcp_circuit_breaker: Any,
@@ -365,4 +457,150 @@ def initialize_health_monitor(
     GATEWAY_BASE = gateway_base
     _http_client = http_client
     _state = state
+
+
+async def get_detailed_health_report() -> Dict[str, Any]:
+    """
+    Generate a comprehensive, structured health report for system introspection.
+    Returns topology, dependency status, and circuit breaker states.
+    """
+    report = {
+        "timestamp": time.time(),
+        "status": "healthy", # optimistically
+        "topology": {
+            "name": "Agent Runner",
+            "type": "Orchestrator",
+            "dependencies": {
+                "router": {"type": "service", "url": GATEWAY_BASE, "critical": True},
+                "database": {"type": "service", "url": "surrealdb:8000", "critical": True},
+                "internet": {"type": "resource", "critical": False}
+            },
+            "components": {}
+        }
+    }
+    
+    # 1. Check MCP Servers & Gather Tools
+    mcp_status = {}
+    total_mcp = 0
+    healthy_mcp = 0
+    
+    # [NEW] Access Engine for Tool Registry
+    # Use Registry to avoid cycle
+    try:
+        from agent_runner.registry import get_shared_engine
+        engine = get_shared_engine()
+        # Ensure executor is initialized
+        mcp_tool_cache = getattr(engine.executor, "mcp_tool_cache", {})
+        native_defs = getattr(engine.executor, "tool_definitions", [])
+    except Exception:
+        mcp_tool_cache = {}
+        native_defs = []
+        
+    # Add Native Tools to topology first
+    native_tool_names = [t.get("function", {}).get("name") for t in native_defs]
+    report["topology"]["components"]["agent_runner"] = {
+        "type": "native",
+        "status": "online",
+        "tools": native_tool_names
+    }
+    
+    if _mcp_circuit_breaker:
+        cb_stats = _mcp_circuit_breaker.get_status()
+    else:
+        cb_stats = {}
+    
+    for name, config in MCP_SERVERS.items():
+        total_mcp += 1
+        # Check breaker status
+        breaker_info = cb_stats.get(name, {})
+        is_open = breaker_info.get("state") == "open"
+        
+        status = "healthy"
+        if is_open:
+            status = "unhealthy"
+        
+        if status == "healthy": healthy_mcp += 1
+        
+        # [NEW] Get discovered tools for this server
+        server_tools_raw = mcp_tool_cache.get(name, [])
+        tool_names = [t.get("function", {}).get("name") for t in server_tools_raw]
+        
+        mcp_status[name] = {
+            "type": "mcp_server",
+            "status": status,
+            "config": config,
+            "circuit_breaker": breaker_info,
+            "tools": tool_names  # [NEW] Expose available functions
+        }
+        
+    report["topology"]["components"]["mcp_servers"] = mcp_status
+    report["metrics"] = {
+        "mcp_total": total_mcp,
+        "mcp_healthy": healthy_mcp
+    }
+    
+    # 2. Check Dependencies
+    # Internet
+    internet_ok = False
+    if _state:
+        internet_ok = _state.internet_available
+    report["topology"]["dependencies"]["internet"]["status"] = "online" if internet_ok else "offline"
+    
+    # Router
+    router_health = await check_gateway_health()
+    report["topology"]["dependencies"]["router"]["status"] = "online" if router_health.get("ok") else "offline"
+    if not router_health.get("ok"):
+        report["status"] = "degraded"
+        
+    # Database (Surreal) details if possible
+    # We can infer from project-memory status
+    if "project-memory" in MCP_SERVERS:
+        pm_status = mcp_status.get("project-memory", {}).get("status")
+        report["topology"]["dependencies"]["database"]["status"] = "online" if pm_status == "healthy" else "unknown"
+        
+    # Overall Status Calculation
+    if healthy_mcp < total_mcp:
+        report["status"] = "degraded" 
+        # If critical ones are down, maybe unhealthy?
+    if not router_health.get("ok"):
+        report["status"] = "unhealthy"
+
+    # 3. Scheduler & Task Awareness [NEW]
+    try:
+        from agent_runner.registry import get_task_manager
+        tm = get_task_manager()
+        task_status = tm.get_status()
+        
+        # Simplify for the report
+        tasks_list = []
+        for t_name, t_info in task_status.get("tasks", {}).items():
+             # Calculate human friendly next run
+             next_run_s = t_info.get("seconds_until_next")
+             next_run_str = f"{int(next_run_s)}s" if next_run_s is not None else "N/A"
+             
+             # Format Schedule String
+             if t_info.get("type") == "periodic":
+                 sched = f"Every {t_info.get('interval')}s"
+             elif t_info.get("type") == "scheduled":
+                 sched = f"Cron: {t_info.get('schedule')}"
+             else:
+                 sched = "Active"
+
+             tasks_list.append({
+                 "name": t_name,
+                 "type": t_info.get("type"),
+                 "schedule": sched,
+                 "next_run": next_run_str,
+                 "status": "running" if t_info.get("running") else "idle"
+             })
+             
+        report["scheduler"] = {
+            "status": "online" if task_status.get("running") else "stopped",
+            "active_tasks": len(tasks_list),
+            "tasks": tasks_list
+        }
+    except Exception as e:
+        report["scheduler"] = {"status": "unknown", "error": str(e)}
+        
+    return report
 

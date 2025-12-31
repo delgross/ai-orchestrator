@@ -9,6 +9,7 @@ import httpx
 from agent_runner.state import AgentState
 from agent_runner.tools import fs as fs_tools
 from agent_runner.tools import mcp as mcp_tools
+from agent_runner.tools import system as system_tools
 from common.unified_tracking import track_event, EventSeverity, EventCategory
 
 logger = logging.getLogger("agent_runner.executor")
@@ -43,6 +44,11 @@ class ToolExecutor:
             "search": self.tool_unified_search,
             "ingest_knowledge": self.tool_ingest_knowledge,
             "ingest_file": self.tool_ingest_file,
+            "run_command": system_tools.tool_run_command,
+            "trigger_task": system_tools.tool_trigger_task,
+            "report_missing_tool": system_tools.tool_report_missing_tool,
+            "run_memory_consolidation": system_tools.tool_run_memory_consolidation,
+            "check_system_health": system_tools.tool_check_system_health,
         }
 
     def _init_tool_definitions(self) -> List[Dict[str, Any]]:
@@ -184,6 +190,66 @@ class ToolExecutor:
                         "required": ["path"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "description": "Execute a shell command. Use this for running scripts, refactoring tools, or system operations. Requires 'enable_command_execution' in config.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "string", "description": "The shell command to run."},
+                            "background": {"type": "boolean", "description": "Run in background (async).", "default": False}
+                        },
+                        "required": ["command"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "trigger_task",
+                    "description": "Trigger a background task to run immediately.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_name": {"type": "string", "description": "The name of the task (e.g. 'night_shift_refactor', 'cloud_refactor_audit')."}
+                        },
+                        "required": ["task_name"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "report_missing_tool",
+                    "description": "Call this when you CANNOT complete a task because you lack a specific tool.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "tool_name": {"type": "string", "description": "Name of the hypothetical tool you need."},
+                            "reason": {"type": "string", "description": "Explanation of why existing tools are insufficient."}
+                        },
+                        "required": ["tool_name", "reason"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_memory_consolidation",
+                    "description": "Trigger the memory consolidation process manually.",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "check_system_health",
+                    "description": "Check the health status of the entire Orchestrator (Router, Agent, Circuit Breakers). Use this if the user asks about 'system status', 'health', or 'breakers'.",
+                    "parameters": {"type": "object", "properties": {}},
+                }
             }
         ]
 
@@ -192,6 +258,14 @@ class ToolExecutor:
         logger.info(f"Starting MCP discovery. Servers: {list(self.state.mcp_servers.keys())}")
         for server_name in list(self.state.mcp_servers.keys()):
             cfg = self.state.mcp_servers[server_name]
+            
+            # Skip Disabled Servers
+            if not cfg.get("enabled", True):
+                if server_name in self.mcp_tool_cache:
+                    del self.mcp_tool_cache[server_name]
+                logger.info(f"Skipping disabled MCP server: {server_name}")
+                continue
+
             logger.info(f"Discovering tools for {server_name}. Config: {cfg}")
             try:
                 from agent_runner.tools.mcp import tool_mcp_proxy
@@ -229,10 +303,28 @@ class ToolExecutor:
             line = f"{srv}: {', '.join(t_names)}"
             menu_lines.append(line)
         
-        self.tool_menu_summary = "\n".join(menu_lines)
         if not self.tool_menu_summary:
             self.tool_menu_summary = "(No external tools available)"
         logger.info(f"Generated Maître d' Menu: {self.tool_menu_summary}")
+        
+        # [FEATURE REQUEST]: Formally track all functions.
+        # We persist the full registry to disk so the Agent can "read about itself".
+        try:
+            registry_path = os.path.join(self.state.agent_fs_root, "system", "tool_registry.json")
+            os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+            
+            full_registry = {
+                "timestamp": time.time(),
+                "native_tools": self.tool_definitions,
+                "mcp_tools": self.mcp_tool_cache
+            }
+            
+            with open(registry_path, "w") as f:
+                json.dump(full_registry, f, indent=2)
+                
+            logger.info(f"Persisted Tool Registry to {registry_path}")
+        except Exception as e:
+            logger.warning(f"Failed to persist tool registry: {e}")
 
     async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Combine built-in tools with discovered MCP tools, filtering by Intent Menu."""

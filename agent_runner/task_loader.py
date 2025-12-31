@@ -27,48 +27,35 @@ except ImportError:
     DEFAULT_TASK_MODEL = "ollama:mistral:latest"
 
 
-def load_tasks_from_config(config_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+def load_tasks_from_config(config_data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
-    Load task definitions from config.yaml.
-    
-    Expected structure in config.yaml:
-    ```yaml
-    agent_runner:
-      periodic_tasks:
-        weather_update:
-          type: mcp_file
-          mcp_server: weather
-          prompt: "Get weather and write to {output_file}"
-          output_file: "weather/current.txt"
-          local_model: "ollama:mistral:latest"
-          interval: 300.0
-          priority: low
-          enabled: true
-        time_update:
-          type: file
-          prompt: "Get current time and write to {output_file}"
-          output_file: "time/current.txt"
-          local_model: "ollama:mistral:latest"
-          interval: 60.0
-    ```
+    Load task definitions from a configuration dictionary.
     """
-    if yaml is None:
-        logger.warning("yaml not available, cannot load tasks from config")
-        return []
-    
-    if config_path is None:
+    if not config_data:
+        # Fallback to reading file if no data passed (legacy behavior but discouraged)
+        if yaml is None:
+            logger.warning("yaml not available, cannot load config file")
+            return []
+            
         config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-    
-    if not config_path.exists():
-        logger.debug(f"Config file not found: {config_path}")
-        return []
+        if not config_path.exists():
+            return []
+            
+        try:
+            with open(config_path, "r") as f:
+                config_data = yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.error(f"Failed to load config file: {e}")
+            return []
     
     try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f) or {}
+        agent_config = config_data.get("agent_runner", {})
+        # Flatten structure: config might carry periodic_tasks directly if it's the root config
+        # But usually nested in agent_runner or user provided dict. 
+        # State.config matches the file structure (root keys: agent_runner, router, etc.)
         
-        agent_config = config.get("agent_runner", {})
-        tasks_config = agent_config.get("periodic_tasks", {})
+        # Check both root and nested just in case
+        tasks_config = agent_config.get("periodic_tasks", config_data.get("periodic_tasks", {}))
         
         if not tasks_config:
             return []
@@ -113,11 +100,11 @@ def load_tasks_from_config(config_path: Optional[Path] = None) -> List[Dict[str,
         return []
 
 
-def register_tasks_from_config(task_manager: Any, config_path: Optional[Path] = None) -> None:
+def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str, Any]] = None) -> None:
     """
-    Load tasks from config and register them with the task manager.
+    Load tasks from config dict and register them with the task manager.
     """
-    tasks = load_tasks_from_config(config_path)
+    tasks = load_tasks_from_config(config_data)
     
     for task_def in tasks:
         try:
@@ -179,6 +166,114 @@ def register_tasks_from_config(task_manager: Any, config_path: Optional[Path] = 
                     estimated_duration=5.0,
                 )
             
+            elif task_type == "module":
+                # [NEW] Direct Module Function Execution
+                # Efficiently runs a specific Python function without Agent overhead.
+                # Config: { "module": "agent_runner.mcp_tasks", "function": "mcp_refresh_task" }
+                
+                module_path = task_config.get("module")
+                func_name = task_config.get("function")
+                
+                if not module_path or not func_name:
+                    logger.warning(f"Task {name} (module) missing 'module' or 'function' path.")
+                    continue
+                    
+                import importlib
+                try:
+                    mod = importlib.import_module(module_path)
+                    task_func = getattr(mod, func_name)
+                    
+                    # Ensure it's a coroutine if needed, or wrap it
+                    # The BackgroundTaskManager expects async functions
+                    
+                    schedule = task_config.get("schedule")
+                    interval = task_config.get("interval")
+                    if interval is not None:
+                        interval = float(interval)
+                    
+                    task_manager.register(
+                        name=name,
+                        func=task_func,
+                        interval=interval,
+                        schedule=schedule,
+                        enabled=task_config.get("enabled", True),
+                        idle_only=task_config.get("idle_only", False),
+                        priority=priority,
+                        description=task_config.get("description", f"Module Task: {module_path}.{func_name}"),
+                        estimated_duration=task_config.get("estimated_duration", 60.0),
+                    )
+                    logger.info(f"Registered module task: {name} -> {module_path}.{func_name}")
+                    
+                except ImportError as e:
+                    logger.error(f"Failed to load module for task {name}: {e}")
+                except AttributeError as e:
+                    logger.error(f"Failed to find function for task {name}: {e}")
+
+            elif task_type == "agent":
+                # Generic Agent Task using internal tools
+                # Allows specifying a list of tools to enable for this task
+                
+                # Extract known scheduling keys
+                known_keys = {"tools", "prompt", "type", "enabled", "idle_only", 
+                              "priority", "description", "estimated_duration", 
+                              "interval", "schedule", "name"}
+                
+                # Check for schedule vs interval
+                schedule = task_config.get("schedule")
+                interval = task_config.get("interval")
+                if interval is not None:
+                    interval = float(interval)
+                
+                # Define the worker function
+                async def agent_task_func():
+                    from agent_runner.agent_runner import _agent_loop, get_shared_engine
+                    
+                    # Resolve tools
+                    requested_tools = task_config.get("tools", [])
+                    engine = get_shared_engine()
+                    all_tools = await engine.get_all_tools()
+                    
+                    active_tools = []
+                    if requested_tools == "all":
+                        active_tools = all_tools
+                    else:
+                        # Filter by name
+                        req_set = set(requested_tools)
+                        active_tools = [
+                            t for t in all_tools 
+                            if t.get("function", {}).get("name") in req_set
+                        ]
+                    
+                    prompt = task_config.get("prompt", f"Run task: {name}")
+                    
+                    result = await _agent_loop(
+                        user_messages=[{"role": "user", "content": prompt}],
+                        model=task_config.get("local_model", DEFAULT_TASK_MODEL),
+                        tools=active_tools
+                    )
+                    
+                    # CIRCUIT BREAKER: Check for logic failures that didn't raise exceptions
+                    if isinstance(result, dict) and "error" in result:
+                        raise RuntimeError(f"Agent failed to complete task: {result['error']}")
+                    
+                    # Check for empty choices (provider failure)
+                    if isinstance(result, dict) and not result.get("choices") and not result.get("error"):
+                         raise RuntimeError("Agent returned empty response (Provider Failure)")
+
+                agent_task_func.__name__ = name
+                
+                task_manager.register(
+                    name=name,
+                    func=agent_task_func,
+                    interval=interval,
+                    schedule=schedule,
+                    enabled=task_config.get("enabled", True),
+                    idle_only=task_config.get("idle_only", False),
+                    priority=priority,
+                    description=task_config.get("description", f"Agent Task: {name}"),
+                    estimated_duration=task_config.get("estimated_duration", 300.0),
+                )
+
             logger.info(f"Registered periodic task: {name} ({task_type})")
             
         except Exception as e:

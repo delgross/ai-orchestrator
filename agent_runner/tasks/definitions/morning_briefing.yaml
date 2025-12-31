@@ -1,0 +1,18 @@
+name: morning_briefing
+type: agent
+enabled: false # User can enable
+schedule: "07:00"
+priority: medium
+idle_only: false
+prompt: |
+  Generate a Morning Briefing for the user.
+  1. Get the local weather forecast using the `weather` tool.
+  2. Search for "latest AI news" using `tavily-search` or `perplexity`.
+  3. Clean up the results.
+  4. Write a concise summary to `/Users/bee/Desktop/Morning_Briefing.md`.
+tools:
+  - mcp__weather__get_forecast
+  - mcp__tavily-search__search
+  - mcp__perplexity__search
+  - write_text
+description: "Generate a daily morning briefing with weather and AI news."

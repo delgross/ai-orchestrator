@@ -15,6 +15,8 @@ try:
 except ImportError:
     yaml = None
 
+from common.circuit_breaker import CircuitBreakerRegistry
+
 # Configuration
 ROUTER_URL = os.getenv("ROUTER_URL", "http://127.0.0.1:5455")
 AGENT_URL = os.getenv("AGENT_URL", "http://127.0.0.1:5460")
@@ -29,28 +31,53 @@ def log(msg, level="INFO"):
 class SystemControlServer:
     async def get_system_health(self):
         """Check connectivity and health status of key infrastructure components."""
-        report = {"timestamp": os.popen("date -u").read().strip()}
+        # NEW: Fetch detailed topology report from Agent Runner
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{AGENT_URL}/admin/health/detailed")
+                if resp.status_code == 200:
+                    return resp.json()
+        except:
+            pass # Fallback to legacy check if new endpoint fails (during migration)
+
+        report = {"timestamp": os.popen("date -u").read().strip(), "source": "legacy_fallback"}
         
+        # Initialize breakers if needed (lazy load to avoid init issues)
+        if not hasattr(self, "breakers"):
+             self.breakers = CircuitBreakerRegistry(default_threshold=3, default_timeout=30.0)
+
         async with httpx.AsyncClient(timeout=3.0) as client:
             # Check Router
-            try:
-                resp = await client.get(f"{ROUTER_URL}/health")
-                if resp.status_code == 200:
-                    report["router"] = {"status": "online", "details": resp.json()}
-                else:
-                    report["router"] = {"status": "error", "code": resp.status_code}
-            except Exception as e:
-                report["router"] = {"status": "offline", "error": str(e)}
+            if self.breakers.is_allowed("router"):
+                try:
+                    resp = await client.get(f"{ROUTER_URL}/health")
+                    if resp.status_code == 200:
+                        report["router"] = {"status": "online", "details": resp.json()}
+                        self.breakers.record_success("router")
+                    else:
+                        report["router"] = {"status": "error", "code": resp.status_code}
+                        self.breakers.record_failure("router")
+                except Exception as e:
+                    report["router"] = {"status": "offline", "error": str(e)}
+                    self.breakers.record_failure("router", error=e)
+            else:
+                 report["router"] = {"status": "suspended", "error": "Circuit Breaker Open"}
 
             # Check Agent Runner
-            try:
-                resp = await client.get(f"{AGENT_URL}/health")
-                if resp.status_code == 200:
-                    report["agent_runner"] = {"status": "online", "details": resp.json()}
-                else:
-                    report["agent_runner"] = {"status": "error", "code": resp.status_code}
-            except Exception as e:
-                report["agent_runner"] = {"status": "offline", "error": str(e)}
+            if self.breakers.is_allowed("agent_runner"):
+                try:
+                    resp = await client.get(f"{AGENT_URL}/health")
+                    if resp.status_code == 200:
+                        report["agent_runner"] = {"status": "online", "details": resp.json()}
+                        self.breakers.record_success("agent_runner")
+                    else:
+                        report["agent_runner"] = {"status": "error", "code": resp.status_code}
+                        self.breakers.record_failure("agent_runner")
+                except Exception as e:
+                    report["agent_runner"] = {"status": "offline", "error": str(e)}
+                    self.breakers.record_failure("agent_runner", error=e)
+            else:
+                 report["agent_runner"] = {"status": "suspended", "error": "Circuit Breaker Open"}
 
         return report
 
@@ -152,8 +179,12 @@ class SystemControlServer:
         except Exception as e:
             return {"error": str(e)}
 
-    async def speak_text(self, text: str, provider: str = "default", voice: str = None):
-        """Speak text using host audio output. Provider 'default' uses saved preference."""
+    async def speak_text(self, text: str, provider: str = "default", voice: str = None, wait: bool = False):
+        """
+        Speak text using host audio output. 
+        Provider 'default' uses saved preference.
+        Set 'wait' to False (default) to return immediately while audio plays in background.
+        """
         if not text: return {"error": "No text provided"}
         
         # Load defaults if needed
@@ -168,11 +199,16 @@ class SystemControlServer:
                 # Limit length to prevent abundance?
                 # Using 'say' command
                 proc = await asyncio.create_subprocess_exec("say", text)
-                # Don't wait? If we wait, it blocks the agent.
-                # But if we don't, we can't report success.
-                # Let's wait.
-                await proc.wait()
-                return {"ok": True, "provider": "macos"}
+                
+                if wait:
+                    await proc.wait()
+                else:
+                    # Fire and forget / background task
+                    # We need to not await it, but we also don't want to loose the ref immediately?
+                    # asyncio.create_subprocess_exec starts it. If we don't await wait(), it runs.
+                    pass
+                    
+                return {"ok": True, "provider": "macos", "background": not wait}
             except Exception as e:
                 return {"error": str(e)}
         
@@ -199,10 +235,25 @@ class SystemControlServer:
                 
                 # Play with afplay (macOS default media player)
                 proc = await asyncio.create_subprocess_exec("afplay", tmp_path)
-                await proc.wait()
+                
+                if wait:
+                    await proc.wait()
+                    # Cleanup immediately
+                    if os.path.exists(tmp_path): os.remove(tmp_path)
+                else:
+                    # Cleanup in background task? Or just leave it in temp? 
+                    # Better to cleanup. Let's spawn a cleanup task.
+                    async def _wait_and_clean():
+                        await proc.wait()
+                        if os.path.exists(tmp_path): os.remove(tmp_path)
+                    
+                    asyncio.create_task(_wait_and_clean())
+                
+                return {"ok": True, "provider": "openai", "background": not wait}
                 
                 # Cleanup
-                if os.path.exists(tmp_path): os.remove(tmp_path)
+                # Cleanup (handled in background task if wait=False)
+                if wait and os.path.exists(tmp_path): os.remove(tmp_path)
                 
                 return {"ok": True, "provider": "openai"}
             except Exception as e:
@@ -227,10 +278,23 @@ class SystemControlServer:
         # I only added /admin/tasks/consolidation.
         # But let's assume I'll add it or it fails safely.
         
+        if type == "backup":
+             url = f"{AGENT_URL}/admin/tasks/backup"
+        
+        # Determine URL based on type
         if type == "consolidation":
              url = f"{AGENT_URL}/admin/tasks/consolidation"
         
-        # For backup, if no endpoint, maybe fallback to shell script?
+        # Try API first
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                resp = await client.post(url)
+                if resp.status_code == 200:
+                    return {"ok": True, "method": "api", "body": resp.json()}
+            except:
+                pass # Fallback to shell script if API fails
+        
+        # Fallback to shell script
         if type == "backup":
             script = WORKSPACE_ROOT / "bin" / "backup_memory.sh"
             if script.exists():
@@ -240,7 +304,7 @@ class SystemControlServer:
                     return {"ok": True, "method": "shell_script", "exit_code": proc.returncode}
                 except Exception as e:
                      return {"error": str(e)}
-            return {"error": "Backup script not found and no API endpoint verified."}
+            return {"error": "Backup script not found and API endpoint failed."}
 
         async with httpx.AsyncClient() as client:
             try:
@@ -277,6 +341,49 @@ class SystemControlServer:
             except Exception as e:
                 return {"ok": False, "error": f"Connection to Agent Runner failed: {str(e)}"}
 
+    async def install_mcp_package(self, package: str, name: str = None, args: List[str] = None):
+        """Install an NPM-based MCP server package automatically, optionally with arguments."""
+        # 1. VALIDATION: Check if package exists on NPM registry
+        # checking "npm view <package>" is a fast way to verify existence
+        log(f"Validating NPM package: {package}", level="INFO")
+        try:
+            # We use 'view' because it doesn't download the tarball, just checks registry metadata
+            val_proc = await asyncio.create_subprocess_exec(
+                "npm", "view", package, "name", 
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await val_proc.communicate()
+            
+            if val_proc.returncode != 0:
+                err_msg = stderr.decode().strip() or "Package not found"
+                if "404" in err_msg:
+                    return {"ok": False, "error": f"NPM Package '{package}' does not exist. Please check the spelling."}
+                return {"ok": False, "error": f"NPM Validation Failed: {err_msg}"}
+                
+        except Exception as e:
+            return {"ok": False, "error": f"NPM Validation Exception: {str(e)}"}
+
+        # 2. PROCEED with Installation
+        if not name:
+            # Auto-derive name: @scope/server-foo -> foo
+            # server-bar -> bar
+            parts = package.split("/")[-1].replace("server-", "").replace("-mcp", "")
+            name = parts
+            
+        cmd_list = ["npx", "-y", package]
+        if args:
+            cmd_list.extend(args)
+
+        config = {
+            "cmd": cmd_list,
+            "requires_internet": True,
+            "type": "stdio"
+        }
+        
+        log(f"Installing MCP package '{package}' as server '{name}' with args {args}...", level="INFO")
+        return await self.add_mcp_server(name, config)
+
     async def ingest_file(self, source_path: str):
         """Copy a file to the RAG ingestion inbox to trigger background processing."""
         try:
@@ -305,6 +412,23 @@ class SystemControlServer:
         except Exception as e:
             return {"error": str(e)}
 
+            return {"error": str(e)}
+
+    async def parse_mcp_config(self, content: str):
+        """Parse raw configuration text (JSON/YAML) using the System LLM and install servers."""
+        url = f"{AGENT_URL}/admin/mcp/upload-config"
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                # Send as raw text form data
+                resp = await client.post(url, data={"raw_text": content})
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    return {"ok": False, "error": f"Agent Runner Parsing Error ({resp.status_code}): {resp.text}"}
+            except Exception as e:
+                return {"ok": False, "error": f"Connection to Parser failed: {str(e)}"}
+
 async def main():
     server = Server("system-control")
     controller = SystemControlServer()
@@ -316,11 +440,13 @@ async def main():
             Tool(name="read_service_logs", description="Read recent logs from router, agent_runner, or ollama.", inputSchema={"type":"object","properties":{"service":{"type":"string","enum":["router","agent_runner","ollama"]}, "lines":{"type":"integer","default":20}},"required":["service"]}),
             Tool(name="check_resource_usage", description="Check CPU/RAM of orchestration processes and disk usage.", inputSchema={"type":"object","properties":{}}),
             Tool(name="trigger_maintenance", description="Trigger 'backup' or 'consolidation' tasks.", inputSchema={"type":"object","properties":{"type":{"type":"string","enum":["backup","consolidation"]}},"required":["type"]}),
-            Tool(name="speak_text", description="Audio Output: Speak text aloud on the host machine using macOS or OpenAI.", inputSchema={"type":"object","properties":{"text":{"type":"string"},"provider":{"type":"string","enum":["default","macos","openai"],"default":"default"},"voice":{"type":"string","default":""}},"required":["text"]}),
+            Tool(name="speak_text", description="Audio Output: Speak text aloud on the host machine using macOS or OpenAI. Use wait=False for non-blocking.", inputSchema={"type":"object","properties":{"text":{"type":"string"},"provider":{"type":"string","enum":["default","macos","openai"],"default":"default"},"voice":{"type":"string","default":""},"wait":{"type":"boolean","default":False, "description":"If true, wait for audio to finish before returning."}},"required":["text"]}),
             Tool(name="set_voice_preference", description="Configure default voice provider (macos/openai).", inputSchema={"type":"object","properties":{"provider":{"type":"string","enum":["macos","openai"]},"voice":{"type":"string","default":"alloy"}},"required":["provider"]}),
             Tool(name="add_mcp_server", description="Safely add/update an MCP server in config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"},"config":{"type":"object"}},"required":["name","config"]}),
+            Tool(name="install_mcp_package", description="Install an NPM-based MCP server. Example: '@modelcontextprotocol/server-weather'. Support optional args for proxies.", inputSchema={"type":"object","properties":{"package":{"type":"string"},"name":{"type":"string"},"args":{"type":"array","items":{"type":"string"}}},"required":["package"]}),
             Tool(name="remove_mcp_server", description="Safely remove an MCP server from config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
             Tool(name="ingest_file", description="Submit a file for asynchronous background ingestion (RAG/Knowledge Graph).", inputSchema={"type":"object","properties":{"source_path":{"type":"string"}},"required":["source_path"]}),
+            Tool(name="parse_mcp_config", description="Parse and install MCP servers from raw configuration text (JSON/YAML) pasted by the user. Use this when the user provides a config block.", inputSchema={"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}),
         ]
 
     @server.call_tool()
@@ -340,10 +466,14 @@ async def main():
                 res = await controller.set_voice_preference(**args)
             elif name == "add_mcp_server":
                 res = await controller.add_mcp_server(**args)
+            elif name == "install_mcp_package":
+                res = await controller.install_mcp_package(**args)
             elif name == "remove_mcp_server":
                 res = await controller.remove_mcp_server(**args)
             elif name == "ingest_file":
                 res = await controller.ingest_file(**args)
+            elif name == "parse_mcp_config":
+                res = await controller.parse_mcp_config(**args)
             else:
                 raise ValueError(f"Unknown tool: {name}")
                 

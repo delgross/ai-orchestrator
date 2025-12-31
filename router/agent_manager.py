@@ -9,8 +9,9 @@ async def check_agent_runner_health() -> bool:
         return False
 
     try:
-        r = await state.client.get(f"{AGENT_RUNNER_URL}/", timeout=3.0)
+        r = await state.client.get(f"{AGENT_RUNNER_URL}/health", timeout=3.0)
         if r.status_code < 400:
+            # The /health endpoint returns JSON
             data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
             ok = data.get("ok", False)
             if ok:

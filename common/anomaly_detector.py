@@ -2,6 +2,7 @@
 Anomaly Detection System
 
 Detects abnormal patterns in system behavior using statistical analysis.
+Supports both Gaussian (Z-Score) and Non-Parametric (IQR) detection.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import logging
 import statistics
 import time
+import math
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
@@ -29,15 +31,15 @@ class Anomaly:
     """Detected anomaly."""
     metric_name: str
     current_value: float
-    baseline_value: float
-    deviation: float
+    baseline_value: float  # Mean or Median
+    deviation: float       # Z-Score or IQR Multiplier
     severity: AnomalySeverity
     timestamp: float
     metadata: Dict[str, Any]
 
 
 class AnomalyDetector:
-    """Detects anomalies in system metrics using statistical baselines."""
+    """Detects anomalies in system metrics using advanced statistical baselines."""
     
     def __init__(self, window_size: int = 1000, sensitivity: float = 2.0):
         """
@@ -45,7 +47,7 @@ class AnomalyDetector:
         
         Args:
             window_size: Number of recent values to use for baseline
-            sensitivity: Number of standard deviations for anomaly threshold (default: 2.0 = ~95% confidence)
+            sensitivity: multiplier for threshold (StdDev for Gaussian, IQR for Non-Parametric)
         """
         self.window_size = window_size
         self.sensitivity = sensitivity
@@ -53,11 +55,14 @@ class AnomalyDetector:
         # Metric history: metric_name -> deque of values
         self.metric_history: Dict[str, deque] = {}
         
-        # Baselines: metric_name -> (mean, std_dev)
-        self.baselines: Dict[str, tuple[float, float]] = {}
+        # Baselines: metric_name -> Dict of stats
+        self.baselines: Dict[str, Dict[str, float]] = {}
         
         # Detected anomalies
         self.recent_anomalies: deque = deque(maxlen=1000)
+    
+    # Metrics that typically follow a Log-Normal distribution (e.g., latency)
+    LOG_NORMAL_METRICS = {"process_request", "total_response_time_ms", "avg_latency_ms"}
     
     def record_metric(self, metric_name: str, value: float, metadata: Optional[Dict[str, Any]] = None):
         """Record a metric value and update baseline."""
@@ -66,95 +71,159 @@ class AnomalyDetector:
         
         self.metric_history[metric_name].append(value)
         
-        # Update baseline periodically (every 100 values or when window is full)
-        if len(self.metric_history[metric_name]) >= min(100, self.window_size):
+        # Update baseline periodically (every 50 values or when window is full)
+        if len(self.metric_history[metric_name]) % 50 == 0:
             self._update_baseline(metric_name)
     
     def _update_baseline(self, metric_name: str):
-        """Update statistical baseline for a metric."""
+        """Update statistical baseline for a metric using multiple methods."""
         values = list(self.metric_history[metric_name])
-        if len(values) < 10:  # Need minimum data points
+        if len(values) < 20:  # Need minimum data points for robust statistics
             return
         
-        mean = statistics.mean(values)
-        try:
-            std_dev = statistics.stdev(values) if len(values) > 1 else 0.0
-        except statistics.StatisticsError:
-            std_dev = 0.0
+        stats = {}
         
-        self.baselines[metric_name] = (mean, std_dev)
+        # 1. Standard Gaussian Stats
+        stats["mean"] = statistics.mean(values)
+        try:
+            stats["std_dev"] = statistics.stdev(values) if len(values) > 1 else 0.0
+        except statistics.StatisticsError:
+            stats["std_dev"] = 0.0
+            
+        # 2. Log-Normal Stats (for skewed data like latency)
+        if metric_name in self.LOG_NORMAL_METRICS:
+            # Shift by 1 to handle zero values
+            log_values = [math.log(max(0.001, v)) for v in values]
+            stats["log_mean"] = statistics.mean(log_values)
+            stats["log_std_dev"] = statistics.stdev(log_values)
+            
+        # 3. Non-Parametric Stats (IQR) - Robust against outliers in history
+        sorted_vals = sorted(values)
+        n = len(sorted_vals)
+        q1 = sorted_vals[int(n * 0.25)]
+        median = sorted_vals[int(n * 0.50)]
+        q3 = sorted_vals[int(n * 0.75)]
+        iqr = q3 - q1
+        
+        stats["median"] = median
+        stats["iqr"] = iqr
+        stats["q1"] = q1
+        stats["q3"] = q3
+        
+        self.baselines[metric_name] = stats
     
     # Minimum absolute values required to trigger an anomaly
-    # Prevents "Small Numbers Problem" (e.g., 0.01 -> 0.5 RPS appearing as 50-sigma deviation)
     METRIC_MIN_THRESHOLDS = {
-        "requests_per_second": 5.0,      # Ignore spikes under 5 RPS
-        "error_rate_1min": 0.05,         # Ignore error rates under 5%
-        "active_requests": 10.0,         # Ignore fewer than 10 active requests
-        "cpu_percent": 10.0,             # Ignore CPU usage under 10%
-        "memory_mb": 100.0,              # Ignore memory usage under 100MB
+        "requests_per_second": 5.0,      
+        "error_rate_1min": 0.05,         
+        "active_requests": 10.0,         
+        "cpu_percent": 10.0,             
+        "memory_mb": 100.0,              
     }
 
     def check_anomaly(self, metric_name: str, value: float, metadata: Optional[Dict[str, Any]] = None) -> Optional[Anomaly]:
         """
-        Check if a value is anomalous.
-        
-        Returns:
-            Anomaly object if detected, None otherwise
+        Check if a value is anomalous using the most appropriate statistical method.
         """
         if metric_name not in self.baselines:
-            # Not enough data yet
             return None
         
-        # Check minimum absolute threshold first (Small Numbers Problem)
+        # Check minimum absolute threshold first
         if metric_name in self.METRIC_MIN_THRESHOLDS:
-            threshold = self.METRIC_MIN_THRESHOLDS[metric_name]
-            if value < threshold:
+            if value < self.METRIC_MIN_THRESHOLDS[metric_name]:
                 return None
         
-        mean, std_dev = self.baselines[metric_name]
+        stats = self.baselines[metric_name]
+        severity = None
+        deviation = 0.0
+        baseline_val = stats.get("median", stats.get("mean", 0.0))
+
+        # Method A: Log-Normal Z-Score (Best for Latency)
+        if metric_name in self.LOG_NORMAL_METRICS and "log_mean" in stats:
+            log_val = math.log(max(0.001, value))
+            log_mean = stats["log_mean"]
+            log_std = stats["log_std_dev"]
+            
+            if log_std > 0:
+                deviation = abs(log_val - log_mean) / log_std
+                # For log-normal, we use tighter thresholds on the log scale
+                if deviation >= self.sensitivity * 3:
+                    severity = AnomalySeverity.CRITICAL
+                elif deviation >= self.sensitivity * 2:
+                    severity = AnomalySeverity.WARNING
+                elif deviation >= self.sensitivity:
+                    severity = AnomalySeverity.INFO
+            
+        # Method B: IQR (Best for Robustness against history outliers)
+        # We use this as a secondary check or fallback
+        elif "iqr" in stats and stats["iqr"] > 0:
+            iqr = stats["iqr"]
+            q3 = stats["q3"]
+            q1 = stats["q1"]
+            median = stats["median"]
+            
+            # Distance from the nearest quartile
+            if value > q3:
+                dist = (value - q3) / iqr
+                baseline_val = q3
+            elif value < q1:
+                dist = (q1 - value) / iqr
+                baseline_val = q1
+            else:
+                dist = 0
+            
+            # Map IQR distance to severity (typically 1.5x IQR is "outlier", 3x is "extreme")
+            if dist >= 3.0:
+                severity = AnomalySeverity.CRITICAL
+                deviation = dist
+            elif dist >= 1.5:
+                # Only elevate to warning if Gaussian also agrees or for specific metrics
+                severity = AnomalySeverity.WARNING
+                deviation = dist
+            elif dist >= 0.75:
+                 severity = AnomalySeverity.INFO
+                 deviation = dist
+
+        # Method C: Standard Gaussian (Fallback)
+        if severity is None and stats.get("std_dev", 0) > 0:
+            mean = stats["mean"]
+            std = stats["std_dev"]
+            deviation = abs(value - mean) / std
+            
+            if deviation >= self.sensitivity * 3:
+                severity = AnomalySeverity.CRITICAL
+            elif deviation >= self.sensitivity * 2:
+                severity = AnomalySeverity.WARNING
+            elif deviation >= self.sensitivity:
+                severity = AnomalySeverity.INFO
         
-        if std_dev == 0:
-            # No variance - can't detect anomalies
-            return None
-        
-        deviation = abs(value - mean) / std_dev if std_dev > 0 else 0
-        
-        # Determine severity
-        if deviation >= self.sensitivity * 3:
-            severity = AnomalySeverity.CRITICAL
-        elif deviation >= self.sensitivity * 2:
-            severity = AnomalySeverity.WARNING
-        elif deviation >= self.sensitivity:
-            severity = AnomalySeverity.INFO
-        else:
-            return None  # Not anomalous
-        
-        anomaly = Anomaly(
-            metric_name=metric_name,
-            current_value=value,
-            baseline_value=mean,
-            deviation=deviation,
-            severity=severity,
-            timestamp=time.time(),
-            metadata=metadata or {}
-        )
-        
-        self.recent_anomalies.append(anomaly)
-        return anomaly
+        if severity:
+            anomaly = Anomaly(
+                metric_name=metric_name,
+                current_value=value,
+                baseline_value=baseline_val,
+                deviation=deviation,
+                severity=severity,
+                timestamp=time.time(),
+                metadata=metadata or {}
+            )
+            self.recent_anomalies.append(anomaly)
+            return anomaly
+            
+        return None
     
     def get_recent_anomalies(self, limit: int = 100) -> List[Anomaly]:
         """Get recent anomalies."""
         return list(self.recent_anomalies)[-limit:]
     
-    def get_baselines(self) -> Dict[str, Dict[str, float]]:
+    def get_baselines(self) -> Dict[str, Dict[str, Any]]:
         """Get current baselines for all metrics."""
         return {
             name: {
-                "mean": mean,
-                "std_dev": std_dev,
+                **stats,
                 "samples": len(self.metric_history.get(name, []))
             }
-            for name, (mean, std_dev) in self.baselines.items()
+            for name, stats in self.baselines.items()
         }
     
     def clear_history(self):

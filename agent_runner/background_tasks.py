@@ -73,7 +73,14 @@ class BackgroundTaskManager:
         self.running = False
         self._task_handles: Dict[str, asyncio.Task] = {}
         self._idle_checker: Optional[Callable[[], bool]] = None
+        self._idle_checker: Optional[Callable[[], bool]] = None
         self._notification_subscribed = False
+        
+        # GLOBAL CIRCUIT BREAKER
+        # If we have too many total failures across ALL tasks in a short window, pause everything.
+        self._global_error_history: List[float] = [] # Timestamps of errors
+        self._global_cb_tripped = False
+        self._global_cb_reset_time = 0.0
     
     def set_idle_checker(self, checker: Callable[[], bool]) -> None:
         """Set the function to check if system is idle."""
@@ -269,6 +276,15 @@ class BackgroundTaskManager:
         """Execute a single task."""
         if not task.enabled:
             return
+
+        # GLOBAL CIRCUIT BREAKER CHECK
+        if self._global_cb_tripped:
+            if time.time() > self._global_cb_reset_time:
+                logger.info("Global Circuit Breaker RESET. Resuming tasks.")
+                self._global_cb_tripped = False
+                self._global_error_history.clear()
+            else:
+                return # Silently skip execution while system is cooling down
         
         # Check dependencies
         for dep_name in task.dependencies:
@@ -390,6 +406,25 @@ class BackgroundTaskManager:
                     pass  # Don't let notification errors break task execution
             
             logger.error(f"Task '{task.name}' failed: {e}", exc_info=True)
+            
+            # Update Global Circuit Breaker
+            now = time.time()
+            self._global_error_history.append(now)
+            # clean old errors (> 5 mins ago)
+            self._global_error_history = [t for t in self._global_error_history if now - t < 300]
+            
+            # Trip if > 10 errors in 5 minutes
+            if len(self._global_error_history) > 10 and not self._global_cb_tripped:
+                self._global_cb_tripped = True
+                self._global_cb_reset_time = now + 600 # 10 minute cooldown
+                logger.critical("GLOBAL CIRCUIT BREAKER TRIPPED: >10 Task Failures in 5 mins. Pausing Scheduler.")
+                
+                from common.notifications import notify_critical
+                notify_critical(
+                    title="SYSTEM PAUSED (Circuit Breaker)",
+                    message="The Task Scheduler has paused for 10 minutes due to excessive task failures (>10 in 5m).",
+                    source="BackgroundTaskManager"
+                )
         finally:
             task.running = False
     
@@ -442,7 +477,74 @@ class BackgroundTaskManager:
             await self._run_task(task)
             # One-time tasks are automatically disabled after running
             task.enabled = False
-    
+
+    async def scan_task_definitions(self) -> None:
+        """
+        Periodically scan the 'agent_runner/tasks/definitions' directory for new or updated tasks.
+        This provides dynamic task discovery without restarts.
+        """
+        from pathlib import Path
+        try:
+            import yaml
+        except ImportError:
+            return
+
+        defs_dir = Path(__file__).parent / "tasks" / "definitions"
+        if not defs_dir.exists():
+            return
+
+        from agent_runner.task_loader import load_tasks_from_config, register_tasks_from_config
+        
+        while self.running:
+            try:
+                # 1. Discover all current task files
+                current_files = set(defs_dir.glob("*.yaml"))
+                current_files.update(defs_dir.glob("*.yml"))
+                
+                # 2. Load each file as a potential task
+                for file_path in current_files:
+                    try:
+                        with open(file_path, "r") as f:
+                            task_config = yaml.safe_load(f)
+                            
+                        if not task_config:
+                            continue
+                            
+                        # If name not in body, infer from filename
+                        if "name" not in task_config:
+                            task_config["name"] = file_path.stem
+
+                        task_name = task_config["name"]
+                        
+                        # Check if we need to register/update
+                        # We use a simple wrapper to pass this single task config to the loader
+                        # The loader expects {"agent_runner": {"periodic_tasks": {name: config}}}
+                        # We simulate this structure to reuse the robust loading logic
+                        wrapper_config = {
+                            "agent_runner": {
+                                "periodic_tasks": {
+                                    task_name: task_config
+                                }
+                            }
+                        }
+                        
+                        # This registers or updates the task in self.tasks
+                        # The loader handles checking if it exists/needs update
+                        register_tasks_from_config(self, wrapper_config)
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to load task definition {file_path.name}: {e}")
+
+                # 3. [Optional] Remove tasks whose files were deleted?
+                # For now, we assume "disable in file" is the preferred method vs deleting file.
+                # Deleting logic is risky if task is running. 
+                
+            except Exception as e:
+                logger.error(f"Task scanner loop error: {e}")
+            
+            # Scan every 60 seconds
+            await asyncio.sleep(60)
+
     async def start(self) -> None:
         """Start all registered tasks."""
         if self.running:
@@ -454,6 +556,9 @@ class BackgroundTaskManager:
         
         # Subscribe to notifications for reactive behavior
         self._subscribe_to_notifications()
+
+        # Start Dynamic Task Scanner
+        self._task_handles["_scanner"] = asyncio.create_task(self.scan_task_definitions())
         
         for name, task in self.tasks.items():
             if not task.enabled:
@@ -525,6 +630,8 @@ class BackgroundTaskManager:
                     "next_run": task.next_run,
                     "seconds_until_next": max(0, (task.next_run or 0) - now) if task.next_run else None,
                     "last_error": task.last_error,
+                    "interval": task.interval, # [NEW]
+                    "schedule": task.schedule, # [NEW]
                 }
                 for name, task in self.tasks.items()
             }
@@ -571,11 +678,17 @@ class BackgroundTaskManager:
 _task_manager: Optional[BackgroundTaskManager] = None
 
 
+from agent_runner.registry import ServiceRegistry
+
 def get_task_manager() -> BackgroundTaskManager:
     """Get the global task manager instance."""
     global _task_manager
     if _task_manager is None:
-        _task_manager = BackgroundTaskManager()
+        try:
+            _task_manager = ServiceRegistry.get_task_manager()
+        except RuntimeError:
+            _task_manager = BackgroundTaskManager()
+            ServiceRegistry.register_task_manager(_task_manager)
     return _task_manager
 
 

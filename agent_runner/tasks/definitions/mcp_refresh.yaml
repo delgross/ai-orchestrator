@@ -1,0 +1,9 @@
+name: mcp_refresh
+type: module
+module: agent_runner.mcp_tasks
+function: mcp_refresh_task
+interval: 300
+enabled: true
+priority: LOW
+description: "Periodically refresh MCP tool registry (Function Awareness)"
+idle_only: false

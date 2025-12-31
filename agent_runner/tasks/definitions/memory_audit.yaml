@@ -1,0 +1,8 @@
+name: memory_audit
+type: scheduled
+schedule: "Cron: 0 3 * * *" # Run at 3 AM daily
+module: agent_runner.memory_tasks
+function: memory_audit_task
+priority: low
+idle_only: true
+description: "Periodically audits memory facts against RAG ground truth to resolve conflicts."

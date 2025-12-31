@@ -612,9 +612,9 @@ class MemoryServer:
         await self.ensure_connected()
         if not self.initialized: return {"ok": False, "error": "DB not connected"}
         try:
-            # DEBUG: Removed WHERE consolidated = false
+            # Fixed: Restore WHERE consolidated = false
             res = await self._execute_query(
-                "SELECT * FROM episode ORDER BY timestamp ASC LIMIT $limit",
+                "SELECT * FROM episode WHERE consolidated = false ORDER BY timestamp ASC LIMIT $limit",
                 {"limit": limit}
             )
             if res is None:

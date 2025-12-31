@@ -81,7 +81,12 @@ async def tool_mcp_proxy(state: AgentState, server: str, tool: str, arguments: D
                 await proc.stdin.drain()
                 
                 res = {"ok": False, "error": "Did not receive a valid response from stdio process"}
-                for _ in range(20): # increased from 10
+                res = {"ok": False, "error": "Did not receive a valid response from stdio process"}
+                
+                # Retrieve response line-by-line. 
+                # We loop to skip over potential debug/log lines from the server.
+                # BUT: If we hit a read timeout (silence), we must abort, not retry.
+                for _ in range(50): 
                     try:
                         line = await asyncio.wait_for(proc.stdout.readline(), timeout=30.0)
                         if not line:
@@ -90,17 +95,25 @@ async def tool_mcp_proxy(state: AgentState, server: str, tool: str, arguments: D
                         if not line_text:
                             continue
                             
-                        data = json.loads(line_text)
-                        if isinstance(data, dict) and data.get("id") == req_id:
-                            if "error" in data:
-                                res = {"ok": False, "error": data["error"]}
-                            else:
-                                res = {"ok": True, "result": data.get("result"), "id": data.get("id")}
-                            break
-                    except (asyncio.TimeoutError, json.JSONDecodeError):
-                        continue
-        else:
-            return {"ok": False, "error": f"Unsupported transport scheme: {scheme}"}
+                        try:
+                            data = json.loads(line_text)
+                            if isinstance(data, dict) and data.get("id") == req_id:
+                                if "error" in data:
+                                    res = {"ok": False, "error": data["error"]}
+                                else:
+                                    res = {"ok": True, "result": data.get("result"), "id": data.get("id")}
+                                break
+                        except json.JSONDecodeError:
+                            # Not JSON (likely log output), ignore and continue reading
+                            continue
+                            
+                    except asyncio.TimeoutError:
+                        logger.error(f"MCP Timeout: Server '{server}' silent for 30s.")
+                        res = {"ok": False, "error": "MCP Request Timed Out (No response)"}
+                        break
+                    except Exception as e:
+                        logger.error(f"MCP Read Error: {e}")
+                        break
 
         # Handle result and update circuit breaker
         if res.get("ok"):

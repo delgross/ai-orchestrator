@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Questionable Insight Dashboard</title>
-    <link rel="stylesheet" href="/v2/styles.css?v=2.8.12">
+    <link rel="stylesheet" href="/v2/styles.css?v=2.9.0">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -71,12 +71,9 @@
                 <div class="sentinel-message" id="sentinel-msg">Loading health context...</div>
             </div>
             <div class="sentinel-actions">
-                <button class="action-btn sm primary" id="btn-sentinel-test" onclick="testSystemRecovery()">
-                    <span class="icon">🩺</span> Test Recovery
-                </button>
-                <button class="action-btn sm"
-                    onclick="this.parentElement.parentElement.parentElement.style.display='none'">
-                    Dismiss
+                <button class="action-btn sm primary"
+                    onclick="dismissAlert('system-sentinel', document.getElementById('sentinel-msg').innerText)">
+                    Acknowledge
                 </button>
             </div>
         </div>
@@ -146,6 +143,9 @@
             <button class="tab-link" data-tab="chat">
                 <span class="icon">💬</span> Chat
             </button>
+            <button class="tab-link" data-tab="memory">
+                <span class="icon">🧠</span> Memory
+            </button>
             <button class="tab-link" data-tab="logs">
                 <span class="icon">📝</span> Logs
             </button>
@@ -155,10 +155,10 @@
         <section class="tab-views">
             <!-- Chat Tab -->
             <div id="chat" class="tab-content">
-                <div class="card glass wide full-height" style="display: flex; flex-direction: column;">
+                <div class="card glass wide full-height flex-col">
                     <div class="card-header">
                         <h3>Direct Router Chat</h3>
-                        <div style="display: flex; gap: 10px; align-items: center;">
+                        <div class="flex-row-center">
                             <select id="chat-model-select" class="config-select">
                                 <option value="agent:mcp">Orchestrator (Agent)</option>
                                 <option value="router">Raw Router</option>
@@ -186,6 +186,22 @@
                             style="color: #aaa; font-size: 0.8em; cursor: pointer; display: flex; align-items: center; gap: 6px;">
                             <input type="checkbox" id="chat-tts-toggle"> 🔊 Read Responses Aloud
                         </label>
+                    </div>
+                </div>
+            </div>
+            <!-- Memory Tab -->
+            <div id="memory" class="tab-content">
+                <div class="card glass wide full-height flex-col">
+                    <div class="card-header">
+                        <h3>Orchestrator Memory (SurrealDB)</h3>
+                        <div class="flex-row-center">
+                            <input type="text" id="memory-search-input" placeholder="Search facts..."
+                                style="padding: 0.5rem; border-radius: 8px; border: 1px solid var(--glass-border); background: rgba(0,0,0,0.3); color: white; width: 300px;">
+                            <button class="action-btn sm" onclick="fetchMemoryFacts()">Search</button>
+                        </div>
+                    </div>
+                    <div id="memory-results" class="flex-grow scroll-y p-1">
+                        <div class="placeholder-box">Loading facts...</div>
                     </div>
                 </div>
             </div>
@@ -232,38 +248,48 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr>
-                                    <td class="mono" style="color:var(--accent-ok);">5455</td>
-                                    <td style="font-weight:600;">Router (Gateway)</td>
-                                    <td>Main Entry Point. Connect LibreChat/RAG here.</td>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                    <td class="mono" style="color:var(--accent-ok); padding:12px;">5455</td>
+                                    <td style="font-weight:600; padding:12px;">Router (Gateway)</td>
+                                    <td style="padding:12px;">Main Entry Point & API Gateway.</td>
                                 </tr>
-                                <tr>
-                                    <td class="mono" style="color:var(--accent-ok);">5460</td>
-                                    <td style="font-weight:600;">Agent Runner</td>
-                                    <td>The Brain. Handles MCP tools & logic.</td>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                    <td class="mono" style="color:var(--accent-ok); padding:12px;">5460</td>
+                                    <td style="font-weight:600; padding:12px;">Agent Runner</td>
+                                    <td style="padding:12px;">The Brain. Handles MCP tools & logic.</td>
                                 </tr>
-                                <tr>
-                                    <td class="mono" style="color:var(--accent-warn);">11434</td>
-                                    <td style="font-weight:600;">Ollama</td>
-                                    <td>Local LLM Engine (Backend).</td>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                    <td class="mono" style="color:var(--accent-warn); padding:12px;">11434</td>
+                                    <td style="font-weight:600; padding:12px;">Ollama</td>
+                                    <td style="padding:12px;">Local LLM Engine (Backend).</td>
                                 </tr>
-                                <tr>
-                                    <td class="mono" style="color:var(--text-secondary);">8000</td>
-                                    <td style="font-weight:600;">SurrealDB</td>
-                                    <td>Memory & Vector Database.</td>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                    <td class="mono" style="color:var(--text-secondary); padding:12px;">8000</td>
+                                    <td style="font-weight:600; padding:12px;">SurrealDB</td>
+                                    <td style="padding:12px;">Memory & Vector Database.</td>
                                 </tr>
-                                <tr>
-                                    <td class="mono" style="color:var(--accent-neon);">3080</td>
-                                    <td style="font-weight:600;">LibreChat</td>
-                                    <td>User Interface (Web Client).</td>
-                                </tr>
-                                <tr>
-                                    <td class="mono" style="color:var(--text-secondary);">3000</td>
-                                    <td style="font-weight:600;">Open WebUI / Dev</td>
-                                    <td>Alternate User Interface.</td>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                    <td class="mono" style="color:var(--text-main); padding:12px;">5555</td>
+                                    <td style="font-weight:600; padding:12px;">RAG Engine</td>
+                                    <td style="padding:12px;">Knowledge Base Query Engine.</td>
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- CLOUD UPLINK (New) -->
+                    <div class="card bg-dark text-white mb-3" style="border: 1px solid var(--glass-border);">
+                        <div
+                            class="card-header border-bottom border-secondary d-flex justify-content-between align-items-center">
+                            <h3>H100 Uplink</h3>
+                            <span class="badge bg-primary" id="cloud-status-badge"
+                                style="background:var(--accent-blue); padding:2px 8px; border-radius:4px; font-size:0.8rem;">OFFLINE</span>
+                        </div>
+                        <div class="card-body p-0">
+                            <div id="cloud-terminal" class="terminal-box" style="height: 150px;">
+                                > Listening for H100 telemetry...
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Metrics Card -->
@@ -429,7 +455,7 @@
                     <div class="card glass" style="grid-column: span 1;">
                         <div class="card-header">
                             <h3>File Manager</h3>
-                            <div style="display: flex; gap: 10px; align-items: center;">
+                            <div class="flex-row-center">
                                 <select id="config-file-selector" class="config-select" style="max-width: 150px;">
                                     <option value="" disabled selected>Select...</option>
                                 </select>
@@ -500,7 +526,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="/v2/app.js?v=2.8.12"></script>
+    <script src="/v2/app.js?v=2.9.0"></script>
 </body>
 
 </html>

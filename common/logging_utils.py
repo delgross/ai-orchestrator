@@ -8,9 +8,24 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Optional
+from contextlib import asynccontextmanager
 
 logger = logging.getLogger("logging_utils")
+
+@asynccontextmanager
+async def log_time(operation_name: str, level=logging.DEBUG, logger_override=None):
+    """
+    Context manager to log the execution time of a block of code.
+    """
+    t0 = time.time()
+    try:
+        yield
+    finally:
+        duration = time.time() - t0
+        target_logger = logger_override or logger
+        target_logger.log(level, f"PERF: {operation_name} completed in {duration:.4f}s")
 
 
 def log_json_event(event: str, request_id: Optional[str] = None, **fields: Any) -> None:

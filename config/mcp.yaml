@@ -1,0 +1,132 @@
+mcp_servers:
+  exa:
+    query_params:
+      exaApiKey: c34af6d2-015f-4b20-8021-c6a77bbf0001
+    requires_internet: true
+    type: sse
+    url: https://mcp.exa.ai/mcp
+  fetch:
+    cmd:
+    - uvx
+    - mcp-server-fetch
+    type: stdio
+  filesystem:
+    cmd:
+    - npx
+    - -y
+    - '@modelcontextprotocol/server-filesystem'
+    - /Users/bee/Sync/Antigravity/ai
+    - /Users/bee/Downloads
+    type: stdio
+  firecrawl-mcp:
+    cmd:
+    - env
+    - FIRECRAWL_API_KEY=fc-ca465c22960b45ebbb246c8cbbae468d
+    - npx
+    - -y
+    - firecrawl-mcp
+    env:
+      FIRECRAWL_API_KEY: fc-ca465c22960b45ebbb246c8cbbae468d
+    requires_internet: true
+    type: stdio
+  macos_automator:
+    cmd:
+    - npx
+    - -y
+    - '@steipete/macos-automator-mcp@latest'
+    env: {}
+    type: stdio
+  mcp-pandoc:
+    cmd:
+    - uvx
+    - mcp-pandoc
+    type: stdio
+  memory-search:
+    cmd:
+    - npx
+    - -y
+    - '@modelcontextprotocol/server-memory'
+    env:
+      SEARCH_API_KEY: test_key_123
+    requires_internet: true
+    type: stdio
+  ollama:
+    cmd:
+    - /Users/bee/Sync/Antigravity/ai/agent_runner/.venv/bin/python
+    - /Users/bee/Sync/Antigravity/ai/agent_runner/ollama_server.py
+    env:
+      OLLAMA_BASE: http://127.0.0.1:11434
+    type: stdio
+  perplexity:
+    cmd:
+    - npx
+    - -y
+    - '@perplexity-ai/mcp-server'
+    env:
+      PERPLEXITY_API_KEY: REDACTED
+    requires_internet: true
+    type: stdio
+  playwright:
+    cmd:
+    - npx
+    - '@playwright/mcp@latest'
+    env: {}
+    type: stdio
+  project-memory:
+    cmd:
+    - /Users/bee/Sync/Antigravity/ai/agent_runner/.venv/bin/python
+    - /Users/bee/Sync/Antigravity/ai/agent_runner/memory_server.py
+    env:
+      EMBED_MODEL: ollama:mxbai-embed-large
+      GATEWAY_BASE: http://127.0.0.1:5455
+      SURREAL_DB: memory
+      SURREAL_NS: orchestrator
+      SURREAL_PASS: root
+      SURREAL_URL: ws://127.0.0.1:8000/rpc
+      SURREAL_USER: root
+    type: stdio
+  scrapezy:
+    cmd:
+    - npx
+    - '@scrapezy/mcp'
+    - --api-key=REDACTED
+    - --json
+    env:
+      SCRAPEZY_API_KEY: REDACTED
+    requires_internet: true
+    type: stdio
+  system-control:
+    cmd:
+    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
+    - /Users/bee/Sync/Antigravity/ai/agent_runner/system_control_server.py
+    env:
+      AGENT_URL: http://127.0.0.1:5460
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PYTHONPATH: /Users/bee/Sync/Antigravity/ai
+      ROUTER_URL: http://127.0.0.1:5455
+    type: stdio
+  tavily-search:
+    cmd:
+    - npx
+    - -y
+    - tavily-mcp@0.1.3
+    env:
+      TAVILY_API_KEY: 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
+    requires_internet: true
+    type: stdio
+  thinking:
+    cmd:
+    - npx
+    - -y
+    - '@modelcontextprotocol/server-sequential-thinking'
+    type: stdio
+  time:
+    cmd:
+    - uvx
+    - mcp-server-time
+    type: stdio
+  weather:
+    cmd:
+    - npx
+    - -y
+    - '@iflow-mcp/weather-mcp'

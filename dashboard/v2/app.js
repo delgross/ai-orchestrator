@@ -98,7 +98,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (statusResp.ok) {
                     const sData = await statusResp.json();
-                    indicatorData.internet = sData.internet;
+                    // Merge all status data (internet, database_ok, etc.)
+                    Object.assign(indicatorData, sData);
                 }
 
                 if (breakerResp.ok) {
@@ -147,6 +148,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } else if (data.latest_anomaly) {
                 msg = `<strong>ANOMALY:</strong> ${data.latest_anomaly.message || 'System behavior irregular.'}`;
+            }
+
+            // Persistence Check
+            const ackFn = localStorage.getItem('sentinel_ack_msg');
+            if (ackFn && ackFn === msg) {
+                sentinel.style.display = 'none';
+                return;
             }
 
             msgEl.innerHTML = msg;
@@ -198,13 +206,8 @@ document.addEventListener('DOMContentLoaded', () => {
         setInd('status-mcp', data.services?.agent_runner?.ok);
         setInd('status-ollama', data.ollama_ok);
 
-        // Memory/DB Status based on 'project-memory' breaker
-        // If agent is up, check if memory breaker is open (failed)
-        let dbOk = data.services?.agent_runner?.ok;
-        const memBreaker = data.breakers ? data.breakers['project-memory'] : null;
-        if (memBreaker && memBreaker.state === 'open') dbOk = false;
-
-        setInd('status-db', dbOk);
+        // Database Status (Real Ping from Backend)
+        setInd('status-db', data.database_ok);
 
         const internetEl = document.getElementById('status-internet');
         if (internetEl) {
@@ -367,10 +370,74 @@ document.addEventListener('DOMContentLoaded', () => {
                 }).join('');
             }
         } catch (e) {
-            console.error("Failed to load roles after retries", e);
+            console.error("Failed to load roles", e);
             const tbody = document.getElementById('roles-table-body');
-            if (tbody) tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--accent-err);">System Offline or Connecting...</td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--accent-err);">Error: ${e.message}</td></tr>`;
         }
+    };
+
+    // --- Modal & Alert Logic ---
+    window.mcpToolsCache = {};
+
+    window.showToolsModal = (name) => {
+        const tools = window.mcpToolsCache[name] || [];
+        const title = document.getElementById('modal-title');
+        const container = document.getElementById('modal-content');
+
+        if (title) title.textContent = `Tools: ${name}`;
+        if (container) {
+            container.innerHTML = tools.length
+                ? tools.map(t => {
+                    const args = t.inputSchema || t.args || {};
+                    return `
+                        <div style="margin-bottom:1rem; padding-bottom:1rem; border-bottom:1px solid rgba(255,255,255,0.1);">
+                            <div style="font-weight:600; color:var(--accent-blue); display:flex; justify-content:space-between;">
+                                ${t.name}
+                            </div>
+                            <div style="font-size:0.9rem; color:#ddd; margin: 4px 0;">${t.description || "No description provided."}</div>
+                            <div style="background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; font-family:'JetBrains Mono', monospace; font-size:0.75rem; color:#aaa; overflow-x:auto;">
+                                ARGS: ${JSON.stringify(args)}
+                            </div>
+                        </div>
+                    `;
+                }).join('')
+                : '<div style="padding:2rem; text-align:center; color:#888;">No tools exposed by this server.</div>';
+        }
+        const modal = document.getElementById('tool-modal');
+        if (modal) modal.style.display = 'flex';
+    };
+
+    window.closeToolsModal = () => {
+        const modal = document.getElementById('tool-modal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    window.dismissAlert = async (id, msg) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.opacity = '0';
+            setTimeout(() => el.remove(), 500);
+        }
+        // Persist Acknowledgement
+        localStorage.setItem('sentinel_ack_msg', msg);
+
+        // Report to Orchestrator Logic
+        console.log("Reporting Alert Dismissal:", msg);
+        // Best effort log
+        try {
+            await fetch('/admin/mcp/tool', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    server: 'project-memory',
+                    tool: 'ingest_knowledge',
+                    arguments: {
+                        text: `[USER FEEDBACK] User dismissed alert: "${msg}". This implies the alert was acknowledged or false positive.`,
+                        kb_id: 'system_feedback'
+                    }
+                })
+            });
+        } catch (e) { console.warn("Failed to report dismissal", e); }
     };
 
     window.updateRole = async (roleKey, newValue, btn) => {
@@ -425,9 +492,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Handle Tools (Primary Content)
             let toolMap = {};
+            let serverMeta = {};
             if (toolsResult.status === 'fulfilled' && toolsResult.value.ok) {
                 const data = await toolsResult.value.json();
-                if (data.ok) toolMap = data.tools || {};
+                if (data.ok) {
+                    toolMap = data.tools || {};
+                    serverMeta = data.servers || {}; // Get status map
+                    // Cache tools globally for Modal access
+                    window.mcpToolsCache = toolMap;
+                }
             } else {
                 const err = toolsResult.status === 'rejected' ? toolsResult.reason : new Error("Tools endpoint returned non-OK");
                 throw err;
@@ -442,7 +515,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (e) { console.warn("Failed to parse breaker data", e); }
             }
 
-            const serverNames = Object.keys(toolMap).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+            // Use info from Server Meta to get ALL servers (even disabled ones)
+            let serverNames = Object.keys(serverMeta).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+            if (serverNames.length === 0) serverNames = Object.keys(toolMap).sort(); // Fallback
 
             if (serverNames.length === 0) {
                 if (mcpRetryCount < retryLimit) {
@@ -459,41 +534,51 @@ document.addEventListener('DOMContentLoaded', () => {
             mcpRetryCount = 0; // Success, reset counter
 
             // Render
-            list.innerHTML = serverNames.map(name => {
+            // Render Lists
+            const activeServerNames = serverNames.filter(n => serverMeta[n]?.enabled !== false);
+            const disabledServerNames = serverNames.filter(n => serverMeta[n]?.enabled === false);
+
+            const activeHTML = activeServerNames.map(name => {
                 const tools = toolMap[name] || [];
                 const breaker = breakerMap[name] || { state: 'UNKNOWN', total_successes: 0, total_failures: 0 };
                 const stateClass = breaker.state ? breaker.state.toLowerCase() : 'unknown';
 
-                const toolOptions = tools.length > 0
-                    ? tools.map(t => {
-                        const tName = t.name || t.function?.name || 'Unknown';
-                        return `<option>${tName}</option>`;
-                    }).join('')
-                    : `<option disabled>No tools loaded</option>`;
-
                 return `
-                        <div style="display:flex; justify-content:space-between; align-items:center; gap: 8px;">
-                            <h4 style="margin:0; flex-grow:1;">
-                                <span>${name}</span>
-                                <span class="indicator ${stateClass}" title="Circuit Breaker: ${stateClass.toUpperCase()}"></span>
+                    <div class="server-card">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap: 8px; margin-bottom: 6px;">
+                            <h4 style="margin:0; font-size: 0.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-grow: 1;" title="${name}">
+                                ${name}
                             </h4>
-                            <div style="display:flex; gap:6px;">
-                                ${breaker.state === 'OPEN' ? `<button class="action-btn sm primary" onclick="resetBreaker('${name}')">Reset</button>` : ''}
-                                <button class="action-btn sm danger-hover" onclick="confirmDeleteMCP('${name}')" title="Remove MCP Server">🗑️</button>
+                            <span class="indicator ${stateClass}" title="State: ${stateClass.toUpperCase()}"></span>
+                            <div style="display:flex; gap:4px;">
+                                ${breaker.state === 'OPEN' ? `<button class="action-btn sm primary" style="padding:2px 6px; font-size:0.7rem;" onclick="resetBreaker('${name}')">Reset</button>` : ''}
+                                <button class="action-btn sm" style="padding:2px 8px; font-size:0.75rem;" onclick="toggleMCP('${name}', false)">Disable</button>
                             </div>
                         </div>
-                        <div class="tool-meta">
-                            Success: ${breaker.total_successes || 0} | Failures: ${breaker.total_failures || 0}
+                        <div class="tool-meta" style="font-size: 0.75rem; color:var(--text-muted); display:flex; justify-content:space-between; margin-bottom: 6px;">
+                            <span>Tools: ${tools.length}</span>
+                            <span>S:${breaker.total_successes} F:${breaker.total_failures}</span>
                         </div>
-                        <div style="margin-top: 10px;">
-                            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Available Tools (${tools.length})</label>
-                            <select class="config-select" style="width: 100%;">
-                                ${toolOptions}
-                            </select>
-                        </div>
+                        <button class="action-btn sm" style="width:100%; text-align:center;" onclick="showToolsModal('${name}')">
+                            View Tools
+                        </button>
                     </div>
                 `;
             }).join('');
+
+            const disabledHTML = disabledServerNames.length > 0 ? `
+                <div style="grid-column: 1 / -1; margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem; color: var(--text-muted); font-size: 0.8rem; display: flex; flex-wrap: wrap; gap: 8px;">
+                    <div style="width:100%; margin-bottom:0.5rem; font-weight:600;">Disabled Servers</div>
+                    ${disabledServerNames.map(name => `
+                        <div style="background:rgba(0,0,0,0.3); padding:4px 8px; border-radius:4px; display:flex; align-items:center; gap:8px; border:1px solid var(--glass-border);">
+                            <span style="color:#666;">${name}</span>
+                            <button class="action-btn sm primary" style="padding:2px 6px; font-size:0.7rem;" onclick="toggleMCP('${name}', true)">Enable</button>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : '';
+
+            list.innerHTML = activeHTML + disabledHTML;
 
         } catch (e) {
             console.warn("MCP Fetch Loop Error", e);
@@ -507,33 +592,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- MCP Deletion Handlers ---
-    window.confirmDeleteMCP = (name) => {
-        if (confirm(`Are you sure you want to permanently remove the MCP server '${name}'? This will terminate its process and delete its configuration.`)) {
-            removeMCPServer(name);
-        }
-    };
+    // --- MCP Toggle Logic ---
+    window.toggleMCP = async (name, enable) => {
+        const action = enable ? "Enabling" : "Disabling";
+        if (!enable && !confirm(`Are you sure you want to DISABLE '${name}'?\n\nThis will stop the process but RETAIN your configuration.\n\nYou can re-enable it at any time.`)) return;
 
-    async function removeMCPServer(name) {
         try {
-            const resp = await fetch('/admin/mcp/remove', {
+            const resp = await fetch('/admin/mcp/toggle', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name })
+                body: JSON.stringify({ name: name, enabled: enable })
             });
-
-            const data = await resp.json();
-            if (data.ok) {
-                showNotification(`Removed MCP server: ${name}`);
-                fetchMCPData(); // Refresh list
+            const d = await resp.json();
+            if (d.ok) {
+                const msg = enable ? `ENABLED '${name}'. Starting process...` : `DISABLED '${name}'. Config Retained. Process Stopped.`;
+                showNotification(msg);
+                console.log(`MCP Toggle Success: ${name} -> ${enable}. Config saved to mcp.yaml.`);
+                setTimeout(fetchMCPData, 1000); // Wait for discovery/termination
             } else {
-                showNotification(`Error: ${data.error || 'Failed to remove server'}`, 'error');
+                showNotification(`Failed: ${d.error}`, 'error');
             }
-        } catch (e) {
-            console.error("Failed to remove MCP server", e);
-            showNotification("Connection error during removal", "error");
-        }
-    }
+        } catch (e) { console.error(e); }
+    };
+
+    // ... (Rest of Ollama Logic)
 
     // --- Ollama Manager ---
     async function fetchOllamaModels() {
@@ -658,6 +740,54 @@ my-server-name:
         setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 500); }, 3000);
     }
 
+    // --- Memory Browser Logic ---
+    window.fetchMemoryFacts = async () => {
+        const input = document.getElementById('memory-search-input');
+        const query = input ? input.value : '';
+        const container = document.getElementById('memory-results');
+        container.innerHTML = '<div class="placeholder-box">Searching Neural Memory...</div>';
+
+        try {
+            const resp = await fetch(`/admin/memory/facts?query=${encodeURIComponent(query)}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.facts && data.facts.length > 0) {
+                    const rows = data.facts.map(f => `
+                        <tr>
+                            <td><span class="badge fact">FACT</span></td>
+                            <td>${f.entity || '?'}</td>
+                            <td>${f.relation || '-'}</td>
+                            <td>${f.target || ''}</td>
+                        </tr>
+                    `).join('');
+                    container.innerHTML = `
+                        <table class="memory-table">
+                            <thead>
+                                <tr>
+                                    <th width="80">Type</th>
+                                    <th>Entity</th>
+                                    <th>Relation</th>
+                                    <th>Target/Value</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    `;
+                } else {
+                    container.innerHTML = '<div style="padding:1rem; color:var(--text-muted)">No facts found matching query.</div>';
+                }
+            } else {
+                container.innerHTML = '<div style="color:var(--accent-error)">Error fetching memory. Agent might be busy.</div>';
+            }
+        } catch (e) {
+            container.innerHTML = `<div style="color:var(--accent-error)">Network Error: ${e.message}</div>`;
+        }
+    };
+
+    document.getElementById('memory-search-input')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') window.fetchMemoryFacts();
+    });
+
     // Auto Toggle & Backup Buttons
     document.getElementById('btn-toggle-auto-top')?.addEventListener('click', () => {
         const lbl = document.getElementById('lbl-auto');
@@ -728,8 +858,43 @@ my-server-name:
     fetchSystemData();
     fetchSystemRoles();
 
+    // --- Cloud Uplink Logic ---
+    async function fetchCloudLogs() {
+        const terminal = document.getElementById('cloud-terminal');
+        if (!terminal) return;
+
+        try {
+            const resp = await fetch('/admin/logs/cloud_uplink?lines=15'); // Fetch last 15 lines
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.logs && data.logs.length > 0) {
+                    // Update terminal content
+                    terminal.innerHTML = data.logs.map(line => `> ${line}`).join('<br>');
+                    terminal.scrollTop = terminal.scrollHeight; // Auto-scroll
+
+                    // Update Status Badge based on content
+                    const lastLine = data.logs[data.logs.length - 1];
+                    const badge = document.getElementById('cloud-status-badge');
+                    if (lastLine.includes('Processing')) {
+                        badge.textContent = 'ACTIVE';
+                        badge.className = 'badge bg-success';
+                    } else if (lastLine.includes('Error')) {
+                        badge.textContent = 'ERROR';
+                        badge.className = 'badge bg-danger';
+                    } else {
+                        badge.textContent = 'IDLE';
+                        badge.className = 'badge bg-secondary';
+                    }
+                }
+            }
+        } catch (e) {
+            // terminal.innerHTML = '> Uplink Disconnected.';
+        }
+    }
+
     // Start Polling Loop
     setInterval(fetchSystemData, state.pollingInterval);
+    setInterval(fetchCloudLogs, 2000); // Poll cloud logs every 2s
 
     document.getElementById('btn-reload-mcp-top')?.addEventListener('click', async () => {
         await fetch('/admin/reload-mcp', { method: 'POST' });

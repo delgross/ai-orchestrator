@@ -138,10 +138,36 @@ async def _process_locally(file_path: Path, state: Any, http_client: Any) -> str
 
 # --- INGESTION PIPELINE ---
 
+# --- QUALITY CONTROL (The Sous Chef) ---
+def _assess_local_quality(content: str, ext: str) -> dict:
+    """
+    Offline Heuristic Quality Check. 
+    Returns {'score': float, 'is_noise': bool, 'reason': str}
+    """
+    if not content or not content.strip():
+        return {'score': 0.0, 'is_noise': True, 'reason': "Empty Content"}
+    
+    val_len = len(content.strip())
+    
+    # 1. Length Check
+    if val_len < 50:
+         return {'score': 0.1, 'is_noise': True, 'reason': "Too Short (<50 chars)"}
+
+    # 2. Log File / System Noise Detection
+    # Heuristic: High density of timestamps or error codes
+    import re
+    timestamp_density = len(re.findall(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', content[:2000])) / (val_len / 100) if val_len > 0 else 0
+    if timestamp_density > 0.5: # More than 0.5 timestamps per 100 chars? It's a log.
+         return {'score': 0.2, 'is_noise': True, 'reason': "System Log Detected"}
+
+    return {'score': 0.6, 'is_noise': False, 'reason': "Baseline Acceptable"}
+
+# --- INGESTION PIPELINE ---
+
 async def _ingest_content(file_path: Path, content: str, state: Any, http_client: Any, rag_base_url: str, processed_dir_base: Path, review_dir: Path, cloud_metadata: dict = None):
     """
     Submits extracted content to RAG, Librarian, and Knowledge Graph.
-    Includes smart filing.
+    Includes smart filing and Local Quality Preprocessing ("The Sous Chef").
     """
     if not content:
         raise ValueError("No content extracted")
@@ -149,6 +175,18 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
     # Clean content
     content = content.encode('utf-8', 'ignore').decode('utf-8')
     filename_meta = extract_filename_meta(file_path)
+    
+    # 0. THE SOUS CHEF (Local Quality Check)
+    # We filter out obvious garbage before asking the Librarian or Cloud.
+    quality_report = _assess_local_quality(content, file_path.suffix.lower())
+    
+    if quality_report['is_noise']:
+        logger.warning(f"SOUS CHEF: Rejected {file_path.name} (Score: {quality_report['score']}, Reason: {quality_report['reason']})")
+        # Move to Deferred/Trash or just skip indexing?
+        # For safety, we skip indexing but don't delete yet (user can review).
+        # We treat it as if 'ingestion failed' essentially, but logically.
+        # Let's just return early.
+        return 
 
     # 1. LIBRARIAN (Universal Content-Based Sorting)
     # We ignore the folder structure for routing/authority and rely 100% on the AI.
@@ -233,19 +271,30 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
         # But we might want to save the sidecar at least.
         pass
 
-    # 4. GRAPH CONSTRUCTION
+    # 4. GRAPH CONSTRUCTION (The Fusion Patch)
     try:
-        extract_prompt = f"Analyze for Knowledge Graph:\n{content[:4000]}\nReturn JSON: {{'entities': [], 'relations': []}}"
-        v_resp = await http_client.post(
-            f"{state.gateway_base}/v1/chat/completions", 
-            json={"model": state.task_model, "messages": [{"role": "user", "content": extract_prompt}], "response_format": {"type": "json_object"}}, 
-            timeout=60.0
-        )
-        if v_resp.status_code == 200:
-            g_data = json.loads(v_resp.json()["choices"][0]["message"]["content"])
-            if g_data.get("entities") or g_data.get("relations"):
-                await http_client.post(f"{rag_base_url}/ingest/graph", json={"entities": g_data["entities"], "relations": g_data["relations"], "origin_file": file_path.name}, timeout=30.0)
-                logger.info(f"GRAPH: Extracted {len(g_data['entities'])} nodes.")
+        # Check if Cloud H100 already did the work (Fast Track)
+        if cloud_metadata and cloud_metadata.get("entities"):
+            logger.info(f"GRAPH: Fast-tracking {len(cloud_metadata['entities'])} entities from H100.")
+            # The Cloud returns ["Name (Type)", ...]. The Graph API accepts this list.
+            await http_client.post(
+                f"{rag_base_url}/ingest/graph", 
+                json={"entities": cloud_metadata["entities"], "relations": [], "origin_file": file_path.name}, 
+                timeout=30.0
+            )
+        else:
+            # Fallback: Local Extraction (Slower, less accurate)
+            extract_prompt = f"Analyze for Knowledge Graph:\n{content[:4000]}\nReturn JSON: {{'entities': [], 'relations': []}}"
+            v_resp = await http_client.post(
+                f"{state.gateway_base}/v1/chat/completions", 
+                json={"model": state.task_model, "messages": [{"role": "user", "content": extract_prompt}], "response_format": {"type": "json_object"}}, 
+                timeout=60.0
+            )
+            if v_resp.status_code == 200:
+                g_data = json.loads(v_resp.json()["choices"][0]["message"]["content"])
+                if g_data.get("entities") or g_data.get("relations"):
+                    await http_client.post(f"{rag_base_url}/ingest/graph", json={"entities": g_data["entities"], "relations": g_data["relations"], "origin_file": file_path.name}, timeout=30.0)
+                    logger.info(f"GRAPH: Extracted {len(g_data['entities'])} nodes (Local).")
     except Exception as e:
         logger.warning(f"Graph extraction failed: {e}")
 

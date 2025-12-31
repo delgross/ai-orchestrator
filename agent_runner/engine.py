@@ -183,6 +183,22 @@ class AgentEngine:
 
         # Build the base instructions based on internet availability
         current_time_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # JIT Recovery: If system thinks it's offline, double-check one last time before giving up.
+        if not self.state.internet_available:
+             try:
+                 # Quick check to 1.1.1.1 (fastest)
+                 # We need to import here to avoid circulars if possible, or assume it's available
+                 import httpx
+                 # Use a temp client for this emergency check to avoid shared state locking issues
+                 async with httpx.AsyncClient(timeout=3.0) as jit_client:
+                     jit_res = await jit_client.head("https://1.1.1.1")
+                     if jit_res.status_code < 400:
+                         logger.info("JIT Internet Check PASSED. Overriding stale offline state.")
+                         self.state.internet_available = True
+             except Exception as jit_e:
+                 logger.warning(f"JIT Internet Check failed: {jit_e}")
+
         if self.state.internet_available:
             env_instructions = (
                 "You have access to real-time internet tools (exa, tavily, perplexity).\n"
@@ -242,9 +258,17 @@ class AgentEngine:
             except Exception as e:
                 logger.warning(f"Failed to list uploads for prompt: {e}")
 
+        # Location Context
+        location_str = "Unknown Location"
+        if self.state.location and self.state.location.get("city") != "Unknown":
+            loc = self.state.location
+            # e.g. "New York, New York, US (Lat: 40.7, Lon: -74.0)"
+            location_str = f"{loc.get('city')}, {loc.get('region')}, {loc.get('country')}"
+            
         prompt = (
             "You are Antigravity, a powerful agentic AI assistant running inside the Orchestrator.\n"
             f"Current System Time: {current_time_str}\n"
+            f"Current Location: {location_str}\n"
             f"{env_instructions}\n"
             f"{service_alerts}\n"
             "You are a helpful, intelligent assistant. Engage naturally with the user.\n"
@@ -323,12 +347,20 @@ class AgentEngine:
                             
                             # 2. Attempt Fallback (Logic centralized below)
                             await self._handle_fallback(messages, active_tools, worker_draft)
-                    else:
-                        logger.warning(f"Finalizer '{finalizer_model_id}' is CIRCUIT BROKEN. Skipping directly to fallback.")
-                        # 2. Attempt Fallback (Directly)
-                         # Preserve Worker's draft in case both Finalizer and Fallback fail
-                        worker_draft = messages.pop() if messages else None
                         await self._handle_fallback(messages, active_tools, worker_draft)
+                
+                # Store episode before returning final answer
+                if request_id:
+                    try:
+                        logger.info(f"Storing request {request_id} with {len(messages)} messages")
+                        from agent_runner.tools.mcp import tool_mcp_proxy
+                        # Sanitize messages to simple JSON types (Dicts) explicitly
+                        safe_messages = json.loads(json.dumps(messages, default=str))
+                        await tool_mcp_proxy(self.state, "project-memory", "store_episode", {"request_id": request_id, "messages": safe_messages})
+                    except Exception as e:
+                        logger.warning(f"Failed to store episode for request {request_id}: {e}")
+
+                return response
             
             # [FEATURE-9] TELEMETRY: Log Selection Precision
             # We track how efficient the Maître d' was.
@@ -342,7 +374,7 @@ class AgentEngine:
                     event="tool_selection_quality",
                     message=f"Selection Precision: {precision:.2f} ({used_count}/{provided_count})",
                     severity=EventSeverity.INFO,
-                    category=EventCategory.METRIC,
+                    category=EventCategory.PERFORMANCE,
                     component="engine",
                     metadata={
                         "provided_count": provided_count,
@@ -351,17 +383,6 @@ class AgentEngine:
                         "intent": "feature_9_maitre_d"
                     }
                 )
-
-                # Store episode before returning
-                if request_id:
-                    try:
-                        logger.info(f"Storing request {request_id} with {len(messages)} messages")
-                        from agent_runner.tools.mcp import tool_mcp_proxy
-                        await tool_mcp_proxy(self.state, "project-memory", "store_episode", {"request_id": request_id, "messages": messages})
-                    except Exception as e:
-                        logger.warning(f"Failed to store episode for request {request_id}: {e}")
-
-                return response
             
 
             

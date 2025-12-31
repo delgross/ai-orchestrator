@@ -1,0 +1,15 @@
+name: system_log_rotation
+type: agent
+enabled: true
+schedule: "02:00"
+priority: low
+idle_only: true
+prompt: |
+  Perform a safe log rotation for the agent_runner logs.
+  1. Check the size of `agent_runner/agent.log`.
+  2. If it is larger than 50MB, compress it to `logs/archive/agent_{date}.log.gz`.
+  3. Truncate the original file.
+  4. Delete any archive logs older than 30 days.
+tools:
+  - run_command
+description: "Nightly log rotation and cleanup for agent system logs."

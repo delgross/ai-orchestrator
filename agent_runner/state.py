@@ -137,6 +137,9 @@ class AgentState:
         # Idle State Tracking
         self.active_requests = 0
         self.last_interaction_time = 0.0
+        
+        # Location Awareness
+        self.location: Dict[str, Any] = {} # Populated by main.py on startup
 
     async def get_http_client(self) -> httpx.AsyncClient:
         if self.http_client is None:
@@ -216,10 +219,10 @@ class AgentState:
         # 2. Update In-Memory State
         del self.mcp_servers[name]
         
-        # 3. Persist to config.yaml
+        # 3. Persist to mcp.yaml
         try:
             import yaml
-            config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+            config_path = Path(__file__).parent.parent / "config" / "mcp.yaml"
             if config_path.exists():
                 with open(config_path, "r") as f:
                     data = yaml.safe_load(f) or {}
@@ -230,6 +233,66 @@ class AgentState:
                     with open(config_path, "w") as f:
                         yaml.dump(data, f, default_flow_style=False)
         except Exception as e:
-            print(f"Failed to persist MCP removal '{name}': {e}")
+            logger.error(f"Failed to persist MCP removal '{name}': {e}")
             
         return True
+
+    async def toggle_mcp_server(self, name: str, enabled: bool) -> bool:
+        """Dynamically enable or disable an MCP server."""
+        if name not in self.mcp_servers:
+            return False
+            
+        # 1. Update In-Memory State
+        self.mcp_servers[name]["enabled"] = enabled
+        
+        # 2. If Disabling, Terminate Process
+        if not enabled:
+            if name in self.stdio_processes:
+                try:
+                    process = self.stdio_processes[name]
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                    
+                    del self.stdio_processes[name]
+                    print(f"Terminated process for disabled MCP server '{name}'")
+                except Exception as e:
+                    print(f"Error terminating MCP server '{name}': {e}")
+            
+            # Also clear from tool cache via Engine (but State doesn't have engine ref directly easily)
+            # We will handle cache clearing in the Route handler.
+
+        # 3. Persist to mcp.yaml
+        try:
+            import yaml
+            config_path = Path(__file__).parent.parent / "config" / "mcp.yaml"
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    data = yaml.safe_load(f) or {}
+                
+                if "mcp_servers" in data and name in data["mcp_servers"]:
+                    data["mcp_servers"][name]["enabled"] = enabled
+                    
+                    with open(config_path, "w") as f:
+                        yaml.dump(data, f, default_flow_style=False)
+        except Exception as e:
+            print(f"Failed to persist MCP toggle '{name}': {e}")
+            
+        return True
+
+    async def cleanup_all_stdio_processes(self) -> None:
+        """Terminate all active stdio processes to allow for a clean reload."""
+        # Create a list of keys to avoid modification during iteration
+        for name in list(self.stdio_processes.keys()):
+            try:
+                # Reuse logic from remove_mcp_server or generic cleanup
+                # Check for locks first?
+                from agent_runner.transports.stdio import cleanup_stdio_process
+                await cleanup_stdio_process(self, name)
+            except Exception as e:
+                print(f"Error cleaning up STDIO process '{name}': {e}")
+                # Fallback manual kill
+                if name in self.stdio_processes:
+                    del self.stdio_processes[name]

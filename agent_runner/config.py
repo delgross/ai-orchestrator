@@ -11,6 +11,15 @@ async def load_mcp_servers(state: AgentState) -> None:
     """Load MCP servers from manifests and config and sync to memory."""
     state.mcp_servers.clear()
     
+    # Helper to normalize legacy command/args to cmd
+    def _normalize_cmd(cfg):
+        if "command" in cfg:
+            cmd = [cfg["command"]]
+            if "args" in cfg:
+                cmd.extend(cfg["args"])
+            cfg["cmd"] = cmd
+        return cfg
+    
     # 1. Load from manifest files
     manifest_dir = Path(__file__).parent.parent / "config" / "mcp_manifests"
     if manifest_dir.exists():
@@ -40,19 +49,26 @@ async def load_mcp_servers(state: AgentState) -> None:
             with open(config_path, "r") as f:
                 cfg_data = yaml.safe_load(f)
                 if cfg_data and "mcp_servers" in cfg_data:
-                    for name, cfg in cfg_data["mcp_servers"].items():
+                    # Defensive: Handle case where mcp_servers is None (empty in yaml)
+                    servers = cfg_data["mcp_servers"] or {}
+                    for name, cfg in servers.items():
                         if name in state.mcp_servers:
                             logger.info(f"MCP: Updating/Overwriting server definition for '{name}' with config.yaml entry")
-                            
-                        # Normalize 'command' + 'args' to 'cmd'
-                        if "command" in cfg:
-                            cmd = [cfg["command"]]
-                            if "args" in cfg:
-                                cmd.extend(cfg["args"])
-                            cfg["cmd"] = cmd
-                        state.mcp_servers[name] = cfg
+                        state.mcp_servers[name] = _normalize_cmd(cfg)
         except Exception as e:
             logger.error(f"Failed to load config.yaml: {e}")
+
+    # 3. Load from dedicated mcp.yaml (Preferred)
+    mcp_config_path = Path(__file__).parent.parent / "config" / "mcp.yaml"
+    if mcp_config_path.exists():
+        try:
+            with open(mcp_config_path, "r") as f:
+                mcp_data = yaml.safe_load(f)
+                if mcp_data and "mcp_servers" in mcp_data:
+                    for name, cfg in mcp_data["mcp_servers"].items():
+                         state.mcp_servers[name] = _normalize_cmd(cfg)
+        except Exception as e:
+            logger.error(f"Failed to load mcp.yaml: {e}")
 
     # 3. Auto-Sync to Project Memory
     # This ensures the database always has the latest server list for RAG/Tools
@@ -104,15 +120,17 @@ async def load_mcp_servers(state: AgentState) -> None:
 # Note: load_agent_runner_limits removed as its logic moved to AgentState._load_base_config()
 
 async def save_mcp_to_config(new_servers: Dict[str, Any]) -> bool:
-    """Save/Merge new MCP servers into config.yaml."""
-    config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-    if not config_path.exists():
-        logger.error(f"config.yaml not found at {config_path}")
-        return False
-        
+    """Save/Merge new MCP servers into config/mcp.yaml."""
+    config_path = Path(__file__).parent.parent / "config" / "mcp.yaml"
+    
+    # Ensure directory exists
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    
     try:
-        with open(config_path, "r") as f:
-            data = yaml.safe_load(f) or {}
+        data = {}
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                data = yaml.safe_load(f) or {}
             
         if "mcp_servers" not in data:
             data["mcp_servers"] = {}
@@ -126,5 +144,5 @@ async def save_mcp_to_config(new_servers: Dict[str, Any]) -> bool:
             
         return True
     except Exception as e:
-        logger.error(f"Failed to save MCP to config.yaml: {e}")
+        logger.error(f"Failed to save MCP to mcp.yaml: {e}")
         return False

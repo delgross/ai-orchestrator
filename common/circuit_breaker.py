@@ -3,7 +3,7 @@ import logging
 from enum import Enum
 from typing import Dict, Any
 
-from common.notifications import notify_health, notify_info
+# from common.notifications import notify_health, notify_info
 
 logger = logging.getLogger("common.circuit_breaker")
 
@@ -66,6 +66,7 @@ class CircuitBreaker:
         if self.state == CircuitState.HALF_OPEN:
             # Successful test in half-open state - fully recover
             logger.info(f"Circuit Breaker '{self.name}': Recovery successful, transitioning to CLOSED")
+            from common.notifications import notify_info
             notify_info(
                 f"Service Recovered: {self.name}",
                 f"Circuit breaker '{self.name}' has recovered and is now CLOSED.",
@@ -200,3 +201,43 @@ class CircuitBreakerRegistry:
 
     def get_status(self) -> Dict[str, Dict[str, Any]]:
         return {name: breaker.to_dict() for name, breaker in self.breakers.items()}
+
+    def detect_system_lockdown(self, critical_services: list[str]) -> bool:
+        """
+        Returns True if ALL specified critical services are in OPEN state.
+        This indicates a potential dependency deadlock where systems cannot recover
+        because they are waiting for each other.
+        """
+        if not critical_services or not self.breakers:
+            return False
+            
+        down_count = 0
+        monitored_count = 0 
+        
+        for name in critical_services:
+            if name in self.breakers:
+                monitored_count += 1
+                if self.breakers[name].state == CircuitState.OPEN:
+                    down_count += 1
+        
+        # Lockout only if we are actually monitoring these services and ALL are down
+        return monitored_count > 0 and down_count == monitored_count
+
+    def emergency_release_lockdown(self, critical_services: list[str]):
+        """
+        Force resets critical breakers to attempt a 'Global Reset Propagation'.
+        Used when a deadlock is detected.
+        """
+        logger.warning(f"🚨 DEADLOCK MITIGATION: Forcing reset of {critical_services}")
+        for name in critical_services:
+            if name in self.breakers:
+                self.breakers[name].reset()
+                # Record this special event
+                from common.unified_tracking import track_event, EventSeverity, EventCategory
+                track_event(
+                    event="circuit_breaker_deadlock_release",
+                    severity=EventSeverity.CRITICAL,
+                    category=EventCategory.SYSTEM,
+                    message=f"Forced reset of '{name}' to break system deadlock.",
+                    metadata={"service": name}
+                )

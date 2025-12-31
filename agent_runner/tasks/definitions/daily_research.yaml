@@ -1,0 +1,18 @@
+name: daily_research
+type: agent
+enabled: true
+schedule: "86400" # Every 24 hours
+priority: low
+idle_only: true
+prompt: |
+    Perform daily autonomous research.
+    1. Read 'ai/config/research_topics.txt' (if it exists) to get topics.
+    2. If no file, default to "Advances in autonomous AI agents".
+    3. Use 'tavily-search' or 'perplexity' to find deep articles.
+    4. Summarize findings to 'daily_research_report.md' on Desktop.
+tools:
+  - read_text
+  - mcp__tavily-search__search
+  - mcp__perplexity__search
+  - write_text
+description: "Autonomous background research on defined topics."

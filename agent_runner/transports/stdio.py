@@ -49,6 +49,8 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
             full_env = os.environ.copy()
             if env:
                 full_env.update({k: str(v) for k, v in env.items()})
+            
+            logger.info(f"DEBUG: Spawning {cmd} with env vars: {list(env.keys()) if env else 'None'}")
 
             async with state.mcp_subprocess_semaphore:
                 proc = await asyncio.create_subprocess_exec(

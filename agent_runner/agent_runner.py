@@ -15,19 +15,30 @@ TASK_MODEL = os.getenv("TASK_MODEL", "ollama:llama3.3:70b-instruct-q8_0")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "ollama:llama3.3:70b-instruct-q8_0")
 
 # Legacy global state (initialized on first use)
+from agent_runner.registry import ServiceRegistry
+
 _shared_state: Optional[AgentState] = None
 _shared_engine: Optional[AgentEngine] = None
 
 def get_shared_state() -> AgentState:
     global _shared_state
     if _shared_state is None:
-        _shared_state = AgentState()
+        try:
+            # Try getting from registry first to prefer explicit registration
+            _shared_state = ServiceRegistry.get_state()
+        except RuntimeError:
+            _shared_state = AgentState()
+            ServiceRegistry.register_state(_shared_state)
     return _shared_state
 
 def get_shared_engine() -> AgentEngine:
     global _shared_engine
     if _shared_engine is None:
-        _shared_engine = AgentEngine(get_shared_state())
+        try:
+            _shared_engine = ServiceRegistry.get_engine()
+        except RuntimeError:
+            _shared_engine = AgentEngine(get_shared_state())
+            ServiceRegistry.register_engine(_shared_engine)
     return _shared_engine
 
 async def _agent_loop(messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:

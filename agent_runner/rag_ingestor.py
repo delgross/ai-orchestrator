@@ -67,11 +67,55 @@ def start_rag_watcher(rag_base_url: str, state: AgentState):
     except Exception as e:
         logger.error(f"Failed to start RAG Watchdog: {e}")
         return None
+    except Exception as e:
+        logger.error(f"Failed to start RAG Watchdog: {e}")
+        return None
 
-async def rag_ingestion_task(rag_base_url: str, state: AgentState):
-    """
-    Simplified 2-Track Ingestion Task (Light/Local vs Heavy/Modal).
-    """
+import hashlib
+import json
+
+def get_file_hash(path: Path) -> str:
+    """Calculate SHA-256 hash of a file."""
+    sha256_hash = hashlib.sha256()
+    with open(path, "rb") as f:
+        # Read in chunks to handle large files efficiently
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
+class IngestionHistory:
+    """Simple persistent registry of ingested file hashes to prevent duplication."""
+    def __init__(self, storage_dir: Path):
+        self.history_file = storage_dir / "system" / "ingestion_history.json"
+        self.history_file.parent.mkdir(parents=True, exist_ok=True)
+        self.cache = self._load()
+
+    def _load(self):
+        if self.history_file.exists():
+            try:
+                with open(self.history_file, "r") as f:
+                    return set(json.load(f))
+            except:
+                return set()
+        return set()
+
+    def save(self):
+        try:
+            with open(self.history_file, "w") as f:
+                json.dump(list(self.cache), f)
+        except Exception as e:
+            logger.warning(f"Failed to save ingestion history: {e}")
+
+    def is_duplicate(self, file_hash: str) -> bool:
+        return file_hash in self.cache
+
+    def mark_seen(self, file_hash: str):
+        self.cache.add(file_hash)
+        self.save()
+
+# Global singleton (lazy init)
+_history_manager = None
+
     if _ingestion_lock.locked():
         return
 
@@ -146,11 +190,30 @@ async def rag_ingestion_task(rag_base_url: str, state: AgentState):
                 heavy_batch.extend(deferred_files)
 
         # 3. PROCESSING - TRACK A: LIGHT FILES (Local)
+        
+        # Init History Manager if needed
+        global _history_manager
+        if _history_manager is None:
+            _history_manager = IngestionHistory(state.agent_fs_root if isinstance(state.agent_fs_root, Path) else Path(state.agent_fs_root))
+
         for file_path in light_batch:
             try:
+                # [DEDUPLICATION CHECK]
+                f_hash = get_file_hash(file_path)
+                if _history_manager.is_duplicate(f_hash):
+                    logger.info(f"SKIPPING DUPLICATE: {file_path.name} (Hash: {f_hash[:8]}...)")
+                    # Silently move to processed so it doesn't clutter inbox
+                    try: await aio_rename(file_path, PROCESSED_BASE_DIR / file_path.name)
+                    except: pass
+                    continue
+                
                 logger.info(f"TRACK A (Light): Processing {file_path.name} locally...")
                 content = await _process_locally(file_path, state, http_client)
                 await _ingest_content(file_path, content, state, http_client, rag_base_url, PROCESSED_BASE_DIR, REVIEW_DIR)
+                
+                # Mark as seen ONLY after successful ingestion
+                _history_manager.mark_seen(f_hash)
+                
             except Exception as e:
                 logger.error(f"Failed local processing for {file_path.name}: {e}")
                 # Move to Review

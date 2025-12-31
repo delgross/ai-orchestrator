@@ -28,8 +28,9 @@ async def _proxy_agent_runner(method: str, path: str, json_body: Any = None):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to proxy to agent runner: {e}")
-        raise HTTPException(status_code=502, detail=f"Agent Runner unavailable: {e}")
+        logger.error(f"Failed to proxy to agent runner [{method} {url}]: {type(e).__name__}: {e}")
+        # Return 502 but with JSON details if possible
+        raise HTTPException(status_code=502, detail=f"Agent Runner unavailable: {str(e)}")
 
 @router.get("/system-status")
 async def system_status():
@@ -55,6 +56,7 @@ async def system_status():
             "agent_runner": {"ok": agent_data.get("ok", False)}
         },
         "ollama_ok": agent_data.get("ollama_ok", False),
+        "database_ok": agent_data.get("database_ok", False),
         "internet": agent_data.get("internet", "Unknown"),
         "mode": agent_data.get("mode", "Production"),
         # Pass through Agent capabilities
@@ -239,7 +241,22 @@ async def reset_circuit_breaker(name: str):
 @router.post("/circuit-breakers/reset-all")
 async def reset_all_circuit_breakers():
     """Manually reset all circuit breakers."""
+    """Manually reset all circuit breakers (Router + Agent)."""
     state.circuit_breakers.reset_all()
+    # Also reset Agent breakers
+    try:
+        await _proxy_agent_runner("POST", "/circuit-breaker/reset-all")
+    except:
+        pass
+
+@router.get("/llm/roles")
+async def proxy_get_roles():
+    return await _proxy_agent_runner("GET", "/llm/roles")
+
+@router.post("/llm/roles")
+async def proxy_set_roles(request: Request):
+    body = await request.json()
+    return await _proxy_agent_runner("POST", "/llm/roles", body)
 
 
 # Config File Management (New)
@@ -545,7 +562,7 @@ async def tail_log(lines: int = 10, service: str = "agent_runner"):
         
     try:
         file_size = os.path.getsize(log_file)
-        read_size = min(file_size, 8192)
+        read_size = min(file_size, lines * 500) # heuristic: 500 chars per line?
         
         with open(log_file, "rb") as f:
             if file_size > read_size:
@@ -557,3 +574,28 @@ async def tail_log(lines: int = 10, service: str = "agent_runner"):
         return {"ok": True, "lines": all_lines[-lines:]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+@router.get("/logs/cloud_uplink")
+async def get_cloud_uplink_logs(lines: int = 15):
+    """Specific endpoint for H100 Uplink logs."""
+    import os
+    # Assuming 'logs' dir at root
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    log_path = os.path.join(root_dir, "logs", "cloud_uplink.log")
+    
+    if not os.path.exists(log_path):
+        return {"ok": True, "logs": ["> Awaiting H100 Uplink connection...", "> System Ready."]}
+        
+    try:
+        file_size = os.path.getsize(log_path)
+        read_size = min(file_size, lines * 200) 
+        
+        with open(log_path, "rb") as f:
+            if file_size > read_size:
+                f.seek(file_size - read_size)
+            data = f.read()
+            
+        text = data.decode('utf-8', errors='replace')
+        return {"ok": True, "logs": text.splitlines()[-lines:]}
+    except Exception as e:
+        return {"ok": False, "logs": [f"> Error reading uplink: {e}"]}

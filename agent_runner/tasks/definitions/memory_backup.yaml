@@ -1,0 +1,10 @@
+name: memory_backup
+type: agent
+enabled: true
+schedule: "43200" # Every 12 hours
+priority: low
+idle_only: true
+prompt: "Trigger a full database backup of the project memory."
+tools:
+  - mcp__project_memory__trigger_backup
+description: "Periodic backup of the surrealdb memory store."

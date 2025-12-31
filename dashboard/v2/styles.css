@@ -189,7 +189,7 @@ body {
     border-radius: 12px;
     text-align: left;
     cursor: pointer;
-    font-size: 0.95rem;
+    font-size: 0.85rem;
     font-weight: 500;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     display: flex;
@@ -240,15 +240,63 @@ body {
 .grid-layout {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 1.5rem;
+    gap: 1rem;
 }
 
 .card {
     border-radius: 20px;
-    padding: 1.8rem;
+    padding: 1.2rem;
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
     /* Subtle inner glow */
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+    display: flex;
+    flex-direction: column;
+}
+
+/* Flex Utilities to replace inline styles */
+.flex-col {
+    display: flex;
+    flex-direction: column;
+}
+
+.flex-row-center {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.flex-grow {
+    flex-grow: 1;
+}
+
+.scroll-y {
+    overflow-y: auto;
+}
+
+.full-height {
+    height: 100%;
+}
+
+.mt-2 {
+    margin-top: 0.5rem;
+}
+
+.mb-2 {
+    margin-bottom: 0.5rem;
+}
+
+.gap-2 {
+    gap: 0.5rem;
+}
+
+.terminal-box {
+    background: #000;
+    color: #0f0;
+    font-size: 0.8rem;
+    padding: 10px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    overflow-y: auto;
 }
 
 .card:hover {
@@ -259,12 +307,12 @@ body {
 }
 
 .card h3 {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    margin-bottom: 1.2rem;
+    margin-bottom: 0.8rem;
 }
 
 .card.wide {
@@ -282,12 +330,56 @@ body {
     color: var(--accent-blue);
 }
 
-/* MCP Grid */
+/* MCP Grid (Denser) */
 .mcp-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 1.2rem;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 0.8rem;
     margin-top: 1rem;
+}
+
+/* Memory Table */
+.memory-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.memory-table th {
+    text-align: left;
+    padding: 0.8rem;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--glass-border);
+    font-weight: 600;
+}
+
+.memory-table td {
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid hsla(0, 0%, 100%, 0.05);
+    color: var(--text-main);
+    vertical-align: top;
+}
+
+.memory-table tr:hover {
+    background: hsla(0, 0%, 100%, 0.02);
+}
+
+.badge {
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.badge.fact {
+    background: hsla(200, 50%, 50%, 0.2);
+    color: #88ccff;
+}
+
+.badge.system {
+    background: hsla(0, 0%, 50%, 0.2);
+    color: #aaa;
 }
 
 .server-card {
@@ -690,8 +782,8 @@ body {
     display: flex;
     align-items: flex-end;
     gap: 5px;
-    height: 60px;
-    margin-bottom: 1rem;
+    height: 40px;
+    margin-bottom: 0.5rem;
 }
 
 .chart-bar {
@@ -709,7 +801,7 @@ body {
 }
 
 .server-card h4 {
-    font-size: 0.9rem !important;
+    font-size: 0.85rem !important;
     margin-bottom: 0.4rem !important;
 }
 
@@ -817,20 +909,35 @@ body {
 }
 
 /* --- System Health Sentinel --- */
+/* --- System Health Sentinel --- */
 .system-sentinel {
     position: fixed;
-    top: 75px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 90%;
-    max-width: 800px;
-    z-index: 999;
+    top: 125px;
+    /* Below Launch Strip */
+    left: 32px;
+    /* Align with Refresh Button */
+    transform: none;
+    width: 350px;
+    z-index: 1000;
     border-radius: 12px;
-    padding: 1rem 1.5rem;
-    background: hsla(355, 60%, 15%, 0.6);
+    padding: 1rem;
+    background: hsla(355, 60%, 15%, 0.9);
+    /* More opaque */
     border: 1px solid hsla(355, 100%, 65%, 0.4);
     box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
-    animation: slideDownSentinel 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    animation: slideInLeft 0.4s ease-out;
+}
+
+@keyframes slideInLeft {
+    from {
+        transform: translateX(-20px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
 }
 
 @keyframes slideDownSentinel {
@@ -981,9 +1088,17 @@ body {
 }
 
 @keyframes pulse-bg {
-    0% { background: rgba(255, 255, 255, 0.03); }
-    50% { background: rgba(255, 255, 255, 0.08); }
-    100% { background: rgba(255, 255, 255, 0.03); }
+    0% {
+        background: rgba(255, 255, 255, 0.03);
+    }
+
+    50% {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    100% {
+        background: rgba(255, 255, 255, 0.03);
+    }
 }
 
 .spin {
@@ -991,4 +1106,8 @@ body {
     display: inline-block;
 }
 
-@keyframes spin { 100% { transform: rotate(360deg); } }
+@keyframes spin {
+    100% {
+        transform: rotate(360deg);
+    }
+}

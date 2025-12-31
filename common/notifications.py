@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+from common.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger("agent_runner.notifications")
 
@@ -59,6 +60,9 @@ class NotificationManager:
         self.notifications: List[Notification] = []
         self.max_history = max_history
         self.webhook_url: Optional[str] = None
+        self.alert_file_path: Optional[str] = None
+        # Circuit breaker for webhooks (defaults: 5 failures, 60s timeout)
+        self.webhook_circuit = CircuitBreaker("notification_webhook")
         self.enabled_channels: List[NotificationChannel] = [
             NotificationChannel.LOG,
             NotificationChannel.DASHBOARD,
@@ -69,6 +73,14 @@ class NotificationManager:
         # All-component subscriptions (receive all notifications)
         self._all_component_subscriptions: List[Callable[[Notification], None]] = []
     
+    def configure(self, alert_file_path: Optional[str] = None) -> None:
+        """Configure the notification manager."""
+        if alert_file_path:
+            # Expand user path
+            import os
+            self.alert_file_path = os.path.expanduser(alert_file_path)
+            logger.info(f"Notification alert file configured: {self.alert_file_path}")
+
     def set_webhook(self, url: str) -> None:
         """Set webhook URL for notifications."""
         self.webhook_url = url
@@ -240,6 +252,10 @@ class NotificationManager:
             print(f"[{notification.level.value.upper()}] {notification.title}: {notification.message}")
         
         elif channel == NotificationChannel.WEBHOOK and self.webhook_url:
+            if not self.webhook_circuit.is_allowed():
+                logger.warning("Notification webhook skipped: Circuit breaker OPEN")
+                return
+
             try:
                 import httpx
                 # Fire and forget webhook
@@ -261,15 +277,36 @@ class NotificationManager:
                         loop = asyncio.get_event_loop()
                         if loop.is_running():
                             async def _async_post():
-                                async with httpx.AsyncClient(timeout=5.0) as client:
-                                    await client.post(self.webhook_url, json=payload)
+                                try:
+                                    async with httpx.AsyncClient(timeout=5.0) as client:
+                                        resp = await client.post(self.webhook_url, json=payload)
+                                        if resp.status_code >= 400:
+                                             self.webhook_circuit.record_failure(weight=1, error=f"HTTP {resp.status_code}")
+                                        else:
+                                             self.webhook_circuit.record_success()
+                                except Exception as e:
+                                    self.webhook_circuit.record_failure(weight=1, error=e)
+                                    logger.warning(f"Failed to send webhook (async): {e}")
+
                             loop.create_task(_async_post())
                         else:
                             # Fallback for sync contexts
-                            httpx.post(self.webhook_url, json=payload, timeout=5.0)
+                            resp = httpx.post(self.webhook_url, json=payload, timeout=5.0)
+                            if resp.status_code >= 400:
+                                self.webhook_circuit.record_failure(weight=1, error=f"HTTP {resp.status_code}")
+                            else:
+                                self.webhook_circuit.record_success()
+
                     except RuntimeError:
-                         httpx.post(self.webhook_url, json=payload, timeout=5.0)
+                         # No event loop
+                         resp = httpx.post(self.webhook_url, json=payload, timeout=5.0)
+                         if resp.status_code >= 400:
+                            self.webhook_circuit.record_failure(weight=1, error=f"HTTP {resp.status_code}")
+                         else:
+                            self.webhook_circuit.record_success()
+
                 except Exception as e:
+                    self.webhook_circuit.record_failure(weight=1, error=e)
                     logger.warning(f"Failed to send webhook: {e}")
 
             except ImportError:
@@ -360,7 +397,7 @@ def get_notification_manager() -> NotificationManager:
 # Convenience functions for common notification patterns
 def notify_critical(title: str, message: str, source: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Notification:
     """Send a critical notification."""
-    return get_notification_manager().notify(
+    notification = get_notification_manager().notify(
         level=NotificationLevel.CRITICAL,
         title=title,
         message=message,
@@ -368,6 +405,21 @@ def notify_critical(title: str, message: str, source: Optional[str] = None, meta
         source=source,
         metadata=metadata or {}
     )
+    
+    # USER VISIBILITY: Write to Desktop/Configured File for immediate attention
+    manager = get_notification_manager()
+    if manager.alert_file_path:
+        try:
+            with open(manager.alert_file_path, "a") as f:
+                f.write(f"\n## [{time.strftime('%Y-%m-%d %H:%M:%S')}] CRITICAL: {title}\n")
+                f.write(f"**Source**: {source}\n")
+                f.write(f"**Message**: {message}\n")
+                f.write("---\n")
+        except Exception as e:
+            # Don't let file write failure break the system, but log it
+            logger.warning(f"Failed to write critical alert to {manager.alert_file_path}: {e}")
+        
+    return notification
 
 
 def notify_high(title: str, message: str, source: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Notification:

@@ -146,6 +146,37 @@ class UnifiedTracker:
             logger.warning(f"Failed to initialize unified tracker subsystems: {e}")
             self._initialized = True  # Mark as initialized to avoid retry loops
     
+    def verify_channels(self) -> Dict[str, Any]:
+        """Verify the health of all tracking subsystems."""
+        self._ensure_initialized()
+        status = {
+            "observability": False,
+            "notifications": False,
+            "dashboard": False,
+            "blog": False,
+            "json_logger": False
+        }
+        
+        if self._observability:
+            status["observability"] = True # Basic existence check
+            
+        if self._notification_manager:
+             status["notifications"] = True
+             
+        if self._dashboard_tracker:
+             status["dashboard"] = True
+             
+        if self._system_blog:
+             status["blog"] = True
+        
+        if self._json_logger:
+             status["json_logger"] = True
+             
+        # Aggregate
+        status["healthy"] = all(status.values())
+        return status
+
+    
     def track_event(
         self,
         event: str,
