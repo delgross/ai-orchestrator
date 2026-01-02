@@ -41,10 +41,10 @@ def get_shared_engine() -> AgentEngine:
             ServiceRegistry.register_engine(_shared_engine)
     return _shared_engine
 
-async def _agent_loop(messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+async def _agent_loop(user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, skip_refinement: bool = False) -> Dict[str, Any]:
     """Compatibility wrapper for engine.agent_loop."""
     engine = get_shared_engine()
-    return await engine.agent_loop(messages, model=model, tools=tools)
+    return await engine.agent_loop(user_messages, model=model, tools=tools, skip_refinement=skip_refinement)
 
 # Deprecated: Tool definitions have migrated to engine.py
 # MCP_TOOLS and FILE_TOOLS removed to avoid duplication.

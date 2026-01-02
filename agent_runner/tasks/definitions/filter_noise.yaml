@@ -1,0 +1,17 @@
+name: filter_noise
+type: agent
+enabled: false
+schedule: "900" # Every 15 minutes
+idle_only: true
+priority: low
+description: "The Janitor: Mark low-value messages as noise."
+prompt: |
+  Scan the 'episode' table for recent rows (last 24h).
+  Identify rows that contain only:
+  - Acknowledgements ("Ok", "Thanks", "Got it")
+  - Empty tool outputs
+  - Failed tool calls with no useful error message
+  - Phatic communication
+  
+  UPDATE these rows to set `metadata.noise = true`.
+  This allows the Context Window system to filter them out in future prompts.

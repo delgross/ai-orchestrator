@@ -34,11 +34,14 @@ async def chat_completions(body: Dict[str, Any], request: Request):
     # Timer for stats endpoint (distinct from log_time)
     t0_stats = time.time()
     
+    # Check for Bypass Header (Internal/System Requests)
+    skip_refinement = request.headers.get("X-Skip-Refinement", "false").lower() == "true"
+    
     try:
         requested_model = body.get(OBJ_MODEL)
         stream_mode = body.get("stream", False)
         
-        logger.info(f"REQ [{request_id}] Agent Execution: Model='{requested_model}' Stream={stream_mode}")
+        logger.info(f"REQ [{request_id}] Agent Execution: Model='{requested_model}' Stream={stream_mode} SkipRefinement={skip_refinement}")
 
         # Prevent infinite recursion / invalid model names
         if requested_model == "agent:mcp" or not requested_model or ":" not in requested_model:
@@ -48,7 +51,8 @@ async def chat_completions(body: Dict[str, Any], request: Request):
             async def sse_wrapper():
                 try:
                     async with log_time(f"Agent Stream [{request_id}]", level=logging.INFO, logger_override=logger):
-                        async for event in engine.agent_stream(messages, model=requested_model, request_id=request_id):
+                        # Propagate skip_refinement to stream
+                        async for event in engine.agent_stream(messages, model=requested_model, request_id=request_id, skip_refinement=skip_refinement):
                             # Wrap in OpenAI-compatible chunk
                             chunk = {
                                 "id": f"chatcmpl-{request_id}",
@@ -87,7 +91,8 @@ async def chat_completions(body: Dict[str, Any], request: Request):
 
         completion = {}
         async with log_time(f"Agent Loop [{request_id}]", level=logging.INFO, logger_override=logger):
-            completion = await engine.agent_loop(messages, model=requested_model, request_id=request_id)
+            # Propagate skip_refinement to loop
+            completion = await engine.agent_loop(messages, model=requested_model, request_id=request_id, skip_refinement=skip_refinement)
         
         # Update Stats
         duration_ms = (time.time() - t0_stats) * 1000

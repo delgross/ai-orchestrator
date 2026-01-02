@@ -441,10 +441,21 @@ class ObservabilitySystem:
         )
         
         # Error rate
+        error_metadata = {"timestamp": metrics.timestamp}
+        if metrics.error_rate_1min > 0 and self.recent_errors:
+            # Grab the most recent error context
+            try:
+                last_err = self.recent_errors[-1]
+                msg = last_err.get("error_message", str(last_err))
+                # Truncate if too long to avoid huge metadata
+                error_metadata["latest_error"] = msg[:200]
+            except:
+                pass
+
         self.anomaly_detector.record_metric(
             "error_rate_1min",
             metrics.error_rate_1min,
-            {"timestamp": metrics.timestamp}
+            error_metadata
         )
         
         # Active requests
@@ -600,6 +611,44 @@ class ObservabilitySystem:
             async with self._lock:
                 self.connection_reuses += 1
         asyncio.create_task(_record())
+
+    async def reset_history(self, targets: Optional[List[str]] = None):
+        """
+        Reset observability history based on targets.
+        Targets: ['traces', 'counters', 'errors', 'health', 'efficiency', 'all']
+        """
+        if not targets or 'all' in targets:
+            targets = ['traces', 'counters', 'errors', 'health', 'efficiency']
+        
+        async with self._lock:
+            if 'traces' in targets:
+                self.completed_requests.clear()
+                self.performance_metrics.clear()
+            
+            if 'counters' in targets:
+                self.request_counters.clear()
+            
+            if 'errors' in targets:
+                self.recent_errors.clear()
+                
+            if 'health' in targets:
+                self.component_health.clear()
+                
+            if 'efficiency' in targets:
+                self.semaphore_wait_times.clear()
+                self.stage_durations.clear()
+                self.request_sizes.clear()
+                self.response_sizes.clear()
+                self.network_bytes_sent = 0
+                self.network_bytes_received = 0
+                self.cache_hits = 0
+                self.cache_misses = 0
+                self.connection_creates = 0
+                self.connection_reuses = 0
+                
+        logger.info(f"Observability history reset for targets: {targets}")
+        return {"ok": True, "reset": targets}
+
     
     def record_connection_create(self):
         """Record new connection creation."""
@@ -757,6 +806,8 @@ class ObservabilitySystem:
         return {
             "anomalies": [
                 {
+                    "id": a.id,
+                    "status": a.status.value,
                     "metric_name": a.metric_name,
                     "current_value": a.current_value,
                     "baseline_value": a.baseline_value,
@@ -788,6 +839,12 @@ class ObservabilitySystem:
         """Clear all stored anomalies."""
         if self.anomaly_detector:
             self.anomaly_detector.clear_history()
+
+    def acknowledge_anomaly(self, anomaly_id: str) -> bool:
+        """Acknowledge an anomaly."""
+        if self.anomaly_detector:
+            return self.anomaly_detector.acknowledge_anomaly(anomaly_id)
+        return False
 
 
 # Global observability instance

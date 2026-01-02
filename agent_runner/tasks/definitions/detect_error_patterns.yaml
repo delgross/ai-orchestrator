@@ -1,0 +1,15 @@
+name: detect_error_patterns
+type: agent
+enabled: false
+schedule: "3600" # Every hour
+idle_only: true
+priority: low
+description: "The Diagnostician: Group repeated errors."
+prompt: |
+  Scan 'episode' rows where `role='system'` or `role='tool'` and content contains "Error" or "Exception".
+  Group these errors by stack trace or error message similarity.
+  
+  For clusters with > 3 occurrences in the last 24h:
+  1. Generate a "Problem Statement" (e.g. "The Database is locking on writes").
+  2. Search for any successful resolutions in subsequent messages.
+  3. Create a `system_state` entry: `known_issue: { problem: "...", frequency: N, potential_fix: "..." }`.

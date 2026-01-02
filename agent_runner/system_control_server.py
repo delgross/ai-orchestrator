@@ -37,7 +37,8 @@ class SystemControlServer:
                 resp = await client.get(f"{AGENT_URL}/admin/health/detailed")
                 if resp.status_code == 200:
                     return resp.json()
-        except:
+        except Exception as e:
+            log(f"Detailed health check failed, falling back: {e}", level="WARN")
             pass # Fallback to legacy check if new endpoint fails (during migration)
 
         report = {"timestamp": os.popen("date -u").read().strip(), "source": "legacy_fallback"}
@@ -165,7 +166,7 @@ class SystemControlServer:
         if not self.CONFIG_PATH.exists(): return {"provider": "macos", "voice": "alloy"}
         try:
             with open(self.CONFIG_PATH, "r") as f: return json.load(f)
-        except: return {"provider": "macos", "voice": "alloy"}
+        except Exception: return {"provider": "macos", "voice": "alloy"}
 
     async def set_voice_preference(self, provider: str, voice: str = "alloy"):
         """Set the default voice provider (macos/openai) and voice ID."""
@@ -291,7 +292,8 @@ class SystemControlServer:
                 resp = await client.post(url)
                 if resp.status_code == 200:
                     return {"ok": True, "method": "api", "body": resp.json()}
-            except:
+            except Exception as e:
+                log(f"Maintenance trigger API failed: {e}", level="WARN")
                 pass # Fallback to shell script if API fails
         
         # Fallback to shell script
@@ -429,6 +431,24 @@ class SystemControlServer:
             except Exception as e:
                 return {"ok": False, "error": f"Connection to Parser failed: {str(e)}"}
 
+    async def update_system_config(self, key: str, value: str, type: str = "secret"):
+        """
+        Update a system configuration value (Reverse Sync).
+        Updates Sovereign Memory (DB), Runtime, and Disk Backup (.env).
+        Type: 'secret' (default) for API keys/tokens.
+        """
+        url = f"{AGENT_URL}/admin/config/update"
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.post(url, json={"key": key, "value": value, "type": type})
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    return {"ok": False, "error": f"Agent Runner API Error ({resp.status_code}): {resp.text}"}
+            except Exception as e:
+                return {"ok": False, "error": f"Connection to Agent Runner failed: {str(e)}"}
+
 async def main():
     server = Server("system-control")
     controller = SystemControlServer()
@@ -436,7 +456,8 @@ async def main():
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         return [
-            Tool(name="get_system_health", description="Check connection/uptime of Router and Agent Runner.", inputSchema={"type":"object","properties":{}}),
+            Tool(name="get_system_health", description="Check connection/uptime of topology (Router, Agent, MCPs). Returns full server list.", inputSchema={"type":"object","properties":{}}),
+            Tool(name="list_active_mcp_servers", description="List all currently active MCP servers and their status.", inputSchema={"type":"object","properties":{}}),
             Tool(name="read_service_logs", description="Read recent logs from router, agent_runner, or ollama.", inputSchema={"type":"object","properties":{"service":{"type":"string","enum":["router","agent_runner","ollama"]}, "lines":{"type":"integer","default":20}},"required":["service"]}),
             Tool(name="check_resource_usage", description="Check CPU/RAM of orchestration processes and disk usage.", inputSchema={"type":"object","properties":{}}),
             Tool(name="trigger_maintenance", description="Trigger 'backup' or 'consolidation' tasks.", inputSchema={"type":"object","properties":{"type":{"type":"string","enum":["backup","consolidation"]}},"required":["type"]}),
@@ -447,6 +468,7 @@ async def main():
             Tool(name="remove_mcp_server", description="Safely remove an MCP server from config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
             Tool(name="ingest_file", description="Submit a file for asynchronous background ingestion (RAG/Knowledge Graph).", inputSchema={"type":"object","properties":{"source_path":{"type":"string"}},"required":["source_path"]}),
             Tool(name="parse_mcp_config", description="Parse and install MCP servers from raw configuration text (JSON/YAML) pasted by the user. Use this when the user provides a config block.", inputSchema={"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}),
+            Tool(name="update_system_config", description="Update a system configuration value (Reverse Sync). Updates Sovereign Memory (DB), Runtime, and Disk Backup (.env).", inputSchema={"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"},"type":{"type":"string","enum":["secret"],"default":"secret"}},"required":["key","value"]}),
         ]
 
     @server.call_tool()
@@ -454,6 +476,15 @@ async def main():
         try:
             if name == "get_system_health":
                 res = await controller.get_system_health()
+            elif name == "list_active_mcp_servers":
+                # Wrapper around health check to extract just the MCP list
+                health = await controller.get_system_health()
+                agent_section = health.get("agent_runner", {})
+                if agent_section.get("status") == "online":
+                     details = agent_section.get("details", {})
+                     res = details.get("mcp", {"error": "No MCP section in health payload"})
+                else:
+                     res = {"error": f"Agent Runner is {agent_section.get('status', 'unknown')}", "health_dump": health}
             elif name == "read_service_logs":
                 res = await controller.read_service_logs(**args)
             elif name == "check_resource_usage":

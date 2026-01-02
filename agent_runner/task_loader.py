@@ -100,11 +100,82 @@ def load_tasks_from_config(config_data: Optional[Dict[str, Any]] = None) -> List
         return []
 
 
-def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str, Any]] = None) -> None:
+async def load_tasks_from_db(state: Any) -> List[Dict[str, Any]]:
     """
-    Load tasks from config dict and register them with the task manager.
+    Load task definitions from Sovereign Memory (task_def table).
     """
-    tasks = load_tasks_from_config(config_data)
+    try:
+        from agent_runner.memory_server import MemoryServer
+        # We need a memory client. State should have one, or we make one.
+        if not hasattr(state, "memory") or not state.memory:
+            return []
+            
+        memory = state.memory
+        
+        # Query all tasks
+        query = "SELECT * FROM task_def"
+        results = await memory._execute_query(query)
+        
+        if not results:
+            return []
+            
+        tasks = []
+        for row in results:
+            # Map DB fields to Task Definition format
+            priority_str = str(row.get("priority", "low")).upper()
+            priority_map = {
+                "CRITICAL": TaskPriority.CRITICAL,
+                "HIGH": TaskPriority.HIGH,
+                "MEDIUM": TaskPriority.MEDIUM,
+                "LOW": TaskPriority.LOW,
+                "BACKGROUND": TaskPriority.BACKGROUND,
+            }
+            priority = priority_map.get(priority_str, TaskPriority.LOW)
+
+            task_def = {
+                "name": row.get("name"),
+                "type": row.get("type", "agent"),
+                "enabled": row.get("enabled", True),
+                "priority": priority,
+                # Reconstruct config dict
+                "config": row.get("config", {}) or {}
+            }
+            
+            # Ensure config has critical fields even if flattened in table
+            if "prompt" in row: task_def["config"]["prompt"] = row["prompt"]
+            if "description" in row: task_def["config"]["description"] = row["description"]
+            if "schedule" in row: task_def["config"]["schedule"] = row["schedule"]
+            if "idle_only" in row: task_def["config"]["idle_only"] = row["idle_only"]
+            
+            tasks.append(task_def)
+            
+        logger.info(f"Loaded {len(tasks)} periodic tasks from Sovereign Memory.")
+        return tasks
+        
+    except Exception as e:
+        logger.error(f"Failed to load tasks from DB: {e}")
+        return []
+
+
+async def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str, Any]] = None, state: Any = None) -> None:
+    """
+    Load tasks from config dict AND Sovereign DB, then register them.
+    """
+    # 1. Load from Config (Legacy/Boot)
+    tasks_cfg = load_tasks_from_config(config_data)
+    
+    # 2. Load from DB (Sovereign)
+    tasks_db = []
+    if state:
+        tasks_db = await load_tasks_from_db(state)
+        
+    # 3. Merge (DB overrides Config)
+    # Using dictionary by name to dedup
+    merged = {t["name"]: t for t in tasks_cfg}
+    for t in tasks_db:
+        merged[t["name"]] = t
+        
+    tasks = list(merged.values())
     
     for task_def in tasks:
         try:
@@ -136,6 +207,7 @@ def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str
                     description=task_config.get("description", f"Update {name} from {mcp_server}"),
                     enabled=task_config.get("enabled", True),
                     idle_only=task_config.get("idle_only", False),
+                    min_tempo=task_config.get("min_tempo"), # [NEW]
                 )
                 
             elif task_type == "file":
@@ -146,11 +218,11 @@ def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str
                 
                 # Create a simple file-writing task
                 async def file_task_func():
-                    from agent_runner.agent_runner import _agent_loop, FILE_TOOLS
+                    from agent_runner.agent_runner import _agent_loop
                     await _agent_loop(
                         user_messages=[{"role": "user", "content": prompt}],
                         model=task_config.get("local_model", DEFAULT_TASK_MODEL),
-                        tools=[t for t in FILE_TOOLS if t.get("function", {}).get("name") in ["write_text", "make_dir"]]
+                        tools=None  # Use all available tools (ServiceRegistry)
                     )
                 
                 file_task_func.__name__ = name
@@ -164,6 +236,7 @@ def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str
                     priority=priority,
                     description=task_config.get("description", f"Update {name} file"),
                     estimated_duration=5.0,
+                    min_tempo=task_config.get("min_tempo"), # [NEW]
                 )
             
             elif task_type == "module":
@@ -201,6 +274,7 @@ def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str
                         priority=priority,
                         description=task_config.get("description", f"Module Task: {module_path}.{func_name}"),
                         estimated_duration=task_config.get("estimated_duration", 60.0),
+                        min_tempo=task_config.get("min_tempo"), # [NEW]
                     )
                     logger.info(f"Registered module task: {name} -> {module_path}.{func_name}")
                     
@@ -272,6 +346,7 @@ def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str
                     priority=priority,
                     description=task_config.get("description", f"Agent Task: {name}"),
                     estimated_duration=task_config.get("estimated_duration", 300.0),
+                    min_tempo=task_config.get("min_tempo"), # [NEW]
                 )
 
             logger.info(f"Registered periodic task: {name} ({task_type})")

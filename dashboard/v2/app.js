@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const state = {
         activeTab: 'overview',
-        pollingInterval: 3000,
+        pollingInterval: 10000,
         currentVersion: null,
         editorPath: null,
         activeOllamaModel: null
@@ -63,8 +63,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (targetTab === 'config') fetchConfigFiles();
             if (targetTab === 'docs') fetchDocsList();
             if (targetTab === 'ollama') fetchOllamaModels();
-            if (targetTab === 'logs') fetchLogTail();
+            if (targetTab === 'memory') fetchMemoryFacts();
+            if (targetTab === 'breakers') fetchBreakerData();
+            if (targetTab === 'logs') {
+                fetchLogTail();
+                startLogStream();
+            } else if (logEventSource) {
+                logEventSource.close();
+                logEventSource = null;
+            }
             if (targetTab === 'tools') fetchMCPData();
+            if (targetTab === 'breakers') fetchBreakerData();
+            if (targetTab === 'diagnostics') fetchDiagnostics();
         });
     });
 
@@ -76,58 +86,64 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Core Data Loop ---
     async function fetchSystemData() {
-        // 1. Fetch System Health (Best Effort)
         try {
-            const [healthResp, statusResp, breakerResp, llmResp] = await Promise.all([
-                fetch('/health'),
-                fetch('/admin/system-status'),
-                fetch('/admin/circuit-breaker/status'),
-                fetch('/admin/llm/status')
-            ]);
+            const resp = await fetch('/admin/dashboard/state');
+            if (resp.ok) {
+                const data = await resp.json();
 
-            if (healthResp.ok) {
-                const healthData = await healthResp.json();
-                const newVersion = healthData.services?.router?.version;
+                // 1. Version Check & Transition
+                const newVersion = data.status?.services?.router?.version;
                 if (state.currentVersion && newVersion && state.currentVersion !== newVersion) {
                     showNotification('System Update Detected. Reloading...');
                     setTimeout(() => window.location.reload(), 2000);
                 }
                 state.currentVersion = newVersion;
 
-                let indicatorData = { ...healthData };
+                // 2. Update Indicators
+                window.lastIngestionState = data.ingestion;
+                updateIndicators(data.status || {}, data.ingestion, data.memory_stats, data.budget);
 
-                if (statusResp.ok) {
-                    const sData = await statusResp.json();
-                    // Merge all status data (internet, database_ok, etc.)
-                    Object.assign(indicatorData, sData);
+                // 3. Update Sentinel
+                updateSentinel(data.summary);
+
+                // 4. Update Overview Metrics (if on overview tab)
+                if (state.activeTab === 'overview') {
+                    updateOverviewUI(data.metrics);
                 }
 
-                if (breakerResp.ok) {
-                    const bData = await breakerResp.json();
-                    indicatorData.breakers = bData.breakers || {};
+                // 5. Update Budget (if on cost/misc tab)
+                if (state.activeTab === 'cost' || state.activeTab === 'misc') {
+                    // Update budget UI if needed
                 }
 
-                if (llmResp.ok) {
-                    const lData = await llmResp.json();
-                    // Find Ollama
-                    const ollama = lData.llms?.find(x => x.id === 'ollama');
-                    indicatorData.ollama_ok = (ollama && ollama.status === 'online');
+                // 6. Update Diagnostics (Phase 25)
+                if (state.activeTab === 'diagnostics') {
+                    await fetchDiagnostics();
                 }
 
-                updateIndicators(indicatorData);
+                // 7. Update Breakers & Tools (Poll)
+                if (state.activeTab === 'breakers') updateBreakersTable({ breakers: data.summary?.overall_status || {} });
+                if (state.activeTab === 'tools') fetchMCPData();
             }
         } catch (err) {
-            console.warn("Health Poll Error: ", err);
+            console.warn("Unified State Poll Error: ", err);
         }
+    }
 
-        // 3. Fetch Health Summary (Sentinel)
-        try {
-            const resp = await fetch('/admin/health/summary');
-            if (resp.ok) {
-                const data = await resp.json();
-                updateSentinel(data);
-            }
-        } catch (err) { }
+    function updateOverviewUI(metricsData) {
+        if (!metricsData || !metricsData.metrics) return;
+        const metrics = metricsData.metrics;
+        const efficiency = metrics.efficiency || {};
+
+        const elRequests = document.getElementById('metric-requests');
+        const elLatency = document.getElementById('metric-latency');
+        const elCache = document.getElementById('metric-cache');
+        const elErrors = document.getElementById('metric-errors');
+
+        if (elRequests) elRequests.textContent = metrics.completed_requests_1min || metrics.completed_requests || 0;
+        if (elLatency) elLatency.textContent = `${Math.round(metrics.avg_response_time_1min || metrics.avg_latency || 0)}ms`;
+        if (elCache) elCache.textContent = `${((efficiency.cache_hit_rate || metrics.cache_hit_rate || 0) * 100).toFixed(1)}%`;
+        if (elErrors) elErrors.textContent = `${((efficiency.error_rate_1min || metrics.error_rate_1min || 0) * 100).toFixed(1)}%`;
     }
 
     function updateSentinel(data) {
@@ -136,21 +152,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!sentinel) return;
 
-        if (data.status === 'degraded' || data.critical_count > 0) {
+
+        // Periodic check for widget updates
+        setInterval(fetchAnomalies, 5000);
+        const currentCount = data.critical_count || 0;
+
+        if (data.status === 'degraded' || currentCount > 0) {
             sentinel.style.display = 'block';
 
             let msg = "";
-            if (data.critical_count > 0) {
-                const names = data.open_breakers.map(b => b.name).join(', ');
-                msg = `<strong>CRITICAL:</strong> ${data.critical_count} service(s) suspended: [${names}].`;
+            let toastMsg = "";
+
+            if (currentCount > 0) {
+                const names = (data.open_breakers || []).map(b => b.name).join(', ');
+                msg = `<strong>CRITICAL:</strong> ${currentCount} service(s) suspended: [${names}].`;
+                toastMsg = `⚠️ CRITICAL: Service Suspended: ${names}`;
+
                 if (data.open_breakers[0]?.last_error) {
                     msg += `<br><small>Last Error: ${data.open_breakers[0].last_error}</small>`;
                 }
+
+                // Trigger Toast if this is a NEW escalation (e.g. 0 -> 1, or 1 -> 2)
+                if (currentCount > window.lastCriticalCount) {
+                    showNotification(toastMsg);
+                }
+
             } else if (data.latest_anomaly) {
-                msg = `<strong>ANOMALY:</strong> ${data.latest_anomaly.message || 'System behavior irregular.'}`;
+                // Only show if Fresh (< 5m) AND Not Acknowledged
+                const age = (Date.now() / 1000) - (data.latest_anomaly.timestamp || 0);
+                const isAck = data.latest_anomaly.status === 'acknowledged';
+
+                if (age < 300 && !isAck) {
+                    msg = `<strong>ANOMALY:</strong> ${data.latest_anomaly.message || 'System behavior irregular.'}`;
+                }
             }
 
-            // Persistence Check
+            // Update State Tracker
+            window.lastCriticalCount = currentCount;
+
+            // Persistence Check (Sentinel Bar only)
             const ackFn = localStorage.getItem('sentinel_ack_msg');
             if (ackFn && ackFn === msg) {
                 sentinel.style.display = 'none';
@@ -159,7 +199,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             msgEl.innerHTML = msg;
         } else {
+            // Reset state when healthy
             sentinel.style.display = 'none';
+            window.lastCriticalCount = 0;
         }
     }
 
@@ -192,30 +234,127 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    function updateIndicators(data) {
-        function setInd(bgId, ok) {
+    function updateIndicators(data, ingestion, memory, budget) {
+        function setInd(bgId, ok, tooltip = '') {
             const el = document.getElementById(bgId);
             if (!el) return;
             const ind = el.querySelector('.indicator');
             const val = el.querySelector('.value');
-            ind.className = `indicator ${ok ? 'online' : 'offline'}`;
-            if (val && bgId !== 'status-mcp-tools') val.textContent = ok ? 'ONLINE' : 'OFFLINE';
+
+            if (ok === undefined) {
+                ind.className = 'indicator unknown';
+            } else {
+                ind.className = `indicator ${ok ? 'online' : 'offline'}`;
+            }
+
+            // if (val) val.textContent = ok ? 'ONLINE' : 'OFFLINE'; // Keep labels static
+            if (tooltip) el.title = tooltip;
         }
 
         setInd('status-router', data.services?.router?.ok);
         setInd('status-mcp', data.services?.agent_runner?.ok);
+        setInd('status-mcp-tools', data.services?.agent_runner?.ok); // Proxy for tool availability
         setInd('status-ollama', data.ollama_ok);
-
-        // Database Status (Real Ping from Backend)
         setInd('status-db', data.database_ok);
+
+        if (memory) {
+            setInd('status-memory-engine', memory.active, `Memory Engine: ${memory.mode || 'Active'}`);
+            // Update Memory Tab indicator
+            const memTabInd = document.getElementById('memory-functioning-indicator');
+            if (memTabInd) {
+                const ind = memTabInd.querySelector('.indicator');
+                const val = memTabInd.querySelector('.value');
+                ind.className = `indicator ${memory.active ? 'online' : 'offline'}`;
+                val.textContent = `STATUS: ${memory.mode || (memory.active ? 'ONLINE' : 'OFFLINE')}`;
+            }
+        }
+
+        if (ingestion) {
+            const label = ingestion.paused ? `INGESTION PAUSED: ${ingestion.reason}` : 'Ingestion Pipeline Active';
+            setInd('status-data-ingest', !ingestion.paused, label);
+
+            // Update Ingestion Controller UI (Permanent)
+            const pauseReasonEl = document.getElementById('ingest-pause-reason');
+            const statusTitle = document.getElementById('ingest-status-title');
+            const controllerEl = document.getElementById('ingestion-controller');
+
+            const btnPause = document.getElementById('btn-pause-ingest');
+            const btnResume = document.getElementById('btn-resume-ingest');
+            const btnClear = document.getElementById('btn-clear-resume');
+
+            if (controllerEl) {
+                controllerEl.style.display = 'block'; // Always visible now
+                if (ingestion.paused) {
+                    controllerEl.style.border = '1px solid var(--accent-warning)';
+                    if (statusTitle) {
+                        statusTitle.textContent = "⚠️ INGESTION PAUSED";
+                        statusTitle.style.color = "var(--accent-warning)";
+                    }
+                    if (pauseReasonEl) {
+                        pauseReasonEl.textContent = `Reason: ${ingestion.reason}`;
+                        pauseReasonEl.style.color = "var(--text-main)";
+                    }
+                    if (btnPause) btnPause.style.display = 'none';
+                    if (btnResume) btnResume.style.display = 'inline-block';
+
+                    // Show Clear & Resume button ONLY if reason implies a bad file
+                    const r = ingestion.reason || "";
+                    if (btnClear) {
+                        if (r.indexOf("Duplicate detected") !== -1 || r.indexOf("Quality Check Failed") !== -1 || r.indexOf("Error processing") !== -1) {
+                            btnClear.style.display = 'inline-block';
+                        } else {
+                            btnClear.style.display = 'none';
+                        }
+                    }
+
+                } else {
+                    controllerEl.style.border = '1px solid var(--success)';
+                    if (statusTitle) {
+                        statusTitle.textContent = "✅ Ingestion Active";
+                        statusTitle.style.color = "var(--success)";
+                    }
+                    if (pauseReasonEl) {
+                        pauseReasonEl.textContent = "System is monitoring 'ingest/' folder for new files.";
+                        pauseReasonEl.style.color = "var(--text-secondary)";
+                    }
+                    if (btnPause) btnPause.style.display = 'inline-block';
+                    if (btnResume) btnResume.style.display = 'none';
+                    if (btnClear) btnClear.style.display = 'none';
+                }
+            }
+        }
 
         const internetEl = document.getElementById('status-internet');
         if (internetEl) {
             const internetInd = internetEl.querySelector('.indicator');
-            const internetVal = internetEl.querySelector('.value');
             const isConnected = (data.internet === true || data.internet === 'Connected');
             internetInd.className = `indicator ${isConnected ? 'online' : 'offline'}`;
-            internetVal.textContent = isConnected ? 'CONNECTED' : 'OFFLINE';
+        }
+
+        // Budget Indicator
+        if (budget) {
+            const el = document.getElementById('status-budget');
+            if (el) {
+                const ind = el.querySelector('.indicator');
+                const val = el.querySelector('.value');
+
+                const pct = budget.percent_used || 0;
+                let statusClass = 'online'; // Green
+                if (pct >= 100) statusClass = 'offline'; // Red
+                else if (pct >= 80) statusClass = 'warning'; // Orange/Yellow
+
+                ind.className = `indicator ${statusClass}`;
+                // Display: $12 / $50 (24%)
+                const spend = (budget.current_spend || 0).toFixed(2);
+                const limit = (budget.daily_limit_usd || 50).toFixed(0);
+                const pctStr = pct.toFixed(1);
+
+                val.textContent = `$${spend} / $${limit} (${pctStr}%)`;
+
+                // Add warning class to text if high
+                if (pct >= 80) val.style.color = pct >= 100 ? 'var(--accent-error)' : 'var(--accent-warning)';
+                else val.style.color = '';
+            }
         }
     }
 
@@ -266,17 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Overview Logic ---
     async function fetchOverviewData() {
-        const statsResp = await fetch('/admin/observability/stats');
-        if (statsResp.ok) {
-            const data = await statsResp.json();
-            const metrics = data.metrics || {};
-            const efficiency = metrics.efficiency || {};
-
-            document.getElementById('metric-requests').textContent = metrics.completed_requests_1min || metrics.completed_requests || metrics.requests || 0;
-            document.getElementById('metric-latency').textContent = `${Math.round(metrics.avg_response_time_1min || metrics.avg_latency || 0)}ms`;
-            document.getElementById('metric-cache').textContent = `${((efficiency.cache_hit_rate || metrics.cache_hit_rate || 0) * 100).toFixed(1)}%`;
-            document.getElementById('metric-errors').textContent = `${((efficiency.error_rate_1min || metrics.error_rate_1min || metrics.error_rate || 0) * 100).toFixed(1)}%`;
-        }
+        // Now handled by fetchSystemData -> updateOverviewUI
     }
 
     // --- Helper: Robust Fetch ---
@@ -325,55 +454,178 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
+            // Defines the Grand Unified Role List
             const roleLabels = {
-                "agent_model": "Agent Runner (MCP Host)",
-                "task_model": "Task Executor",
-                "mcp_model": "Generic Tool Host",
-                "router_model": "Gateway / Router",
-                "embedding_model": "Embedding Engine",
-                "summarization_model": "Memory & Summarization",
-                "finalizer_model": "Finalizer (High-Reasoning)",
-                "fallback_model": "Fallback Engine"
+                // --- 1. Core ---
+                "agent_model": "Agent Runner (The Brain)",
+                "router_model": "Gateway / Router (Traffic)",
+                "task_model": "Task Executor (Worker)",
+                "summarization_model": "Summarizer (Memory)",
+
+                // --- 2. Unveiled ---
+                "vision_model": "Vision Engine (Image Analysis)",
+                "mcp_model": "Generic Tool Host (External)",
+                "finalizer_model": "Finalizer (Reasoning Check)",
+                "fallback_model": "Safety Net (Offline Backup)",
+
+                // --- 3. Intelligence ---
+                "intent_model": "Maître d' (Intent Classifier)",
+                "pruner_model": "Context Pruner (Memory Surgeon)",
+                "healer_model": "System Healer (Self-Repair)",
+                "critic_model": "Critic / Validator (Safety)",
+
+                // --- 4. Foundation ---
+                "embedding_model": "Embedding Engine (Vectors)"
             };
 
-            const tbody = document.getElementById('roles-table-body');
-            if (tbody && rolesData.roles) {
-                tbody.innerHTML = Object.entries(rolesData.roles).map(([key, val]) => {
-                    if (!roleLabels[key]) return '';
+            // Helper to generate grouped options
+            const generateOptions = (selectedVal) => {
+                let localOpts = [];
+                let cloudOpts = [];
+                let activeButMissing = null;
 
-                    let found = false;
-                    let options = allModels.map(m => {
-                        let valToCheck = m.provider === 'local' || m.provider === 'ollama' ? `ollama:${m.id}` : m.id;
-                        let selected = (val === valToCheck);
-                        if (selected) found = true;
-                        return `<option value="${valToCheck}" ${selected ? 'selected' : ''}>${m.id} (${m.provider})</option>`;
-                    }).join('');
+                // Check if current value is missing from catalog
+                let foundInCatalog = false;
 
-                    if (!found) {
-                        options = `<option value="${val}" selected style="color:#ffcc00; font-weight:bold;">${val} (Active - Not in Catalog)</option>` + options;
+                // 1. Sort models into groups
+                allModels.forEach(m => {
+                    let valToCheck = m.provider === 'local' || m.provider === 'ollama' ? `ollama:${m.id}` : m.id;
+                    let isSelected = (valToCheck === selectedVal);
+                    if (isSelected) foundInCatalog = true;
+
+                    const optHtml = `<option value="${valToCheck}" ${isSelected ? 'selected' : ''}>${m.id} (${m.provider})</option>`;
+
+                    if (m.provider === 'ollama' || m.provider === 'local') {
+                        localOpts.push(optHtml);
+                    } else {
+                        cloudOpts.push(optHtml);
                     }
+                });
 
-                    return `
-                        <tr>
-                            <td style="font-weight:600; color:var(--text-main);">${roleLabels[key]}</td>
-                            <td class="mono" style="color:var(--accent-neon);">${val}</td>
-                            <td>
-                                <select class="config-select" id="sel-${key}" style="width:100%">
-                                    ${options}
-                                </select>
-                            </td>
-                            <td>
-                                <button class="action-btn sm" onclick="updateRole('${key}', document.getElementById('sel-${key}').value, this)">Apply</button>
-                            </td>
-                        </tr>
-                    `;
-                }).join('');
+                // 2. Handle missing active model
+                if (!foundInCatalog && selectedVal) {
+                    activeButMissing = `<option value="${selectedVal}" selected style="color:#ffcc00; font-weight:bold;">${selectedVal} (Active - Not in Catalog)</option>`;
+                }
+
+                return `
+                    ${activeButMissing || ''}
+                    <optgroup label="Local (Ollama)">${localOpts.join('')}</optgroup>
+                    <optgroup label="Cloud / API">${cloudOpts.join('')}</optgroup>
+                 `;
+            };
+
+            // 1. Populate Overview Table (Read-Only)
+            const tbodyOverview = document.getElementById('roles-table-body');
+            const defaults = rolesData.defaults || {};
+
+            if (tbodyOverview && rolesData.roles) {
+                // Define category order
+                const categories = [
+                    { name: "Core Roles", keys: ["agent_model", "router_model", "task_model", "summarization_model"] },
+                    { name: "Advanced Roles", keys: ["vision_model", "mcp_model", "finalizer_model", "fallback_model"] },
+                    { name: "Intelligent Roles", keys: ["intent_model", "pruner_model", "healer_model", "critic_model"] },
+                    { name: "Infrastructure", keys: ["embedding_model"] }
+                ];
+
+                let html = "";
+                categories.forEach(cat => {
+                    // Filter keys that exist in data
+                    const validKeys = cat.keys.filter(k => rolesData.roles[k]);
+                    if (validKeys.length > 0) {
+                        html += `<tr class="section-header"><td colspan="2" style="background:var(--bg-card); font-size:0.75rem; color:var(--text-muted); padding-top:10px; font-weight:bold; letter-spacing:0.5px;">${cat.name.toUpperCase()}</td></tr>`;
+                        validKeys.forEach(key => {
+                            const val = rolesData.roles[key];
+                            const defVal = defaults[key];
+                            const isDefault = !defVal || val === defVal;
+                            const defaultBadge = isDefault ?
+                                `<span style="opacity:0.5; font-size:0.7em;">(Default)</span>` :
+                                `<span style="color:var(--accent-warning); font-size:0.7em;">(Custom)</span>`;
+
+                            html += `
+                                <tr>
+                                    <td style="padding-left:15px; font-weight:500;">${roleLabels[key]}</td>
+                                    <td class="mono" style="color:var(--accent-neon);">${val} ${defaultBadge}</td>
+                                </tr>
+                            `;
+                        });
+                    }
+                });
+                tbodyOverview.innerHTML = html;
             }
+
+            // 2. Populate Modal Table (Editable)
+            const tbodyModal = document.getElementById('role-config-table-body');
+            if (tbodyModal && rolesData.roles) {
+                // Reuse categories for consistency
+                const categories = [
+                    { name: "Core Roles", keys: ["agent_model", "router_model", "task_model", "summarization_model"] },
+                    { name: "Advanced Roles", keys: ["vision_model", "mcp_model", "finalizer_model", "fallback_model"] },
+                    { name: "Intelligent Roles", keys: ["intent_model", "pruner_model", "healer_model", "critic_model"] },
+                    { name: "Infrastructure (DANGER ZONE)", keys: ["embedding_model"] }
+                ];
+
+                let html = "";
+                categories.forEach(cat => {
+                    const validKeys = cat.keys.filter(k => rolesData.roles[k]);
+                    if (validKeys.length > 0) {
+                        html += `<tr class="section-header"><td colspan="3" style="background:var(--bg-secondary); color:var(--text-main); font-weight:bold; padding:8px;">${cat.name}</td></tr>`;
+                        validKeys.forEach(key => {
+                            const val = rolesData.roles[key];
+                            const optionsHtml = generateOptions(val);
+
+                            // Tooltip for embedding model
+                            let labelRaw = roleLabels[key];
+                            let tooltip = "";
+                            if (key === "embedding_model") {
+                                tooltip = `<br><span style="color:var(--accent-error); font-size:0.7em;">⚠️ CHANGING THIS requires re-indexing all memory & documents! Vector mismatch will cause data loss.</span>`;
+                            }
+
+                            html += `
+                                <tr>
+                                    <td style="width:35%; vertical-align:middle;">
+                                        <div style="font-weight:600;">${labelRaw}</div>
+                                        ${tooltip}
+                                    </td>
+                                    <td style="width:45%;">
+                                        <select class="config-select" id="sel-${key}" style="width:100%">
+                                            ${optionsHtml}
+                                        </select>
+                                    </td>
+                                    <td style="width:20%; text-align:right;">
+                                        <button class="action-btn sm primary" onclick="updateRole('${key}', document.getElementById('sel-${key}').value, this)">Apply</button>
+                                    </td>
+                                </tr>
+                            `;
+                        });
+                    }
+                });
+                tbodyModal.innerHTML = html;
+            }
+
         } catch (e) {
             console.error("Failed to load roles", e);
             const tbody = document.getElementById('roles-table-body');
             if (tbody) tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--accent-err);">Error: ${e.message}</td></tr>`;
         }
+    };
+
+    // --- Role Modal Controls ---
+    window.openRoleConfigModal = () => {
+        const modal = document.getElementById('role-config-modal');
+        if (modal) {
+            modal.style.display = 'flex';
+            // Refresh data when opening to ensure freshness
+            fetchSystemRoles();
+        }
+    };
+
+    window.closeRoleConfigModal = () => {
+        const modal = document.getElementById('role-config-modal');
+        if (modal) modal.style.display = 'none';
+
+        // Also close other modals for safety
+        const toolsModal = document.getElementById('tool-modal');
+        if (toolsModal) toolsModal.style.display = 'none';
     };
 
     // --- Modal & Alert Logic ---
@@ -410,7 +662,24 @@ document.addEventListener('DOMContentLoaded', () => {
     window.closeToolsModal = () => {
         const modal = document.getElementById('tool-modal');
         if (modal) modal.style.display = 'none';
+        const modelModal = document.getElementById('model-modal');
+        if (modelModal) modelModal.style.display = 'none';
+        // Ensure new modal is closed
+        const roleModal = document.getElementById('role-config-modal');
+        if (roleModal) roleModal.style.display = 'none';
     };
+
+    // Attach listeners after functions are defined
+    document.addEventListener('click', (e) => {
+        if (e.target.classList.contains('close-modal')) {
+            window.closeToolsModal();
+            if (window.closeRoleConfigModal) window.closeRoleConfigModal();
+        }
+        if (e.target.classList.contains('modal-overlay')) {
+            window.closeToolsModal();
+            if (window.closeRoleConfigModal) window.closeRoleConfigModal();
+        }
+    });
 
     window.dismissAlert = async (id, msg) => {
         const el = document.getElementById(id);
@@ -484,10 +753,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!list) return;
 
         try {
-            // Robust Parallel Fetch: Tools (Content) + Breakers (Status)
-            const [toolsResult, breakersResult] = await Promise.allSettled([
+            // Robust Parallel Fetch: Tools (Content) + Breakers (Status) + Server Status
+            const [toolsResult, breakersResult, serverStatusResult] = await Promise.allSettled([
                 fetchWithRetry('/admin/mcp/tools', {}, 2, 500, 5000),
-                fetch('/admin/circuit-breaker/status')
+                fetch('/admin/circuit-breaker/status'),
+                fetch('/admin/mcp/server/status')
             ]);
 
             // Handle Tools (Primary Content)
@@ -513,6 +783,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     const bData = await breakersResult.value.json();
                     breakerMap = bData.breakers || {};
                 } catch (e) { console.warn("Failed to parse breaker data", e); }
+            }
+
+            // Handle Server Status
+            if (serverStatusResult.status === 'fulfilled' && serverStatusResult.value.ok) {
+                try {
+                    const sData = await serverStatusResult.value.json();
+                    const statusCard = document.getElementById('mcp-server-status-card');
+                    const clientsEl = document.getElementById('mcp-connected-clients');
+
+                    if (statusCard) {
+                        statusCard.style.display = 'block';
+                        const clientCount = (sData.clients || []).length;
+                        if (clientCount > 0) {
+                            const names = sData.clients.map(c => `<span class="badge blue">${c.name}</span>`).join(' ');
+                            clientsEl.innerHTML = `Connected: ${names}`;
+                        } else {
+                            clientsEl.innerHTML = `<span style="color:var(--text-muted)">Waiting for connections...</span>`;
+                        }
+                    }
+                } catch (e) { console.warn("Failed to parse server status", e); }
             }
 
             // Use info from Server Meta to get ALL servers (even disabled ones)
@@ -543,6 +833,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 const breaker = breakerMap[name] || { state: 'UNKNOWN', total_successes: 0, total_failures: 0 };
                 const stateClass = breaker.state ? breaker.state.toLowerCase() : 'unknown';
 
+                // Ingestion Info Injection for Memory Server
+                let ingestionInfo = "";
+                if (name === 'project-memory' && window.lastIngestionState) {
+                    const ing = window.lastIngestionState;
+                    const statusText = ing.paused ? `PAUSED: ${ing.reason}` : "HEALTHY";
+                    const statusColor = ing.paused ? "var(--accent-error)" : "var(--accent-neon)";
+                    ingestionInfo = `
+                        <div style="margin-top: 8px; font-size: 0.7rem; padding: 4px 8px; background: rgba(0,0,0,0.2); border-radius: 4px; border-left: 2px solid ${statusColor}">
+                            <div style="font-weight: 600; color: ${statusColor}">INGESTION: ${statusText}</div>
+                        </div>
+                    `;
+                }
+
                 return `
                     <div class="server-card">
                         <div style="display:flex; justify-content:space-between; align-items:center; gap: 8px; margin-bottom: 6px;">
@@ -559,7 +862,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span>Tools: ${tools.length}</span>
                             <span>S:${breaker.total_successes} F:${breaker.total_failures}</span>
                         </div>
-                        <button class="action-btn sm" style="width:100%; text-align:center;" onclick="showToolsModal('${name}')">
+                        ${ingestionInfo}
+                        <button class="action-btn sm" style="width:100%; text-align:center; margin-top:8px;" onclick="showToolsModal('${name}')">
                             View Tools
                         </button>
                     </div>
@@ -788,6 +1092,52 @@ my-server-name:
         if (e.key === 'Enter') window.fetchMemoryFacts();
     });
 
+    // --- SSE Log Streaming ---
+    let logEventSource = null;
+    function startLogStream() {
+        if (logEventSource) logEventSource.close();
+
+        const logContainer = document.querySelector('.log-viewer');
+        if (!logContainer) return;
+
+        logEventSource = new EventSource('/admin/logs/stream?services=agent_runner,router');
+
+        logEventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                const entry = document.createElement('div');
+                entry.className = `log-entry ${data.service}`;
+
+                // Colorize based on content
+                let type = 'info';
+                if (data.line.includes('ERROR') || data.line.includes('Critical')) type = 'error';
+                else if (data.line.includes('WARN')) type = 'warn';
+                entry.classList.add(type);
+
+                entry.innerHTML = `<small style="opacity:0.5; margin-right:8px;">[${data.service.toUpperCase()}]</small> ${data.line}`;
+                logContainer.appendChild(entry);
+
+                // Keep last 200 lines
+                if (logContainer.children.length > 200) {
+                    logContainer.removeChild(logContainer.firstChild);
+                }
+
+                // Auto-scroll if at bottom
+                const isAtBottom = logContainer.scrollHeight - logContainer.clientHeight <= logContainer.scrollTop + 50;
+                if (isAtBottom) {
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                }
+            } catch (e) { console.error("Log Stream Error:", e); }
+        };
+
+        logEventSource.onerror = (e) => {
+            console.warn("Log Stream Disconnected, reconnecting in 5s...");
+            logEventSource.close();
+            setTimeout(startLogStream, 5000);
+        };
+    }
+
+
     // Auto Toggle & Backup Buttons
     document.getElementById('btn-toggle-auto-top')?.addEventListener('click', () => {
         const lbl = document.getElementById('lbl-auto');
@@ -833,11 +1183,17 @@ my-server-name:
     };
 
     async function fetchLogTail() {
+        const container = document.getElementById('log-container');
+
+
         const resp = await fetch('/admin/logs/tail?lines=50');
         if (resp.ok) {
             const data = await resp.json();
             const container = document.getElementById('log-container');
             container.innerHTML = data.logs.map(line => {
+                // Formatting safety: Skip massive lines or dump-lines that break rendering
+                if (line.length > 2000) return `<div class="log-entry info" style="color:var(--text-muted)">[Large Log Entry Skipped: ${line.length} chars]</div>`;
+
                 const updated = line.replace(/</g, '&lt;');
                 let cls = 'info';
                 if (updated.includes('ERROR')) cls = 'error';
@@ -1253,70 +1609,69 @@ my-server-name:
 
     setupChat();
     setInterval(fetchNotifications, 5000);
-});
 
-// --- Cost Tab Logic ---
-async function refreshCost() {
-    try {
-        const response = await fetch('/admin/budget', { headers: { 'Authorization': getAuthToken() } });
-        const data = await response.json();
+    // --- Cost Tab Logic ---
+    async function refreshCost() {
+        try {
+            const response = await fetch('/admin/budget', { headers: { 'Authorization': getAuthToken() } });
+            const data = await response.json();
 
-        if (data.ok) {
-            const spend = data.current_spend.toFixed(4);
-            const limit = data.daily_limit_usd.toFixed(2);
-            const percent = data.percent_used.toFixed(1);
+            if (data.ok) {
+                const spend = data.current_spend.toFixed(4);
+                const limit = data.daily_limit_usd.toFixed(2);
+                const percent = data.percent_used.toFixed(1);
 
-            document.getElementById('costDisplay').innerText = '$' + spend;
-            document.getElementById('limitDisplay').innerText = 'Limit: $' + limit;
-            document.getElementById('percentDisplay').innerText = percent + '%';
+                document.getElementById('costDisplay').innerText = '$' + spend;
+                document.getElementById('limitDisplay').innerText = 'Limit: $' + limit;
+                document.getElementById('percentDisplay').innerText = percent + '%';
 
-            const bar = document.getElementById('costBar');
-            bar.style.width = Math.min(100, data.percent_used) + '%';
+                const bar = document.getElementById('costBar');
+                bar.style.width = Math.min(100, data.percent_used) + '%';
 
-            if (data.percent_used > 90) bar.style.background = 'var(--accent-warn)';
-            else if (data.percent_used > 100) bar.style.background = 'var(--accent-error)';
-            else bar.style.background = 'var(--success)';
+                if (data.percent_used > 90) bar.style.background = 'var(--accent-warn)';
+                else if (data.percent_used > 100) bar.style.background = 'var(--accent-error)';
+                else bar.style.background = 'var(--success)';
+            }
+        } catch (e) {
+            console.error("Failed to fetch cost", e);
         }
-    } catch (e) {
-        console.error("Failed to fetch cost", e);
     }
-}
 
-// Auto-refresh when tab is shown
-document.querySelectorAll('.tab-link[data-tab="cost"]').forEach(btn => {
-    btn.addEventListener('click', () => setTimeout(refreshCost, 100)); // Small delay for DOM
-});
+    // Auto-refresh when tab is shown
+    document.querySelectorAll('.tab-link[data-tab="cost"]').forEach(btn => {
+        btn.addEventListener('click', () => setTimeout(refreshCost, 100)); // Small delay for DOM
+    });
 
-// Helper for auth if not defined globally (it likely is or hardcoded, but let's be safe)
-function getAuthToken() {
-    return `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`;
-}
+    // Helper for auth if not defined globally (it likely is or hardcoded, but let's be safe)
+    function getAuthToken() {
+        return `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`;
+    }
 
-// --- Smart Config Logic ---
-async function runSmartConfig() {
-    const input = document.getElementById('config-instruction').value;
-    if (!input.trim()) return;
+    // --- Smart Config Logic ---
+    async function runSmartConfig() {
+        const input = document.getElementById('config-instruction').value;
+        if (!input.trim()) return;
 
-    const btn = document.getElementById('btn-smart-config');
-    const log = document.getElementById('smart-config-log');
+        const btn = document.getElementById('btn-smart-config');
+        const log = document.getElementById('smart-config-log');
 
-    btn.disabled = true;
-    btn.innerHTML = "🤖 Processing...";
-    log.innerText = "🚀 Asking Agent to edit config... (This takes ~30s)\n";
+        btn.disabled = true;
+        btn.innerHTML = "🤖 Processing...";
+        log.innerText = "🚀 Asking Agent to edit config... (This takes ~30s)\n";
 
-    try {
-        const response = await fetch('/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': getAuthToken()
-            },
-            body: JSON.stringify({
-                model: "agent:mcp",
-                messages: [
-                    {
-                        role: "system",
-                        content: `You are the Antigravity Config Manager. You must edit 'ai/config/config.yaml'.
+        try {
+            const response = await fetch('/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': getAuthToken()
+                },
+                body: JSON.stringify({
+                    model: "agent:mcp",
+                    messages: [
+                        {
+                            role: "system",
+                            content: `You are the Antigravity Config Manager. You must edit 'ai/config/config.yaml'.
                         
                         SAFETY RULES:
                         1. NEVER use 'write_to_file' to overwrite the file. It causes data loss.
@@ -1326,38 +1681,419 @@ async function runSmartConfig() {
                            b. Identify the exact block to change.
                            c. Use 'replace_file_content' to swap ONLY that block.
                            d. Run './manage.sh restart-agent'.`
-                    },
-                    { role: "user", content: "Instruction: " + input }
-                ]
-            })
-        });
+                        },
+                        { role: "user", content: "Instruction: " + input }
+                    ]
+                })
+            });
 
-        const data = await response.json();
-        if (data.choices && data.choices[0]) {
-            log.innerText += "\n✅ Done! Agent says:\n" + data.choices[0].message.content;
-            loadConfigFile(); // Refresh view
-        } else {
-            log.innerText += "\n❌ Error: " + JSON.stringify(data);
+            const data = await response.json();
+            if (data.choices && data.choices[0]) {
+                log.innerText += "\n✅ Done! Agent says:\n" + data.choices[0].message.content;
+                loadConfigFile(); // Refresh view
+            } else {
+                log.innerText += "\n❌ Error: " + JSON.stringify(data);
+            }
+        } catch (e) {
+            log.innerText += "\n❌ Network Error: " + e.message;
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = "✨ Run Smart Config";
         }
-    } catch (e) {
-        log.innerText += "\n❌ Network Error: " + e.message;
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = "✨ Run Smart Config";
     }
-}
 
-async function loadConfigFile() {
-    editor.value = "Loading...";
+    async function loadConfigFile() {
+        editor.value = "Loading...";
+        try {
+            const res = await fetch('/admin/config/yaml', { headers: { 'Authorization': getAuthToken() } });
+            const data = await res.json();
+            if (data.ok) {
+                editor.value = data.content;
+            } else {
+                editor.value = "Error loading config: " + data.error;
+            }
+        } catch (e) {
+            editor.value = "Failed to fetch config: " + e.message;
+        }
+    }
+
+    window.resumeIngestion = async () => {
+        try {
+            const resp = await fetch('/admin/ingestion/resume', { method: 'POST' });
+            if (resp.ok) {
+                showNotification('Resuming ingestion...');
+                fetchSystemData();
+            } else {
+                showNotification('Failed to resume: ' + (await resp.text()));
+            }
+        } catch (e) {
+            showNotification('Network error while resuming.');
+        }
+    };
+
+    window.pauseIngestion = async () => {
+        try {
+            const resp = await fetch('/admin/ingestion/pause', { method: 'POST' });
+            if (resp.ok) {
+                showNotification('Pausing ingestion...');
+                fetchSystemData();
+            } else {
+                showNotification('Failed to pause: ' + (await resp.text()));
+            }
+        } catch (e) {
+            showNotification('Network error while pausing.');
+        }
+    };
+
+    window.clearAndResumeIngestion = async () => {
+        try {
+            const resp = await fetch('/admin/ingestion/clear-and-resume', { method: 'POST' });
+            const data = await resp.json();
+            if (data.ok) {
+                showNotification('Problem file cleared. Resuming...');
+                fetchSystemData();
+            } else {
+                showNotification('Failed: ' + (data.error || data.message));
+            }
+        } catch (e) {
+            showNotification('Network error during cleanup.');
+        }
+    };
+});
+
+// --- Breaker Management ---
+window.fetchBreakerData = async function () {
+    const tbody = document.getElementById('breaker-table-body');
+    if (!tbody) return;
+
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center">Refreshing...</td></tr>';
+
     try {
-        const res = await fetch('/admin/config/yaml', { headers: { 'Authorization': getAuthToken() } });
-        const data = await res.json();
-        if (data.ok) {
-            editor.value = data.content;
+        const resp = await fetch('/admin/circuit-breaker/status');
+        if (resp.ok) {
+            const data = await resp.json();
+            const breakers = data.breakers || {};
+            const names = Object.keys(breakers).sort();
+
+            if (names.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center">No Circuit Breakers Active</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = names.map(name => {
+                const b = breakers[name];
+                const stateClass = b.state === 'open' ? 'error' : (b.state === 'half_open' ? 'warn' : 'ok');
+                const stateColor = b.state === 'open' ? 'var(--accent-error)' : (b.state === 'half_open' ? 'var(--accent-warning)' : 'var(--accent-neon)');
+                const err = b.last_error ? `<span title="${b.last_error}" style="cursor:help;">${b.last_error.substring(0, 40)}...</span>` : '-';
+                const cooldown = b.seconds_remaining > 0 ? `${Math.ceil(b.seconds_remaining)}s` : '-';
+
+                return `
+                        <tr>
+                            <td class="mono" style="font-weight:600;">${name}</td>
+                            <td><span style="color:${stateColor}; font-weight:bold;">${b.state.toUpperCase()}</span></td>
+                            <td>${b.failures} / 5</td>
+                            <td class="mono" style="font-size:0.85rem;">${err}</td>
+                            <td>${cooldown}</td>
+                            <td>
+                                ${b.state === 'open' ?
+                        `<button class="action-btn sm primary" onclick="resetBreaker('${name}')">Reset</button>` :
+                        '<span style="opacity:0.3;">-</span>'}
+                            </td>
+                        </tr>
+                    `;
+            }).join('');
+
         } else {
-            editor.value = "Error loading config: " + data.error;
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color:var(--accent-error);">Failed to fetch status</td></tr>';
         }
     } catch (e) {
-        editor.value = "Failed to fetch config: " + e.message;
+        console.error("Breaker fetch error", e);
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color:var(--accent-error);">${e.message}</td></tr>`;
+    }
+};
+
+// Global Reset Helper
+window.resetBreaker = async function (name) {
+    if (!confirm(`Reset breaker for '${name}'?`)) return;
+    try {
+        await fetch(`/admin/circuit-breaker/reset/${name}`, { method: 'POST' });
+        showNotification(`Breaker '${name}' Reset`);
+        fetchBreakerData(); // Refresh UI
+        fetchMCPData(); // Refresh MCP list too
+    } catch (e) {
+        alert("Failed to reset: " + e);
+    }
+};
+
+
+// --- Breaker Data Logic ---
+// --- Breaker Data Logic (Refactored for V2 Table) ---
+// Defined globally so fetchSystemData can call it
+window.updateBreakersTable = function (data) {
+    const container = document.getElementById('breaker-table-body');
+    if (!container) return; // Legacy view or wrong page
+
+    const breakers = data.breakers || {};
+
+    if (Object.keys(breakers).length === 0) {
+        container.innerHTML = '<tr><td colspan="6" class="text-center">No active circuit breakers.</td></tr>';
+        return;
+    }
+
+    container.innerHTML = Object.entries(breakers).map(([name, b]) => {
+        const stateClass = b.state ? b.state.toLowerCase() : 'unknown';
+        return `
+            <tr>
+                <td style="font-weight:600;">${name}</td>
+                <td><span class="indicator ${stateClass}">${b.state}</span></td>
+                <td><span style="color:var(--accent-error)">${b.failures}</span> / ${b.total_failures}</td>
+                <td>${b.last_error ? b.last_error.substring(0, 30) + '...' : '-'}</td>
+                <td>${b.disabled_until > 0 ? b.disabled_until.toFixed(1) + 's' : '-'}</td>
+                <td>
+                    ${b.state === 'OPEN' ? `<button class="action-btn sm primary" onclick="resetBreaker('${name}')">Reset</button>` : '-'}
+                </td>
+            </tr>
+        `;
+    }).join('');
+};
+
+async function fetchBreakerData() {
+    try {
+        const resp = await fetch('/admin/circuit-breaker/status');
+        if (resp.ok) {
+            const data = await resp.json();
+            window.updateBreakersTable(data);
+        } else {
+            // No notification on failure, just let the table update handle it or console error
+        }
+    } catch (e) {
+        console.error("Breaker fetch error", e);
     }
 }
+
+// Refresh Breakers when tab is clicked
+document.querySelectorAll('.tab-link[data-tab="status"]').forEach(btn => {
+    btn.addEventListener('click', () => setTimeout(fetchBreakerData, 100));
+});
+// Also poll if visible
+setInterval(() => {
+    const statusTab = document.getElementById('status');
+    if (statusTab && statusTab.style.display === 'block') fetchBreakerData();
+}, 2000);
+
+// --- Fix RAG Status ---
+async function checkRAGHealth() {
+    try {
+        // Use the router proxy to hit the RAG server health
+        const resp = await fetch('/rag/health');
+        const indicator = document.querySelector('.status-item.rag .indicator');
+
+        if (resp.ok) {
+            if (indicator) { indicator.className = 'indicator online'; }
+        } else {
+            if (indicator) { indicator.className = 'indicator offline'; }
+        }
+    } catch (e) {
+        const indicator = document.querySelector('.status-item.rag .indicator');
+        if (indicator) indicator.className = 'indicator offline';
+    }
+}
+setInterval(checkRAGHealth, 5000);
+
+// Initial Trigger
+checkRAGHealth();
+
+// --- PHASE 25: DIAGNOSTICS LOGIC ---
+
+async function fetchDiagnostics() {
+    // Only fetch if tab is active
+    if (activeTab !== 'diagnostics') return;
+
+    try {
+        // 1. Fetch Metrics (reuse existing endpoint which has some of this)
+        // But for trace data we need separate calls
+        const traceResp = fetch('/admin/observability/trace?limit=50').then(r => r.json());
+        const stuckResp = fetch('/admin/observability/stuck').then(r => r.json());
+        const statsResp = fetch('/admin/observability/stats').then(r => r.json());
+
+        const [traces, stuck, stats] = await Promise.all([traceResp, stuckResp, statsResp]);
+
+        if (traces.ok) renderTraceTable(traces.traces);
+        if (stuck.ok) renderStuckTable(stuck.stuck_requests);
+        if (stats.ok) renderDiagnosticsMetrics(stats.metrics);
+
+    } catch (e) {
+        console.error("Diagnostics fetch failed:", e);
+    }
+}
+
+function renderDiagnosticsMetrics(metrics) {
+    if (!metrics) return;
+
+    // Throughput
+    document.getElementById('diag-rps').textContent = (metrics.efficiency?.requests_per_second || 0).toFixed(2);
+    document.getElementById('diag-tps').textContent = (metrics.efficiency?.tokens_per_second || 0).toFixed(0);
+    // P99 is tricky without more data, use avg for now
+    document.getElementById('diag-p99').textContent = (metrics.avg_response_time_1min || 0).toFixed(0) + "ms";
+
+    // Cache
+    document.getElementById('diag-cache-rate').textContent = (metrics.efficiency?.cache_hit_rate || 0).toFixed(1) + "%";
+    // Hits/Misses are cumulative, not exposed directly in efficiency dict except via rates
+    // If observing raw numbers is needed we'll need to expand stats endpoint. 
+    // For now, placeholder or derived.
+
+    // Concurrency
+    document.getElementById('diag-active').textContent = metrics.active_requests;
+    document.getElementById('diag-wait').textContent = (metrics.efficiency?.semaphore_wait_time_avg_ms || 0).toFixed(1) + "ms";
+    document.getElementById('diag-queue').textContent = metrics.efficiency?.queue_depth || 0;
+}
+
+function renderTraceTable(traces) {
+    const tbody = document.getElementById('diag-trace-table');
+    if (!traces || traces.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center">No recent traces</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = traces.map(t => {
+        const date = new Date(t.started_at * 1000).toLocaleTimeString();
+        const duration = t.duration_ms ? t.duration_ms.toFixed(0) + 'ms' : 'Running';
+
+        // Color coding
+        let durabilityClass = '';
+        if (t.duration_ms > 1000) durabilityClass = 'text-red';
+        else if (t.duration_ms > 200) durabilityClass = 'text-yellow';
+        else durabilityClass = 'text-green';
+
+        let statusClass = t.stage === 'error' || t.stage === 'timeout' ? 'status-offline' : 'status-online';
+
+        return `
+        <tr>
+            <td>${date}</td>
+            <td><span class="badge">${t.method}</span></td>
+            <td title="${t.path}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">${t.path}</td>
+            <td><span class="status-indicator ${statusClass}"></span> ${t.stage}</td>
+            <td class="${durabilityClass}" font-weight:bold;">${duration}</td>
+            <td>
+               <small>${JSON.stringify(t.metadata || {}).substring(0, 50)}</small>
+            </td>
+        </tr>
+    `;
+    }).join('');
+}
+
+function renderStuckTable(stuck) {
+    const tbody = document.getElementById('diag-stuck-table');
+    if (!stuck || stuck.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: #888;">No stuck requests</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = stuck.map(req => `
+    <tr class="bg-red-dim">
+        <td>${req.request_id.substring(0, 8)}</td>
+        <td>${req.age_seconds.toFixed(1)}s</td>
+        <td>${req.current_stage}</td>
+        <td>${req.method} ${req.path}</td>
+        <td><button class="btn btn-sm" onclick="alert('Kill not implemented')">Kill</button></td>
+    </tr>
+`).join('');
+}
+
+// --- PHASE 30: ANOMALY MANAGEMENT (Global) ---
+
+window.fetchAnomalies = async function () {
+    try {
+        const resp = await fetch('/admin/dashboard/state');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const anomalies = data.summary?.anomalies || [];
+
+        const tbody = document.getElementById('anomaly-table-body');
+
+        // Update Widget
+        let newCount = anomalies.filter(a => a.status === 'new').length;
+        let critCount = anomalies.filter(a => a.severity === 'critical' && a.status === 'new').length;
+        if (window.updateAnomalyWidget) {
+            window.updateAnomalyWidget(newCount, critCount, anomalies.length);
+        }
+
+        if (!tbody) return;
+
+        if (anomalies.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No anomalies recorded.</td></tr>';
+            return;
+        }
+
+        anomalies.sort((a, b) => b.timestamp - a.timestamp);
+
+        tbody.innerHTML = anomalies.map(a => {
+            const date = new Date(a.timestamp * 1000).toLocaleTimeString();
+            const isAck = a.status === 'acknowledged';
+            const severityClass = (a.severity || 'info').toLowerCase();
+
+            const errorCtx = a.metadata?.latest_error ? `<div style="font-size:0.85em; color:var(--accent-error); margin-top:4px;">${a.metadata.latest_error}</div>` : '';
+
+            return `
+                <tr class="${isAck ? 'dimmed' : ''}">
+                    <td>${date}</td>
+                    <td><span class="badge ${severityClass}">${(a.severity || 'INFO').toUpperCase()}</span></td>
+                    <td>
+                        ${a.metric_name}
+                        ${errorCtx}
+                    </td>
+                    <td>${(a.deviation || 0).toFixed(1)}σ</td>
+                    <td>${(a.status || 'NEW').toUpperCase()}</td>
+                    <td>
+                        ${!isAck ? `<button class="action-btn sm" onclick="ackAnomaly('${a.id}')">Ack</button>` : '-'}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+    } catch (e) { console.error("Anomaly fetch failed", e); }
+};
+
+window.updateAnomalyWidget = function (newCount, critCount, totalCount) {
+    const w = document.getElementById('anomaly-widget');
+    const s = document.getElementById('anomaly-widget-status');
+    const b = document.getElementById('anomaly-count-badge');
+
+    if (w) w.style.display = totalCount > 0 ? 'block' : 'none';
+
+    if (s) {
+        if (newCount > 0) {
+            s.textContent = `${newCount} Active (${critCount} Critical)`;
+            s.style.color = critCount > 0 ? 'var(--accent-error)' : 'var(--accent-warning)';
+        } else if (totalCount > 0) {
+            s.textContent = "All Acknowledged";
+            s.style.color = 'var(--text-secondary)';
+        } else {
+            s.textContent = "No Issues";
+        }
+    }
+
+    if (b) b.textContent = `${newCount} New`;
+};
+
+window.ackAnomaly = async function (id) {
+    try {
+        await fetch(`/admin/observability/anomalies/${id}/ack`, { method: 'POST' });
+        showNotification('Anomaly Acknowledged');
+        fetchAnomalies();
+    } catch (e) {
+        showNotification('Failed to acknowledge', 'error');
+        console.error(e);
+    }
+};
+
+// Initial Hook
+document.addEventListener('DOMContentLoaded', () => {
+    // Hook Tab
+    document.querySelectorAll('.tab-link[data-tab="anomalies"]').forEach(btn => {
+        btn.addEventListener('click', () => { setTimeout(fetchAnomalies, 100); });
+    });
+
+    // Start Polling
+    setInterval(fetchAnomalies, 5000);
+});

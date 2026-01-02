@@ -13,21 +13,26 @@ SURREAL_USER = os.getenv("SURREAL_USER", "root")
 SURREAL_PASS = os.getenv("SURREAL_PASS", "root")
 SURREAL_NS = os.getenv("SURREAL_NS", "orchestrator")
 SURREAL_DB = os.getenv("SURREAL_DB", "memory")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "ollama:embeddinggemma:300m")
+# EMBED_MODEL is now managed centrally via state.embedding_model
 GATEWAY_BASE = os.getenv("GATEWAY_BASE", "http://127.0.0.1:5455")
 ROUTER_AUTH_TOKEN = os.getenv("ROUTER_AUTH_TOKEN")
 
 # Embedding dimension (default for most embedding models)
 EMBEDDING_DIMENSION = 1024
 
-# Set up logging to stderr
+# Set up unified logging
+import logging
+logger = logging.getLogger(__name__)
+
+# Deprecated log function mapped to logger (for compatibility during refactor if missed calls exist)
+# But we will try to replace usage.
 def log(msg, level="INFO"):
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    sys.stderr.write(f"{timestamp} {level} memory_server {msg}\n")
-    sys.stderr.flush()
+    lvl = getattr(logging, level.upper(), logging.INFO)
+    logger.log(lvl, f"memory_server {msg}")
 
 class MemoryServer:
-    def __init__(self):
+    def __init__(self, state=None):
+        self.state = state
         # Ensure URL is HTTP and points to /sql
         self.url = SURREAL_URL.replace("ws://", "http://").replace("wss://", "https://")
         self.url = self.url.replace("/rpc", "") # Strip RPC path if present
@@ -64,7 +69,7 @@ class MemoryServer:
             self.initialized = True
             log(f"Initialized HTTP Client for {self.url}")
 
-    async def _execute_query(self, query: str, params: dict = None, **kwargs) -> Any:
+    async def _execute_query(self, query: str, params: dict = None, raise_on_error: bool = False, **kwargs) -> Any:
         """Execute a SurrealQL query using HTTP REST API."""
         try:
             # Explicitly set NS/DB in SQL to avoid Header issues
@@ -89,7 +94,10 @@ class MemoryServer:
             )
             
             if response.status_code != 200:
-                log(f"Query Error HTTP {response.status_code}: {response.text}", "ERROR")
+                msg = f"Query Error HTTP {response.status_code}: {response.text}"
+                if raise_on_error:
+                    raise Exception(msg)
+                log(msg, "ERROR")
                 return None
             
             data = response.json()
@@ -99,31 +107,210 @@ class MemoryServer:
                     self.last_successful_query = time.time()
                     return last_res.get("result")
                 else:
-                    log(f"Query Logic Error: {last_res}", "ERROR")
+                    if raise_on_error:
+                        raise Exception(f"Query Logic Error: {last_res}")
+                    logger.error(f"Query Logic Error: {last_res}")
                     return None
             return data
 
         except Exception as e:
-            log(f"Execution Error: {e}", "ERROR")
+            if raise_on_error:
+                raise e
+            logger.error(f"Execution Error: {e}")
             return None
 
+    async def initialize(self):
+        """Perform startup checks and index verification."""
+        if self.initialized:
+            return
+        
+        log("Initializing MemoryServer and ensuring schema...")
+        await self.ensure_connected()
+        await self.ensure_schema()
+        # self.initialized = True # ensure_connected sets it too, but we mark it fully ready
+        log("MemoryServer initialization complete.")
+
+    async def ensure_schema(self):
+        """
+        Define schema for the memory store.
+        Uses DEFINE statements which are idempotent in SurrealQL, 
+        but we suppress specific 'already exists' errors if the client raises them.
+        """
+        schema_queries = [
+            # Fact Table
+            "DEFINE TABLE fact SCHEMAFULL",
+            "DEFINE FIELD entity ON TABLE fact TYPE string",
+            "DEFINE FIELD relation ON TABLE fact TYPE string",
+            "DEFINE FIELD target ON TABLE fact TYPE string",
+            "DEFINE FIELD context ON TABLE fact TYPE string",
+            "DEFINE FIELD content ON TABLE fact TYPE option<string>",
+            "DEFINE FIELD kb_id ON TABLE fact TYPE string",
+            "DEFINE FIELD confidence ON TABLE fact TYPE float",
+            "DEFINE FIELD created_at ON TABLE fact TYPE datetime DEFAULT time::now()",
+            "DEFINE FIELD embedding ON TABLE fact TYPE array<float>",
+            "DEFINE INDEX idx_fact_kb ON TABLE fact COLUMNS kb_id",
+            
+            # Episode Table (Chat History)
+            "DEFINE TABLE episode SCHEMAFULL",
+            "DEFINE FIELD session_id ON TABLE episode TYPE string",
+            "DEFINE FIELD role ON TABLE episode TYPE string",
+            "DEFINE FIELD content ON TABLE episode TYPE string",
+            "DEFINE FIELD timestamp ON TABLE episode TYPE datetime DEFAULT time::now()",
+            "DEFINE FIELD embedding ON TABLE episode TYPE array",
+            "DEFINE FIELD kb_id ON TABLE episode TYPE string",
+            "DEFINE FIELD request_id ON TABLE episode TYPE string",
+            "DEFINE INDEX idx_episode_kb ON TABLE episode COLUMNS kb_id",
+            "DEFINE INDEX idx_episode_request ON TABLE episode COLUMNS request_id",
+            "DEFINE INDEX idx_episode_embedding ON TABLE episode COLUMNS embedding MTREE DIMENSION 1024 DIST EUCLIDEAN",
+
+            # Task Definitions (Sovereign Tasks)
+            "DEFINE TABLE task_def SCHEMAFULL",
+            "DEFINE FIELD name ON TABLE task_def TYPE string",
+            "DEFINE FIELD type ON TABLE task_def TYPE string",
+            "DEFINE FIELD enabled ON TABLE task_def TYPE bool",
+            "DEFINE FIELD schedule ON TABLE task_def TYPE string",
+            "DEFINE FIELD idle_only ON TABLE task_def TYPE bool DEFAULT false",
+            "DEFINE FIELD priority ON TABLE task_def TYPE string DEFAULT 'low'",
+            "DEFINE FIELD description ON TABLE task_def TYPE string",
+            "DEFINE FIELD prompt ON TABLE task_def TYPE string",
+            "DEFINE FIELD config ON TABLE task_def TYPE object",
+            "DEFINE INDEX idx_task_name ON TABLE task_def COLUMNS name UNIQUE",
+            
+            # MCP Manager (Sovereign Tools)
+            "DEFINE TABLE mcp_server SCHEMAFULL",
+            "DEFINE FIELD name ON TABLE mcp_server TYPE string",
+            "DEFINE FIELD command ON TABLE mcp_server TYPE string",
+            "DEFINE FIELD args ON TABLE mcp_server TYPE array",
+            "DEFINE FIELD env ON TABLE mcp_server TYPE object",
+            "DEFINE FIELD enabled ON TABLE mcp_server TYPE bool",
+            "DEFINE FIELD type ON TABLE mcp_server TYPE string DEFAULT 'stdio'",
+            "DEFINE INDEX idx_mcp_name ON TABLE mcp_server COLUMNS name UNIQUE",
+
+            # Source Table (Provenance)
+            "DEFINE TABLE source SCHEMAFULL",
+            "DEFINE FIELD url ON TABLE source TYPE string",
+            "DEFINE FIELD title ON TABLE source TYPE string",
+            "DEFINE FIELD author ON TABLE source TYPE string",
+            "DEFINE FIELD reliability ON TABLE source TYPE float",
+            "DEFINE FIELD summary ON TABLE source TYPE string",
+            "DEFINE FIELD fingerprint ON TABLE source TYPE string",
+            "DEFINE FIELD last_accessed ON TABLE source TYPE datetime DEFAULT time::now()",
+            "DEFINE INDEX idx_source_url ON TABLE source COLUMNS url UNIQUE",
+
+            # Config Tables
+            "DEFINE TABLE memory_bank_config SCHEMAFULL",
+            "DEFINE FIELD kb_id ON TABLE memory_bank_config TYPE string",
+            "DEFINE FIELD owner ON TABLE memory_bank_config TYPE string",
+            "DEFINE FIELD is_private ON TABLE memory_bank_config TYPE bool",
+            "DEFINE INDEX idx_config_kb ON TABLE memory_bank_config COLUMNS kb_id UNIQUE",
+            
+            # [PHASE 44] System State Tables (Sovereignty)
+            "DEFINE TABLE config_state SCHEMAFULL",
+            "DEFINE FIELD key ON TABLE config_state TYPE string",
+            "DEFINE FIELD value ON TABLE config_state TYPE string",
+            "DEFINE FIELD source ON TABLE config_state TYPE string",
+            "DEFINE FIELD last_updated ON TABLE config_state TYPE datetime DEFAULT time::now()",
+            "DEFINE INDEX idx_config_key ON TABLE config_state COLUMNS key UNIQUE",
+            
+            "DEFINE TABLE system_state SCHEMAFULL",
+            "DEFINE FIELD item ON TABLE system_state TYPE string",
+            "DEFINE FIELD details ON TABLE system_state TYPE object",
+            "DEFINE FIELD category ON TABLE system_state TYPE option<string>",
+            "DEFINE FIELD last_updated ON TABLE system_state TYPE datetime DEFAULT time::now()",
+            "DEFINE INDEX idx_system_item ON TABLE system_state COLUMNS item UNIQUE",
+        ]
+        
+        for query in schema_queries:
+            try:
+                # [FIX] Raise errors so we can filter benign ones
+                await self._execute_query(query, raise_on_error=True)
+            except Exception as e:
+                msg = str(e)
+                if "already exists" in msg or "already defined" in msg:
+                    continue # Silence expected noise
+                logger.error(f"Schema Error: {query} -> {msg}")
+
+    async def list_memory_banks(self):
+        """List all unique memory bank IDs."""
+        await self.ensure_connected()
+        q = "SELECT kb_id FROM memory_bank_config"
+        res = await self._execute_query(q)
+        if res is None: return {"ok": False, "banks": []}
+        return {"ok": True, "banks": self._serializable(res)}
+
+    async def delete_memory_bank(self, kb_id: str):
+        """Remove all facts/episodes and configuration for a bank."""
+        logger.info(f"Deleting memory bank: {kb_id}")
+        queries = [
+            "BEGIN TRANSACTION;",
+            f"DELETE fact WHERE kb_id = '{kb_id}';",
+            f"DELETE episode WHERE kb_id = '{kb_id}';",
+            f"DELETE memory_bank_config WHERE kb_id = '{kb_id}';",
+            "COMMIT TRANSACTION;"
+        ]
+        
+        for q in queries:
+            await self._execute_query(q)
+            
+        return {"ok": True}
 
     async def get_embedding(self, text: str) -> List[float]:
         try:
+            model = self.state.embedding_model if self.state else "ollama:mxbai-embed-large:latest"
+            
+            # Direct Ollama Bypass (Reliability)
+            log(f"DEBUG EMBED MODEL: {model}", "INFO")
+            if "ollama" in model or "mxbai" in model:
+                 try:
+                     async with httpx.AsyncClient() as client:
+                        # Strip "ollama:" prefix if present for some calls, though Ollama usually handles it if model name matches
+                        # specifically mxbai-embed-large:latest
+                        clean_model = model.replace("ollama:", "")
+                        resp = await client.post(
+                            "http://127.0.0.1:11434/api/embeddings",
+                            json={"model": clean_model, "prompt": text},
+                            timeout=30.0
+                        )
+                        if resp.status_code == 200:
+                            return resp.json()["embedding"]
+                        else:
+                            log(f"Ollama Direct Embedding failed {resp.status_code}: {resp.text}", "WARNING")
+                 except Exception as eo:
+                     log(f"Ollama Direct failed: {eo}", "WARNING")
+                     # Fallthrough to Gateway
+
+            # Circuit Breaker Check
+            if self.state and hasattr(self.state, "mcp_circuit_breaker"):
+                 if not self.state.mcp_circuit_breaker.is_allowed(model):
+                     log(f"Embedding Short-Circuited: Model '{model}' is broken.", "WARNING")
+                     return [0.0] * EMBEDDING_DIMENSION
+            
             headers = {}
             if ROUTER_AUTH_TOKEN:
                 headers["Authorization"] = f"Bearer {ROUTER_AUTH_TOKEN}"
             async with httpx.AsyncClient(verify=False) as client:
                 resp = await client.post(
                     f"{GATEWAY_BASE}/v1/embeddings",
-                    json={"model": EMBED_MODEL, "input": text},
+                    json={"model": model, "input": text},
                     headers=headers,
                     timeout=10.0
                 )
                 if resp.status_code == 200:
+                    if self.state and hasattr(self.state, "mcp_circuit_breaker"):
+                         self.state.mcp_circuit_breaker.record_success(model)
                     return resp.json()["data"][0]["embedding"]
+                else:
+                    log(f"Embedding failed HTTP {resp.status_code}: {resp.text}", "WARNING")
+                    if self.state and hasattr(self.state, "mcp_circuit_breaker"):
+                         self.state.mcp_circuit_breaker.record_failure(model)
+                         
         except Exception as e:
             log(f"Failed to get embedding: {e}", "WARNING")
+            if self.state and hasattr(self.state, "mcp_circuit_breaker"):
+                 # Determine model variable if possible
+                 m = self.state.embedding_model if self.state else "unknown"
+                 self.state.mcp_circuit_breaker.record_failure(m)
+                 
         return [0.0] * EMBEDDING_DIMENSION
 
 
@@ -194,17 +381,19 @@ class MemoryServer:
             LET $existing = (SELECT id, confidence FROM fact WHERE entity = $e AND relation = $r AND target = $t AND kb_id = $kb LIMIT 1);
             IF count($existing) > 0 THEN
                 UPDATE fact SET 
-                    context = $c, 
+                    context = $c,
+                    content = $txt,
                     embedding = $emb, 
-                    confidence = math::min(1.0, math::max($existing[0].confidence, $conf)),
-                    timestamp = time::now() 
+                    confidence = math::min([1.0, math::max([$existing[0].confidence, $conf])]),
+                    created_at = time::now() 
                 WHERE entity = $e AND relation = $r AND target = $t AND kb_id = $kb;
             ELSE
                 CREATE fact SET 
                     entity = $e, 
                     relation = $r, 
                     target = $t, 
-                    context = $c, 
+                    context = $c,
+                    content = $txt,
                     embedding = $emb, 
                     kb_id = $kb,
                     confidence = $conf;
@@ -217,6 +406,7 @@ class MemoryServer:
                 "r": str(relation), 
                 "t": str(target), 
                 "c": str(context), 
+                "txt": fact_text, 
                 "emb": embedding, 
                 "conf": confidence,
                 "kb": kb_id
@@ -244,6 +434,10 @@ class MemoryServer:
                     params["r"] = str(relation)
                 q += " AND ".join(parts)
             q += f" ORDER BY timestamp DESC LIMIT {limit}"
+            
+            # [DEBUG] Log the query attempt
+            # log(f"DEBUG: Executing query_facts. Query: {q} Params: {params}", "INFO")
+
             res = await self._execute_query(q, params)
             if res is None:
                 return {"ok": False, "error": "Query execution failed"}
@@ -276,7 +470,7 @@ class MemoryServer:
                 )
             except Exception as e:
                 # Fallback to keyword search
-                log(f"Vector search failed (degrading to keyword): {e}", "WARNING")
+                logger.info(f"Vector search failed (degrading to keyword): {e}")
                 try:
                     res = await self._execute_query(
                         "SELECT *, id as fact_id FROM fact WHERE (entity CONTAINS $q OR relation CONTAINS $q OR target CONTAINS $q) ORDER BY timestamp DESC LIMIT $limit",
@@ -284,7 +478,7 @@ class MemoryServer:
                         timeout=10.0
                     )
                 except Exception as fallback_error:
-                    log(f"Fallback keyword search failed: {fallback_error}", "ERROR")
+                    logger.error(f"Fallback keyword search failed: {fallback_error}")
                     res = None
             if res is None:
                 return {"ok": False, "error": "Query execution failed"}
@@ -371,23 +565,25 @@ class MemoryServer:
         try:
             # 1. Fetch all facts
             res = await self._execute_query("SELECT id, entity, relation, target FROM fact")
-            if not res or not res[0].get("result"):
+            if not res:
                 return {"ok": True, "messsage": "No facts to reindex."}
             
-            facts = res[0]["result"]
+            facts = res
             count = 0
-            log(f"Starting re-index of {len(facts)} facts...", "INFO")
+            logger.info(f"Starting re-index of {len(facts)} facts...")
             
             # 2. Re-embed each
             for f in facts:
                 fact_text = f"{f.get('entity', '')} {f.get('relation', '')} {f.get('target', '')}"
                 embedding = await self.get_embedding(fact_text)
+                # logger.info(f"DEBUG: Embedding Len: {len(embedding)} Sample: {embedding[:3]}")
                 
                 # 3. Update
-                await self._execute_query("UPDATE $id SET embedding = $emb", {"id": f['id'], "emb": embedding})
+                upd_res = await self._execute_query("UPDATE fact SET embedding = $emb WHERE id = type::thing($id) RETURN AFTER", {"id": f['id'], "emb": embedding})
+                # logger.info(f"DEBUG: Update Result: {upd_res}")
                 count += 1
                 if count % 10 == 0:
-                    log(f"Re-indexed {count}/{len(facts)}...", "INFO")
+                    logger.info(f"Re-indexed {count}/{len(facts)}...")
             
             return {"ok": True, "reindexed_count": count}
         except Exception as e:
@@ -554,7 +750,61 @@ class MemoryServer:
             res = await self._execute_query(q, params)
             if res is None:
                 return {"ok": False, "error": "Query execution failed"}
-            return {"ok": True, "intel": self._serializable(res[0].get("result", [])) if res else []}
+            # res is already the list of results
+            return {"ok": True, "intel": self._serializable(res) if res else []}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # [PHASE 43] Source Authority Tools
+    async def store_source(self, url: str, title: str, author: str = "", reliability: float = 0.5, summary: str = ""):
+        """Store or update a trusted source."""
+        await self.ensure_connected()
+        if not self.initialized: return {"ok": False, "error": "DB not connected"}
+        try:
+            # UPSERT by URL (Unique Index)
+            sql = """
+            LET $existing = (SELECT id FROM source WHERE url = $url LIMIT 1);
+            IF count($existing) > 0 THEN
+                UPDATE source SET 
+                    title = $title, 
+                    author = $author, 
+                    reliability = $reliability, 
+                    summary = $summary, 
+                    last_accessed = time::now() 
+                WHERE url = $url;
+            ELSE
+                CREATE source SET 
+                    url = $url, 
+                    title = $title, 
+                    author = $author, 
+                    reliability = $reliability, 
+                    summary = $summary, 
+                    last_accessed = time::now();
+            END;
+            """
+            res = await self._execute_query(sql, {
+                "url": url,
+                "title": title,
+                "author": author,
+                "reliability": reliability,
+                "summary": summary
+            })
+            if res is None:
+                return {"ok": False, "error": "Query execution failed"}
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def list_sources(self, limit: int = 50):
+        """List trusted sources."""
+        await self.ensure_connected()
+        if not self.initialized: return {"ok": False, "error": "DB not connected"}
+        try:
+            res = await self._execute_query("SELECT * FROM source ORDER BY reliability DESC LIMIT $limit", {"limit": limit})
+            if res is None:
+                return {"ok": False, "error": "Query execution failed"}
+            # res is already the list of results
+            return {"ok": True, "sources": self._serializable(res) if res else []}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -590,21 +840,28 @@ class MemoryServer:
             return {"ok": False, "error": str(e)}
 
     async def store_episode(self, request_id: str, messages: List[Dict[str, Any]]):
-        """Store a conversation episode for background processing."""
+        """Store a conversation episode with vector indexing."""
+        # logger.info(f"DEBUG: Entering store_episode for {request_id}")
         await self.ensure_connected()
         if not self.initialized: return {"ok": False, "error": "DB not connected"}
+        
         try:
-            # Pass list directly to let Client handle serialization
+            # Flatten messages to text for embedding
+            full_text = "\n".join([f"{m.get('role','?')}: {m.get('content','')}" for m in messages])
+            
+            # Generate Embedding (Simulated or Real)
+            embedding = await self.get_embedding(full_text)
+            
             res = await self._execute_query(
-                "UPSERT type::thing('episode', $rid) SET request_id = $rid, messages = $msg, timestamp = time::now(), consolidated = false",
-                {"rid": request_id, "msg": messages}
+                "UPSERT type::thing('episode', $rid) SET request_id = $rid, messages = $msg, embedding = $emb, timestamp = time::now(), consolidated = false",
+                {"rid": request_id, "msg": messages, "emb": embedding}
             )
+            
             if res is None:
-                return {"ok": False, "error": "Query execution failed (None result)"}
-            log(f"STORE EPISODE SUCCESS: {request_id} RES: {res}")
-            return {"ok": True, "db_result": str(res)}
+                return {"ok": False, "error": "Query execution failed"}
+            return {"ok": True}
         except Exception as e:
-            log(f"STORE EPISODE ERROR: {e}")
+            # logger.error(f"DEBUG: Error in store_episode: {e}")
             return {"ok": False, "error": str(e)}
 
     async def get_unconsolidated_episodes(self, limit: int = 10):
@@ -693,7 +950,10 @@ async def main():
             Tool(name="optimize_memory", description="Run optimization/integrity checks on the memory database.", inputSchema={"type":"object","properties":{}}),
             Tool(name="store_episode", description="Store a conversation episode.", inputSchema={"type":"object","properties":{"request_id":{"type":"string"},"messages":{"type":"array","items":{"type":"object"}}},"required":["request_id","messages"]}),
             Tool(name="get_unconsolidated_episodes", description="Get unconsolidated episodes.", inputSchema={"type":"object","properties":{"limit":{"type":"integer"}}}),
-            Tool(name="mark_episode_consolidated", description="Mark episode as consolidated.", inputSchema={"type":"object","properties":{"request_id":{"type":"string"}},"required":["request_id"]})
+            Tool(name="mark_episode_consolidated", description="Mark episode as consolidated.", inputSchema={"type":"object","properties":{"request_id":{"type":"string"}},"required":["request_id"]}),
+            # Source Authority
+            Tool(name="store_source", description="Store/Update a trusted source.", inputSchema={"type":"object","properties":{"url":{"type":"string"},"title":{"type":"string"},"author":{"type":"string"},"reliability":{"type":"number"},"summary":{"type":"string"}},"required":["url","title"]}),
+            Tool(name="list_sources", description="List trusted sources.", inputSchema={"type":"object","properties":{"limit":{"type":"integer"}}})
         ]
     @server.call_tool()
     async def call_tool(name: str, args: dict) -> list[TextContent]:
@@ -720,6 +980,8 @@ async def main():
             elif name == "store_episode": res = await memory.store_episode(**args)
             elif name == "get_unconsolidated_episodes": res = await memory.get_unconsolidated_episodes(**args)
             elif name == "mark_episode_consolidated": res = await memory.mark_episode_consolidated(**args)
+            elif name == "store_source": res = await memory.store_source(**args)
+            elif name == "list_sources": res = await memory.list_sources(**args)
             else: raise ValueError(f"Unknown tool: {name}")
             return [TextContent(type="text", text=json.dumps(res))]
         except Exception as e:

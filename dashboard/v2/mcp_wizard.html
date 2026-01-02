@@ -133,8 +133,9 @@
                 <input type="password" id="authToken" placeholder="Auth Token (Auto-filled)"
                     style="background:var(--panel); border:1px solid var(--border); color:var(--text); padding:0.8rem; border-radius:6px; flex:1; max-width:200px;">
                 <button id="btnProcess" onclick="processConfig()">🤖 Process & Add Server</button>
-                <span id="statusText" style="color: var(--success); opacity: 0; transition: opacity 0.5s;">Done!</span>
             </div>
+            <div id="lastResult"
+                style="margin-top: 10px; padding: 10px; border-radius: 6px; display: none; font-size: 0.9rem;"></div>
         </div>
 
         <div class="status-pane">
@@ -155,11 +156,14 @@
 
             const btn = document.getElementById('btnProcess');
             const log = document.getElementById('log');
-            const status = document.getElementById('statusText');
+            const resultDiv = document.getElementById('lastResult');
 
             btn.disabled = true;
             btn.innerText = "Processing...";
             log.innerText = "🚀 Sending to Agent...";
+
+            // Reset Result
+            resultDiv.style.display = 'none';
 
             // Get token from input or storage
             let token = document.getElementById('authToken').value.trim();
@@ -175,46 +179,45 @@
             }
 
             try {
-                // We act as a user asking the Agent to do this via the Router
-                const response = await fetch('/v1/chat/completions', {
+                // Direct call to LLM-powered parser endpoint
+                const response = await fetch('/admin/mcp/upload-config-json', {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify({
-                        model: "agent:mcp", // Use the MCP-capable agent
-                        messages: [
-                            {
-                                role: "system",
-                                content: `You are the Antigravity Config Manager.
-                                
-                                SAFETY PROTOCOL:
-                                1. ABSOLUTELY FORBIDDEN: Do NOT edit 'ai/config/config.yaml' manually (no write_to_file, no replace_file_content).
-                                2. MANDATORY: Use the tool 'mcp__system_control__add_mcp_server'.
-                                3. Algorithm:
-                                   a. Parse user input to determine server name and JSON config.
-                                   b. Call 'mcp__system_control__add_mcp_server(name=..., config=...)'.
-                                   c. Run './manage.sh restart-agent' (or instruct user if you can't).`
-                            },
-                            { role: "user", content: "Please install/add this MCP config:\n\n" + input }
-                        ]
-                    })
+                    body: JSON.stringify({ raw_text: input })
                 });
 
                 const data = await response.json();
 
                 if (!response.ok) {
-                    throw new Error(data.error?.message || data.detail || "Unknown Server Error");
+                    throw new Error(data.error || data.detail || "Server Error");
                 }
 
-                if (!data.choices || !data.choices[0]) {
-                    throw new Error("Invalid response format: " + JSON.stringify(data));
+                if (!data.ok) {
+                    throw new Error(data.error || "Unknown Error");
                 }
 
-                const reply = data.choices[0].message.content;
-                log.innerText += "\n\n✅ Agent Reply:\n" + reply;
-                status.style.opacity = 1;
+                log.innerText += "\n\n✅ Success!\n" + data.message;
+                if (data.added && data.added.length) {
+                    log.innerText += "\nAdded Servers: " + data.added.join(", ");
+                }
+
+                // Show Persistent Success
+                resultDiv.style.display = 'block';
+                resultDiv.style.background = 'rgba(76, 175, 80, 0.2)';
+                resultDiv.style.border = '1px solid #4CAF50';
+                resultDiv.style.color = '#81C784';
+                resultDiv.innerHTML = `<strong>✅ Success:</strong> Config processed at ${new Date().toLocaleTimeString()}`;
 
             } catch (e) {
                 log.innerText += "\n\n❌ Error:\n" + e.message;
+
+                // Show Persistent Failure
+                resultDiv.style.display = 'block';
+                resultDiv.style.background = 'rgba(244, 67, 54, 0.2)';
+                resultDiv.style.border = '1px solid #E57373';
+                resultDiv.style.color = '#EF5350';
+                resultDiv.innerHTML = `<strong>❌ Failed:</strong> ${e.message} <br><small>(${new Date().toLocaleTimeString()})</small>`;
+
             } finally {
                 btn.disabled = false;
                 btn.innerText = "Process & Add Server";

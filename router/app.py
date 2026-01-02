@@ -42,5 +42,9 @@ def create_app(lifespan=None) -> FastAPI:
     # Routers
     app.include_router(admin_router)
     app.include_router(api_router)
+    
+    # Internal Imports to prevent cycle if placed at top, or just standard import
+    from router.routes.clients import router as clients_router
+    app.include_router(clients_router)
 
     return app

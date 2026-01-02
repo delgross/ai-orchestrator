@@ -2,11 +2,29 @@ import asyncio
 import json
 import time
 import logging
+import atexit
+import weakref
 from typing import Any, List, Dict
 from common.logging_utils import log_json_event as _log_json_event
 from agent_runner.state import AgentState
 
 logger = logging.getLogger("agent_runner")
+
+# [SAFETY] Global registry for atexit cleanup (in case of non-graceful shutdown)
+_ACTIVE_SUBPROCESSES = set()
+
+def _cleanup_on_exit():
+    """Force kill all tracked subprocesses on interpreter exit."""
+    if not _ACTIVE_SUBPROCESSES:
+        return
+    for proc in _ACTIVE_SUBPROCESSES:
+        try:
+            if proc.returncode is None:
+                proc.kill()
+        except Exception:
+            pass
+
+atexit.register(_cleanup_on_exit)
 
 
 async def _log_stderr(server: str, stream: asyncio.StreamReader):
@@ -51,6 +69,7 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
                 full_env.update({k: str(v) for k, v in env.items()})
             
             logger.info(f"DEBUG: Spawning {cmd} with env vars: {list(env.keys()) if env else 'None'}")
+            print(f"DEBUG: SPAWNING CMD: {cmd}")
 
             async with state.mcp_subprocess_semaphore:
                 proc = await asyncio.create_subprocess_exec(
@@ -72,6 +91,7 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
                         stderr_data = await asyncio.wait_for(proc.stderr.read(1024), timeout=1.0)
                     except Exception:
                         pass
+                print(f"DEBUG: PROCESS DIED IMMEDIATELY. ReturnCode: {proc.returncode}. Stderr: {stderr_data}")
                 logger.error(
                     f"Stdio process for '{server}' died immediately (returncode={proc.returncode}). "
                     f"Stderr: {stderr_data.decode('utf-8', errors='replace')[:500]}"
@@ -83,6 +103,9 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
             state.stdio_process_initialized[server] = False
             state.stdio_process_health[server] = time.time()
             
+            # [SAFETY] Track for atexit cleanup
+            _ACTIVE_SUBPROCESSES.add(proc)
+            
             # Start stderr logging
             if proc.stderr:
                 asyncio.create_task(_log_stderr(server, proc.stderr))
@@ -90,6 +113,7 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
             _log_json_event("mcp_stdio_process_created", server=server)
             return proc
         except Exception as e:
+            print(f"DEBUG: STDIO EXCEPTION: {e}")
             _log_json_event("mcp_stdio_start_error", server=server, error=str(e))
             if proc is not None:
                 try:
@@ -184,5 +208,9 @@ async def cleanup_stdio_process(state: AgentState, server: str) -> None:
     if server in state.stdio_processes: del state.stdio_processes[server]
     if server in state.stdio_process_initialized: del state.stdio_process_initialized[server]
     if server in state.stdio_process_health: del state.stdio_process_health[server]
+    
+    # [SAFETY] Remove from global tracking
+    if proc in _ACTIVE_SUBPROCESSES:
+        _ACTIVE_SUBPROCESSES.discard(proc)
     
     _log_json_event("mcp_stdio_process_cleaned", server=server)

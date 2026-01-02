@@ -51,6 +51,18 @@ class ServiceRegistry:
             raise RuntimeError("BackgroundTaskManager not initialized in registry")
         return cls._task_manager
 
+    # Memory Server (Phase 13 additions)
+    _memory_server: Any = None
+
+    @classmethod
+    def register_memory_server(cls, server: Any) -> None:
+        cls._memory_server = server
+
+    @classmethod
+    def get_memory_server(cls) -> Any:
+        # Allow None (optional dependency) to avoid crash loops if DB is down
+        return cls._memory_server
+
 # Helper functions for cleaner imports
 def get_shared_state() -> 'AgentState':
     return ServiceRegistry.get_state()

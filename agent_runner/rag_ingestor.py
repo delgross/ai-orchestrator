@@ -5,11 +5,17 @@ from pathlib import Path
 import httpx
 import asyncio
 import datetime
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    HAS_WATCHDOG = True
+except ImportError:
+    HAS_WATCHDOG = False
+    class FileSystemEventHandler: pass # Dummy
 
 from agent_runner.state import AgentState
 from common.notifications import notify_info, notify_error, notify_health
+from agent_runner.registry import ServiceRegistry
 from agent_runner.rag_helpers import _process_locally, _ingest_content, aio_read_bytes, aio_rename
 
 logger = logging.getLogger("agent_runner.rag_ingestor")
@@ -20,7 +26,10 @@ DEFERRED_DIR = INGEST_DIR / "deferred"
 PROCESSED_BASE_DIR = INGEST_DIR / "processed"
 REVIEW_DIR = INGEST_DIR / "review"
 
-for d in [INGEST_DIR, DEFERRED_DIR, PROCESSED_BASE_DIR, REVIEW_DIR]:
+DUPLICATES_DIR = INGEST_DIR / "duplicates"
+REJECTED_DIR = INGEST_DIR / "rejected"
+
+for d in [INGEST_DIR, DEFERRED_DIR, PROCESSED_BASE_DIR, REVIEW_DIR, DUPLICATES_DIR, REJECTED_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 SUPPORTED_EXTENSIONS = ('.txt', '.md', '.pdf', '.docx', '.csv', '.png', '.jpg', '.jpeg', '.mp3', '.m4a', '.mp4')
@@ -56,6 +65,10 @@ class RAGFileEventHandler(FileSystemEventHandler):
 
 def start_rag_watcher(rag_base_url: str, state: AgentState):
     """Starts the Watchdog observer."""
+    if not HAS_WATCHDOG:
+        logger.warning("Watchdog not installed. Real-time RAG updates disabled (falling back to periodic).")
+        return None
+
     try:
         loop = asyncio.get_running_loop()
         event_handler = RAGFileEventHandler(rag_base_url, state, loop)
@@ -116,18 +129,52 @@ class IngestionHistory:
 # Global singleton (lazy init)
 _history_manager = None
 
+from agent_runner.registry import ServiceRegistry
+
+async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None):
+    logger.info("DEBUG: rag_ingestion_task ENTERED")
+    # 0. SETUP & ARGUMENT RECONCILIATION
+    if rag_base_url is None:
+        rag_base_url = os.getenv("RAG_BASE_URL", "http://127.0.0.1:5555")
+        
+    if state is None:
+        # PURE PATTERN: Fetch from Registry
+        try:
+            state = ServiceRegistry.get_state()
+        except RuntimeError:
+            logger.warning("Skipping RAG Ingestion: AgentState not initialized in Registry.")
+            return
+
+    if getattr(state, "shutdown_event", None) and state.shutdown_event.is_set():
+        return
+
     if _ingestion_lock.locked():
         return
 
     async with _ingestion_lock:
+        # 0.5 NETWORK CHECK (Topography Aware)
+        # Only require internet if the RAG server is REMOTE.
+        is_local_rag = "127.0.0.1" in rag_base_url or "localhost" in rag_base_url
+        if not is_local_rag and not state.internet_available:
+            logger.warning("Skipping RAG Ingestion: Remote Server requires Internet.")
+            return
+
         http_client = await state.get_http_client()
         
-        # 0. HEALTH CHECK
+        # 1. HEALTH CHECK
+        global _last_connection_ok
+        pause_file = INGEST_DIR / ".paused"
+        if pause_file.exists():
+            logger.warning(f"Ingestion paused. Remove {pause_file.name} to resume.")
+            return
+
+        # 0.5 HEALTH CHECK
         global _last_connection_ok
         try:
-            if not state.internet_available: return
+            # if not state.internet_available: return # Removed: Local RAG shouldn't require internet
             health = await http_client.get(f"{rag_base_url}/health", timeout=5.0)
             if health.status_code != 200:
+                logger.warning(f"RAG Health Check Failed: {health.status_code} from {rag_base_url}")
                 if _last_connection_ok:
                     logger.warning(f"RAG Server unhealthy ({health.status_code})")
                     _last_connection_ok = False
@@ -135,7 +182,8 @@ _history_manager = None
             if not _last_connection_ok:
                 logger.info("RAG Connection Restored")
                 _last_connection_ok = True
-        except Exception:
+        except Exception as e:
+            logger.warning(f"RAG Health Check Error: {e}")
             return
 
         # 1. BATCH PREPARATION
@@ -201,19 +249,34 @@ _history_manager = None
                 # [DEDUPLICATION CHECK]
                 f_hash = get_file_hash(file_path)
                 if _history_manager.is_duplicate(f_hash):
-                    logger.info(f"SKIPPING DUPLICATE: {file_path.name} (Hash: {f_hash[:8]}...)")
-                    # Silently move to processed so it doesn't clutter inbox
-                    try: await aio_rename(file_path, PROCESSED_BASE_DIR / file_path.name)
+                    reason = f"Duplicate Detected: {file_path.name} (Hash: {f_hash[:8]})"
+                    logger.warning(f"AUTO-DISPOSE: {reason}. Moving to duplicates/.")
+                    # [PHASE 15] Trash Bin Logic: Move to duplicates and continue
+                    try: await aio_rename(file_path, DUPLICATES_DIR / file_path.name)
                     except: pass
-                    continue
+                    continue # Skip to next file
                 
                 logger.info(f"TRACK A (Light): Processing {file_path.name} locally...")
                 content = await _process_locally(file_path, state, http_client)
-                await _ingest_content(file_path, content, state, http_client, rag_base_url, PROCESSED_BASE_DIR, REVIEW_DIR)
                 
-                # Mark as seen ONLY after successful ingestion
-                _history_manager.mark_seen(f_hash)
-                
+                # Check for Quality Exception
+                try:
+                    await _ingest_content(file_path, content, state, http_client, rag_base_url, PROCESSED_BASE_DIR, REVIEW_DIR)
+                    # Mark as seen ONLY after successful ingestion
+                    _history_manager.mark_seen(f_hash)
+                    
+                except ValueError as ve:
+                    # Quality Check Failed (raised by rag_helpers)
+                    if "Quality Check Failed" in str(ve):
+                        reason = f"Quality Check Failed: {file_path.name} - {str(ve)}"
+                        logger.warning(f"AUTO-DISPOSE: {reason}. Moving to rejected/.")
+                        # [PHASE 15] Trash Bin Logic: Move to rejected and continue
+                        try: await aio_rename(file_path, REJECTED_DIR / file_path.name)
+                        except: pass
+                        continue # Skip to next file
+                    else:
+                        raise ve
+
             except Exception as e:
                 logger.error(f"Failed local processing for {file_path.name}: {e}")
                 # Move to Review

@@ -10,6 +10,13 @@ from agent_runner.state import AgentState
 from agent_runner.tools import fs as fs_tools
 from agent_runner.tools import mcp as mcp_tools
 from agent_runner.tools import system as system_tools
+# [PHASE 52]
+from agent_runner.tools import node as node_tools
+# [PHASE 53]
+from agent_runner.tools import admin as admin_tools
+# [PHASE 42]
+from agent_runner.tools import registry as registry_tools
+
 from common.unified_tracking import track_event, EventSeverity, EventCategory
 
 logger = logging.getLogger("agent_runner.executor")
@@ -49,6 +56,19 @@ class ToolExecutor:
             "report_missing_tool": system_tools.tool_report_missing_tool,
             "run_memory_consolidation": system_tools.tool_run_memory_consolidation,
             "check_system_health": system_tools.tool_check_system_health,
+            "import_mcp_config": mcp_tools.tool_import_mcp_config,
+            # Phase 52: Node Tools
+            "run_node": node_tools.run_node,
+            "run_npm": node_tools.run_npm,
+            # Phase 53: Admin Tools
+            "unlock_session": admin_tools.unlock_session,
+            "set_policy": admin_tools.set_policy,
+            "check_admin_status": admin_tools.check_admin_status,
+            # Registry Tools
+            "registry_list": registry_tools.tool_registry_list,
+            "registry_read": registry_tools.tool_registry_read,
+            "registry_append": registry_tools.tool_registry_append,
+            "registry_write": registry_tools.tool_registry_write,
         }
 
     def _init_tool_definitions(self) -> List[Dict[str, Any]]:
@@ -206,6 +226,75 @@ class ToolExecutor:
                     }
                 }
             },
+            # Phase 52: Node Tools
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_node",
+                    "description": "Execute JavaScript code using the Node.js runtime. Useful for web scraping, data processing, or testing JS/TS logic.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string", "description": "The JavaScript code to execute."},
+                            "dependency_check": {"type": "boolean", "description": "Check for basic dependencies (default True)."}
+                        },
+                        "required": ["code"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_npm",
+                    "description": "Run NPM commands (install, init, etc) in the current workspace.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "string", "description": "The NPM command args (e.g. 'install axios'). Do not include 'npm' prefix."}
+                        },
+                        "required": ["command"]
+                    }
+                }
+            },
+            # Phase 53: Admin Tools
+            {
+                "type": "function",
+                "function": {
+                    "name": "unlock_session",
+                    "description": "Unlock 'God Mode' for the current session. Requires password ('lloovies').",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "password": {"type": "string", "description": "The secret passphrase."}
+                        },
+                        "required": ["password"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_policy",
+                    "description": "Override ANY system policy (e.g. 'internet', 'safety', 'limits'). Requires active session unlock OR password.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "policy": {"type": "string", "description": "Name of policy (e.g. 'internet', 'safety', 'limits')."},
+                            "value": {"type": "string", "description": "New value (e.g. 'true', 'infinity')."},
+                            "password": {"type": "string", "description": "Optional: override password if session not unlocked."}
+                        },
+                        "required": ["policy", "value"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "check_admin_status",
+                    "description": "Check the current admin override status and internet policy.",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            },
             {
                 "type": "function",
                 "function": {
@@ -250,6 +339,20 @@ class ToolExecutor:
                     "description": "Check the health status of the entire Orchestrator (Router, Agent, Circuit Breakers). Use this if the user asks about 'system status', 'health', or 'breakers'.",
                     "parameters": {"type": "object", "properties": {}},
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "import_mcp_config",
+                    "description": "Smartly import MCP server configurations from raw text or JSON. Use this when the user pastes a config or asks to 'install this server'.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "raw_text": {"type": "string", "description": "The raw text, JSON, or URL snippet provided by the user."}
+                        },
+                        "required": ["raw_text"]
+                    }
+                }
             }
         ]
 
@@ -287,6 +390,19 @@ class ToolExecutor:
                     logger.info(f"Discovered {len(defs)} tools from MCP server '{server_name}'")
             except Exception as e:
                 logger.warning(f"Failed discovery for {server_name}: {e}")
+                # [Fix] Notify user via Unified Tracking
+                try:
+                    from common.unified_tracking import track_mcp_event, EventSeverity
+                    track_mcp_event(
+                        event="mcp_discovery_failed",
+                        server=server_name,
+                        message=f"Failed to discover tools: {e}",
+                        severity=EventSeverity.HIGH, # High severity triggers notification
+                        error=e,
+                        component="executor"
+                    )
+                except ImportError:
+                    pass
         
         menu_lines = []
         core_servers = {"project-memory", "time", "weather", "thinking", "system-control"}
@@ -297,14 +413,20 @@ class ToolExecutor:
             if srv in core_servers:
                 continue
             
-            t_names = [t["function"]["name"] for t in tools[:8]]
-            if len(tools) > 8:
-                t_names.append("...")
-            line = f"{srv}: {', '.join(t_names)}"
+            # Improve Menu: Include first tool description for context
+            desc = ""
+            if tools:
+                desc = tools[0]["function"].get("description", "")[:60] + "..."
+            
+            t_names = [t["function"]["name"] for t in tools[:5]]
+            line = f"- Server '{srv}': {desc}\n  Tools: {', '.join(t_names)}"
             menu_lines.append(line)
         
-        if not self.tool_menu_summary:
+        if menu_lines:
+            self.tool_menu_summary = "\n".join(menu_lines)
+        else:
             self.tool_menu_summary = "(No external tools available)"
+            
         logger.info(f"Generated Maître d' Menu: {self.tool_menu_summary}")
         
         # [FEATURE REQUEST]: Formally track all functions.
@@ -335,8 +457,11 @@ class ToolExecutor:
             last_user_msg = next((m for m in reversed(messages) if m.get("role") == "user"), None)
             if last_user_msg:
                 from agent_runner.intent import classify_search_intent
-                intent = await classify_search_intent(str(last_user_msg.get("content", "")), self.state, self.tool_menu_summary)
-                target_servers = set(intent.get("target_servers", []))
+                intent_res = await classify_search_intent(str(last_user_msg.get("content", "")), self.state, self.tool_menu_summary)
+                target_servers = set(intent_res.get("target_servers", []))
+        else:
+            # BROAD DISCOVERY: If no messages, expose EVERYTHING (for external MCP clients/Cursor)
+            target_servers = set(self.mcp_tool_cache.keys())
                 
         for server_name, server_tools in self.mcp_tool_cache.items():
             server_cfg = self.state.mcp_servers.get(server_name, {})
@@ -399,6 +524,8 @@ class ToolExecutor:
 
                     return result
                 except Exception as e:
+                    import traceback
+                    logger.error(f"MCP PROXY CRASH: {traceback.format_exc()}")
                     track_event(
                         event="mcp_proxy_error",
                         message=f"MCP tool failed: {server}::{tool}",
@@ -444,6 +571,8 @@ class ToolExecutor:
             )
             return {"ok": True, "result": result}
         except Exception as e:
+            import traceback
+            logger.error(f"LOCAL TOOL CRASH ({name}): {traceback.format_exc()}")
             track_event(
                 event="tool_error",
                 message=f"Local tool failed: {name}",

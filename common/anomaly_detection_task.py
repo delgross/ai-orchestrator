@@ -72,6 +72,50 @@ async def run_anomaly_detection(
                                 f"Anomaly detected: {anomaly.metric_name} = {anomaly.current_value} "
                                 f"(baseline: {anomaly.baseline_value}, deviation: {anomaly.deviation:.2f}σ)"
                             )
+
+            # --- SQUEAKY WHEEL: Stuck Circuit Breaker Check ---
+            try:
+                # We attempt to load the local process state (Router or Agent)
+                # This works if we are running inside the Router process
+                from router.config import state as router_state
+                from common.circuit_breaker import CircuitState
+                import time
+                
+                for name, breaker in router_state.circuit_breakers.breakers.items():
+                    if breaker.state == CircuitState.OPEN:
+                        # If it has been failing for > 5 minutes (300s)
+                        # We use 'last_failure_time' which updates on every probe failure
+                        duration_open = time.time() - breaker.last_failure_time
+                        
+                        # However, last_failure_time resets on probe. 
+                        # We want 'time since it FIRST opened'. 
+                        # But breaker.disabled_until tells us when it *recovers*.
+                        # Actually, if it's OPEN, it means it is currently broken. 
+                        # If it is persistently OPEN, 'total_failures' keeps climbing.
+                        
+                        # Simple Logic: If it is OPEN, Alert every 30 seconds.
+                        cb_key = f"cb_stuck:{name}"
+                        now = time.time()
+                        if cb_key not in last_notification or (now - last_notification[cb_key]) > 30:
+                            logger.error(f"SQUEAKY WHEEL: Circuit '{name}' is STUCK OPEN.")
+                            
+                            # Send Toast
+                            try:
+                                from common.notifications import get_notification_manager, NotificationLevel
+                                notifier = get_notification_manager()
+                                notifier.notify(
+                                    level=NotificationLevel.CRITICAL,
+                                    title="System Functionality Limited",
+                                    message=f"The '{name}' service has been unreachable for an extended period.",
+                                    category="health",
+                                    source="circuit_breaker_monitor"
+                                )
+                                last_notification[cb_key] = now
+                            except Exception:
+                                pass
+            except ImportError:
+                pass 
+            # --------------------------------------------------
             
             # Wait before next check
             await asyncio.sleep(check_interval)

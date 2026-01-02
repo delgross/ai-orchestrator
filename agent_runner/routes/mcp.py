@@ -137,13 +137,21 @@ async def toggle_mcp_endpoint(name: str = Body(..., embed=True), enabled: bool =
         
     return {"ok": True, "message": f"Server {name} {'enabled' if enabled else 'disabled'}"}
 
+@router.post("/admin/mcp/upload-config-json")
+async def upload_mcp_config_json(payload: Dict[str, Any] = Body(...)):
+    """JSON-only version of upload-config for easier proxying."""
+    raw_text = payload.get("raw_text")
+    if not raw_text:
+        raise HTTPException(400, "Missing 'raw_text' in JSON body")
+        
+    return await _process_mcp_content(raw_text)
+
 @router.post("/admin/mcp/upload-config")
 async def upload_mcp_config(
     file: UploadFile = File(None),
     raw_text: str = Form(None)
 ):
     """LLM-powered endpoint to parse and add MCP servers from raw text/files."""
-    state = get_shared_state()
     content = ""
     if file:
         content = (await file.read()).decode("utf-8")
@@ -152,6 +160,10 @@ async def upload_mcp_config(
     else:
         raise HTTPException(status_code=400, detail="No file or text provided")
 
+    return await _process_mcp_content(content)
+
+async def _process_mcp_content(content: str):
+    state = get_shared_state()
     # Parse with LLM
     from agent_runner.mcp_parser import parse_mcp_config_with_llm
     parsed_servers = await parse_mcp_config_with_llm(state, content)
@@ -189,10 +201,25 @@ async def get_all_mcp_tools(server: str = None):
     # Return all
     state = get_shared_state()
     # Simple summary of all known servers and their enabled state
-    server_meta = {
-        name: {"enabled": cfg.get("enabled", True), "type": cfg.get("type", "stdio")} 
-        for name, cfg in state.mcp_servers.items()
-    }
+    server_meta = {}
+    for name, cfg in state.mcp_servers.items():
+        # Get circuit status
+        cb = state.mcp_circuit_breaker.get_breaker(name)
+        status = "healthy"
+        error_msg = None
+        
+        if cb.state.value == "open":
+            status = "error"
+            error_msg = cb.last_error
+        elif cb.state.value == "half_open":
+            status = "recovering"
+            
+        server_meta[name] = {
+            "enabled": cfg.get("enabled", True), 
+            "type": cfg.get("type", "stdio"),
+            "status": status,
+            "error": error_msg
+        }
     
     return {"ok": True, "tools": cache, "servers": server_meta}
 

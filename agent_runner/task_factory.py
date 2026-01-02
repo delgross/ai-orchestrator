@@ -28,6 +28,7 @@ async def create_mcp_file_task(
     description: str = "",
     enabled: bool = True,
     idle_only: bool = False,
+    min_tempo: int = None,
 ) -> Callable:
     """
     Create a reusable task that:
@@ -83,10 +84,15 @@ async def create_mcp_file_task(
                 relevant_tools = None
             
             # Call agent loop with local model
+            # [PHASE 14] Bypass Maître d' for local/periodic tasks to save budget
+            is_local = local_model.startswith(("ollama:", "local:", "test:"))
+            should_skip_refinement = is_local
+            
             await _agent_loop(
                 user_messages=[{"role": "user", "content": prompt}],
                 model=local_model,
-                tools=relevant_tools
+                tools=relevant_tools,
+                skip_refinement=should_skip_refinement
             )
             
             logger.info(f"{name} task completed successfully")
@@ -112,6 +118,7 @@ def register_mcp_file_task(
     description: Optional[str] = None,
     enabled: bool = True,
     idle_only: bool = False,
+    min_tempo: int = None,
 ) -> None:
     """
     Create and register a task in one call.
@@ -129,6 +136,7 @@ def register_mcp_file_task(
         description=description or f"Update {output_file} using {mcp_server} MCP server",
         enabled=enabled,
         idle_only=idle_only,
+        min_tempo=min_tempo,
     )
     
     task_manager.register(
@@ -140,6 +148,7 @@ def register_mcp_file_task(
         priority=priority,
         description=description or f"Update {output_file} using {mcp_server} MCP server",
         estimated_duration=10.0,
+        min_tempo=min_tempo,
     )
 
 

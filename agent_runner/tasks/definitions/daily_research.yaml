@@ -1,7 +1,7 @@
 name: daily_research
 type: agent
 enabled: true
-schedule: "86400" # Every 24 hours
+schedule: "*/24 hours" # Daily # Every 24 hours
 priority: low
 idle_only: true
 prompt: |

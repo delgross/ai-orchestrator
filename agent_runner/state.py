@@ -5,31 +5,88 @@ import httpx
 from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
+from common.circuit_breaker import CircuitBreakerRegistry
 
 # Load env from project root
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+from enum import Enum, auto
+import logging
+
+logger = logging.getLogger("agent_state")
+
+class Tempo(Enum):
+    FOCUSED = auto()    # User present (< 60s idle)
+    ALERT = auto()      # User just left (< 5m idle)
+    REFLECTIVE = auto() # Active Research (< 30m idle)
+    DEEP = auto()       # Maintenance (> 30m idle)
+
+
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, List
+
+@dataclass
+class ClientSession:
+    client_id: str
+    name: str              # Friendly name (e.g. "Debug Console")
+    capabilities: List[str]# ["logs", "terminal", "webview"]
+    priority: int          # 0=Observer, 1=Standard, 2=Primary
+    first_seen: float
+    last_seen: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 class AgentState:
     def __init__(self):
-        # Configuration
-        # Configuration
+        # Init Circuit Breakers (Safety System)
+        self.mcp_circuit_breaker = CircuitBreakerRegistry()
+        
+        # Client Registry (Orchestration)
+        self.clients: Dict[str, ClientSession] = {}
+        self.active_client_id: Optional[str] = None
+        
+        
         # Configuration
         self.gateway_base = os.getenv("GATEWAY_BASE", "http://127.0.0.1:5455").rstrip("/")
+        
+        # --- 1. THE CORE ROLES ---
         self.agent_model = os.getenv("AGENT_MODEL", "openai:gpt-4o-mini")
-        self.task_model = os.getenv("TASK_MODEL", "ollama:mistral:latest")
-        self.vision_model = os.getenv("VISION_MODEL", "openai:gpt-4o") # Default to high-quality vision, can be overridden
-        self.mcp_model = os.getenv("MCP_MODEL", "openai:gpt-4o-mini") # Missing generic tool model
         self.router_model = os.getenv("ROUTER_MODEL", "ollama:mistral:latest")
-        self.finalizer_model = os.getenv("FINALIZER_MODEL", "openai:gpt-5.2") # User requested High-End model
-        self.finalizer_enabled = os.getenv("FINALIZER_ENABLED", "true").lower() == "true"
-        self.router_enabled = os.getenv("ROUTER_ENABLED", "true").lower() == "true"
+        self.task_model = os.getenv("TASK_MODEL", "ollama:mistral:latest")
         self.summarization_model = os.getenv("SUMMARIZATION_MODEL", "openai:gpt-4o")
+
+        # --- 2. THE UNVEILED (Previously Hidden) ---
+        self.vision_model = os.getenv("VISION_MODEL", "openai:gpt-4o") 
+        self.mcp_model = os.getenv("MCP_MODEL", "openai:gpt-4o-mini")
+        self.finalizer_model = os.getenv("FINALIZER_MODEL", "openai:gpt-4o")
         self.fallback_model = os.getenv("FALLBACK_MODEL", "ollama:mistral:latest")
-        self.fallback_enabled = os.getenv("FALLBACK_ENABLED", "true").lower() == "true"
+
+        # --- 3. THE NEW INTELLIGENCES (Enhancements) ---
+        self.intent_model = os.getenv("INTENT_MODEL", "ollama:mistral:latest") # Maître d'
+        self.pruner_model = os.getenv("PRUNER_MODEL", "ollama:mistral:latest") # Context Surgeon
+        self.healer_model = os.getenv("HEALER_MODEL", "openai:gpt-4o") # System Repair
+        self.critic_model = os.getenv("CRITIC_MODEL", "openai:gpt-4o") # Safety Validator
+
+        # --- 4. THE UNIFIED FOUNDATION ---
+        # Single Source of Truth for Vectors. RAG/Memory servers must respect this.
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "ollama:mxbai-embed-large:latest")
         
-        self.agent_fs_root = os.getenv("FS_ROOT", os.path.expanduser("~/ai/agent_fs_root"))
+        # Flags
+        self.finalizer_enabled = os.getenv("FINALIZER_ENABLED", "true").lower() == "true"
+        self.router_enabled = os.getenv("ROUTER_ENABLED", "true").lower() == "true"
+        self.fallback_enabled = os.getenv("FALLBACK_ENABLED", "true").lower() == "true"
+        
+        # Path Resolution (Canonical)
+        # 1. FS_ROOT env var (highest priority)
+        # 2. ~/ai/agent_fs_root (fallback)
+        env_fs_root = os.getenv("FS_ROOT")
+        if env_fs_root:
+            self.agent_fs_root = Path(env_fs_root).resolve()
+        else:
+             self.agent_fs_root = Path(os.path.expanduser("~/ai/agent_fs_root")).resolve()
+             
+        # Ensure it exists
+        self.agent_fs_root.mkdir(parents=True, exist_ok=True)
+        
         self.max_read_bytes = int(os.getenv("AGENT_MAX_READ_BYTES", "50_000_000"))
         self.max_list_entries = int(os.getenv("AGENT_MAX_LIST_ENTRIES", "5000"))
         self.max_tool_steps = int(os.getenv("AGENT_MAX_TOOL_STEPS", "20"))
@@ -126,6 +183,8 @@ class AgentState:
 
         # Dashboard & Metrics
         self.internet_available = True
+        self.internet_policy_enabled = True # User-defined policy
+        self.admin_override_active = False # Session-based override (Sudo)
         self.last_internet_check = 0.0
         self.request_count = 0
         self.error_count = 0
@@ -137,9 +196,121 @@ class AgentState:
         # Idle State Tracking
         self.active_requests = 0
         self.last_interaction_time = 0.0
+        self.is_initialized = False
         
+    async def initialize(self):
+        """Entry point for shared state initialization."""
+        if self.is_initialized:
+            return
+            
+        from agent_runner.memory_server import MemoryServer
+        # Initialize Memory Server Schema
+        self.memory = MemoryServer(self) # Ensure instance exists
+        await self.memory.initialize()
+        
+        self.is_initialized = True
+        logger.info("AgentState initialized.")
+
+        # [PHASE 46] Initialize Config Manager
+        from agent_runner.config_manager import ConfigManager
+        self.config_manager = ConfigManager(self)
+
+        # [PHASE 45] Database-First Loading (Sovereignty)
+        await self._load_runtime_config_from_db()
+
+    async def _load_runtime_config_from_db(self):
+        """
+        Load configuration and secrets from Memory (SurrealDB) into Runtime (os.environ).
+        This enables 'Memory Sovereignty' - the system can boot without a .env file.
+        """
+        try:
+            # Query the config_state table
+            # We use the raw memory client we just initialized
+            query = "SELECT key, value FROM config_state"
+            results = await self.memory._execute_query(query)
+            
+            if not results:
+                logger.info("Database Config (config_state) is empty. Reliant on Disk/Env.")
+                return
+
+            count = 0
+            for item in results:
+                key = item.get("key")
+                val = item.get("value")
+                
+                if key and val:
+                    # 1. Update Environment (for libraries like openai, langchain)
+                    if key not in os.environ or os.environ[key] != val:
+                        os.environ[key] = str(val)
+                        count += 1
+                        
+                    # 2. Update Self Attributes (Runtime Refreshes)
+                    # This ensures that if the DB has a newer model pref, we use it.
+                    if key == "AGENT_MODEL": self.agent_model = val
+                    elif key == "ROUTER_MODEL": self.router_model = val
+                    elif key == "TASK_MODEL": self.task_model = val
+                    elif key == "VISION_MODEL": self.vision_model = val
+                    elif key == "EMBEDDING_MODEL": self.embedding_model = val
+            
+            if count > 0:
+                logger.info(f"Loaded {count} keys from Memory (Sovereign Config). Disk ignored for these values.")
+        except Exception as e:
+            logger.warning(f"Failed to load Runtime Config from DB: {e}")
+        
+    
+    
+
         # Location Awareness
         self.location: Dict[str, Any] = {} # Populated by main.py on startup
+
+    def is_local_model(self, model_name: str) -> bool:
+        """Check if a model is hosted locally (e.g. Ollama, Test) and safe for offline use."""
+        if not model_name:
+            return False
+        # Centralized safety check
+        # We could load this from config, but these prefixes are standard for our architecture.
+        return model_name.startswith(("ollama:", "local:", "test:"))
+
+
+    def get_current_tempo(self) -> "Tempo":
+        """
+        Determine the system's operational tempo based on macOS system idle time.
+        Returns a Tempo enum (FOCUSED, ALERT, REFLECTIVE, DEEP).
+        """
+        if self.active_requests > 0:
+            return Tempo.FOCUSED
+        
+        # Get System Idle Time via ioreg (nanoseconds -> seconds)
+        idle_seconds = 0.0
+        try:
+            import subprocess
+            # ioreg -c IOHIDSystem | awk '/HIDIdleTime/ {print $NF/1000000000; exit}'
+            cmd = ["ioreg", "-c", "IOHIDSystem"]
+            # We run this synchronously because it's fast (<20ms) and critical for decision making
+            # but ideally should be cached or async. For now, subprocess.run is safe enough for a property-like check.
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            for line in result.stdout.splitlines():
+                if "HIDIdleTime" in line:
+                    # Line format: "HIDIdleTime" = 123456789
+                    parts = line.split("=")
+                    if len(parts) > 1:
+                        nanos = int(parts[1].strip())
+                        idle_seconds = nanos / 1_000_000_000.0
+                        break
+        except Exception:
+            # Fallback to internal interaction time if OS check fails
+            idle_seconds = time.time() - (self.last_interaction_time or time.time())
+
+        # Logic
+        if idle_seconds < 60:
+            return Tempo.FOCUSED # User is actively typing/mousing
+        elif idle_seconds < 300: # < 5 mins
+            return Tempo.ALERT
+        elif idle_seconds < 1800: # < 30 mins
+            return Tempo.REFLECTIVE
+        else:
+            return Tempo.DEEP
+
 
     async def get_http_client(self) -> httpx.AsyncClient:
         if self.http_client is None:
@@ -168,24 +339,13 @@ class AgentState:
         # 1. Update In-Memory State
         self.mcp_servers[name] = config
         
-        # 2. Persist to config.yaml (so it survives restart)
-        try:
-            import yaml
-            config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-            if config_path.exists():
-                with open(config_path, "r") as f:
-                    data = yaml.safe_load(f) or {}
-                
-                if "mcp_servers" not in data:
-                    data["mcp_servers"] = {}
-                
-                # Normalize command/args for storage if needed, but usually we store as is
-                data["mcp_servers"][name] = config
-                
-                with open(config_path, "w") as f:
-                    yaml.dump(data, f, default_flow_style=False)
-        except Exception as e:
-            print(f"Failed to persist MCP server '{name}': {e}")
+        # 2. Persist to Sovereign Memory + Disk (via ConfigManager)
+        if hasattr(self, "config_manager"):
+            await self.config_manager.save_mcp_config(self.mcp_servers)
+            # Also update DB row specifically
+            await self.config_manager.update_mcp_server(name, config)
+        else:
+            logger.warning("ConfigManager not ready, changes transient.")
 
         # 3. If it's a STDIO server, try to warm it up immediately (Optional but good for feedback)
         if config.get("type") == "stdio":
@@ -219,21 +379,13 @@ class AgentState:
         # 2. Update In-Memory State
         del self.mcp_servers[name]
         
-        # 3. Persist to mcp.yaml
-        try:
-            import yaml
-            config_path = Path(__file__).parent.parent / "config" / "mcp.yaml"
-            if config_path.exists():
-                with open(config_path, "r") as f:
-                    data = yaml.safe_load(f) or {}
-                
-                if "mcp_servers" in data and name in data["mcp_servers"]:
-                    del data["mcp_servers"][name]
-                    
-                    with open(config_path, "w") as f:
-                        yaml.dump(data, f, default_flow_style=False)
-        except Exception as e:
-            logger.error(f"Failed to persist MCP removal '{name}': {e}")
+        # 3. Persist to Sovereign Memory + Disk
+        if hasattr(self, "config_manager"):
+            await self.config_manager.save_mcp_config(self.mcp_servers)
+            # Delete from DB
+            await self.config_manager.memory._execute_query(f"DELETE FROM mcp_server WHERE name = '{name}'")
+        else:
+             logger.error("ConfigManager not ready for MCP removal.")
             
         return True
 
@@ -264,21 +416,16 @@ class AgentState:
             # Also clear from tool cache via Engine (but State doesn't have engine ref directly easily)
             # We will handle cache clearing in the Route handler.
 
-        # 3. Persist to mcp.yaml
-        try:
-            import yaml
-            config_path = Path(__file__).parent.parent / "config" / "mcp.yaml"
-            if config_path.exists():
-                with open(config_path, "r") as f:
-                    data = yaml.safe_load(f) or {}
-                
-                if "mcp_servers" in data and name in data["mcp_servers"]:
-                    data["mcp_servers"][name]["enabled"] = enabled
-                    
-                    with open(config_path, "w") as f:
-                        yaml.dump(data, f, default_flow_style=False)
-        except Exception as e:
-            print(f"Failed to persist MCP toggle '{name}': {e}")
+        # 3. Persist to Sovereign Memory + Disk
+        if hasattr(self, "config_manager"):
+            await self.config_manager.save_mcp_config(self.mcp_servers)
+            
+            # DB Update: Retrieve current config + update
+            # Doing full upsert is safest
+            cfg = self.mcp_servers[name]
+            await self.config_manager.update_mcp_server(name, cfg)
+        else:
+             print(f"ConfigManager not ready for MCP toggle '{name}'")
             
         return True
 

@@ -23,6 +23,98 @@ async def health_check():
         "uptime_s": time.time() - state.started_at
     }
 
+@router.get("/admin/ingestion/status")
+async def get_ingestion_status():
+    """Return status of the RAG ingestion pipeline."""
+    from agent_runner.rag_ingestor import INGEST_DIR
+    pause_file = INGEST_DIR / ".paused"
+    is_paused = pause_file.exists()
+    reason = ""
+    if is_paused:
+        try:
+            reason = pause_file.read_text().strip()
+        except:
+            reason = "Manual Pause"
+            
+    return {
+        "ok": True,
+        "paused": is_paused,
+        "reason": reason,
+        "ingest_dir": str(INGEST_DIR)
+    }
+
+@router.post("/admin/ingestion/resume")
+async def resume_ingestion():
+    """Resume a paused ingestion pipeline."""
+    from agent_runner.rag_ingestor import INGEST_DIR
+    pause_file = INGEST_DIR / ".paused"
+    if pause_file.exists():
+        try:
+            pause_file.unlink()
+            logger.info("Ingestion resumed by user request.")
+            return {"ok": True, "message": "Ingestion resumed"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": True, "message": "Ingestion was not paused"}
+
+@router.post("/admin/ingestion/pause")
+async def pause_ingestion():
+    """Manually pause the ingestion pipeline."""
+    from agent_runner.rag_ingestor import INGEST_DIR
+    pause_file = INGEST_DIR / ".paused"
+    try:
+        pause_file.write_text("Manual Pause")
+        logger.info("Ingestion paused by user request.")
+        return {"ok": True, "message": "Ingestion paused"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@router.post("/admin/ingestion/clear-and-resume")
+async def clear_and_resume_ingestion():
+    """Delete the problem file that caused the pause and resume."""
+    from agent_runner.rag_ingestor import INGEST_DIR
+    pause_file = INGEST_DIR / ".paused"
+    if not pause_file.exists():
+        return {"ok": False, "message": "Not paused"}
+    
+    try:
+        reason = pause_file.read_text().strip()
+        # Extract filename: "Quality Check Failed: filename.ext - ..."
+        import re
+        match = re.search(r"Failed: (.*?) -", reason)
+        if match:
+            filename = match.group(1)
+            file_path = INGEST_DIR / filename
+            if file_path.exists():
+                file_path.unlink()
+                logger.info(f"Deleted problem file: {filename}")
+        
+        pause_file.unlink()
+        return {"ok": True, "message": "Problem file cleared and ingestion resumed"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@router.get("/admin/memory/status")
+async def get_memory_status():
+    """Detailed status of the Memory Engine (SurrealDB)."""
+    state = get_shared_state()
+    # Check SurrealDB health
+    import aiohttp
+    db_ok = False
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get("http://localhost:8000/health", timeout=1.0) as resp:
+                db_ok = resp.status == 200
+    except:
+        db_ok = False
+        
+    return {
+        "ok": True,
+        "active": db_ok,
+        "engine": "SurrealDB",
+        "mode": "Transactional (HNSW Enabled)" if db_ok else "Offline"
+    }
+
 @router.get("/admin/health/detailed")
 async def health_check_detailed():
     """Return a comprehensive health report including topology."""
@@ -106,21 +198,22 @@ async def system_status():
 async def update_models(config: Dict[str, str] = Body(...)):
     """Update system models dynamically."""
     state = get_shared_state()
-    if "summarization_model" in config: state.summarization_model = config["summarization_model"]
-    if "agent_model" in config: state.agent_model = config["agent_model"]
-    if "task_model" in config: state.task_model = config["task_model"]
-    if "router_model" in config: state.router_model = config["router_model"]
+    model_keys = [
+        "agent_model", "router_model", "task_model", "summarization_model",
+        "vision_model", "mcp_model", "finalizer_model", "fallback_model",
+        "intent_model", "pruner_model", "healer_model", "critic_model",
+        "embedding_model"
+    ]
+    
+    for key in model_keys:
+        if key in config:
+            setattr(state, key, config[key])
 
     save_system_config(state)
-    return {
-        "ok": True, 
-        "models": {
-            "summarization_model": state.summarization_model,
-            "agent_model": state.agent_model,
-            "task_model": state.task_model,
-            "router_model": state.router_model
-        }
-    }
+    
+    # Return current state of all models
+    current_models = {k: getattr(state, k) for k in model_keys}
+    return {"ok": True, "models": current_models}
 
 def save_system_config(state):
     """Save current state to system_config.json for persistence."""
@@ -133,15 +226,21 @@ def save_system_config(state):
             with open(config_path, "r") as f:
                 cfg = json.load(f)
         
+        # Update all 12 Roles
         cfg.update({
             "agent_model": state.agent_model,
-            "summarization_model": state.summarization_model,
-            "task_model": state.task_model,
             "router_model": state.router_model,
+            "task_model": state.task_model,
+            "summarization_model": state.summarization_model,
+            "vision_model": state.vision_model,
             "mcp_model": state.mcp_model,
             "finalizer_model": state.finalizer_model,
-            "embedding_model": state.embedding_model,
-            "vision_model": state.vision_model
+            "fallback_model": state.fallback_model,
+            "intent_model": state.intent_model,
+            "pruner_model": state.pruner_model,
+            "healer_model": state.healer_model,
+            "critic_model": state.critic_model,
+            "embedding_model": state.embedding_model
         })
 
         with open(config_path, "w") as f:
@@ -285,32 +384,66 @@ async def track_dashboard_interaction(body: Dict[str, Any]):
 @router.get("/admin/system/logs")
 async def get_logs_tail(lines: int = 100):
     """Return the last N lines of the agent runner log."""
-    log_file = "agent_runner.log"
+    log_file = "logs/agent_runner.log"
     if not Path(log_file).exists():
         return {"ok": False, "error": "Log file not found"}
     
     try:
-        import subprocess
-        res = subprocess.check_output(["tail", "-n", str(lines), log_file]).decode("utf-8")
-        return {"ok": True, "logs": res}
+        from collections import deque
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            lines_list = list(deque(f, maxlen=lines))
+        return {"ok": True, "logs": [l.rstrip() for l in lines_list]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+import asyncio
+# from sse_starlette.sse import EventSourceResponse (Removed to avoid dependency)
 
 @router.get("/admin/llm/roles")
 async def get_llm_roles():
     state = get_shared_state()
+    # Attempt to load defaults from config.yaml for comparison
+    defaults = {
+         "agent_model": "openai:gpt-4o-mini",
+         "task_model": "ollama:mistral:latest", 
+         "router_model": "ollama:mistral:latest",
+         "summarization_model": "openai:gpt-4o",
+         "vision_model": "openai:gpt-4o",
+         "mcp_model": "openai:gpt-4o-mini",
+         "finalizer_model": "openai:gpt-4o",
+         "fallback_model": "ollama:mistral:latest",
+         "intent_model": "ollama:mistral:latest",
+         "pruner_model": "ollama:mistral:latest",
+         "healer_model": "openai:gpt-4o",
+         "critic_model": "openai:gpt-4o",
+         "embedding_model": "ollama:mxbai-embed-large:latest"
+    }
+    try:
+        import yaml
+        with open("ai/config/config.yaml", "r") as f:
+            cfg = yaml.safe_load(f)
+            defaults.update(cfg.get("llm_roles", {}))
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "roles": {
             "agent_model": state.agent_model,
+            "router_model": state.router_model,
             "task_model": state.task_model,
             "summarization_model": state.summarization_model,
-            "router_model": state.router_model,
+            "vision_model": state.vision_model,
             "mcp_model": state.mcp_model,
             "finalizer_model": state.finalizer_model,
-            "embedding_model": state.embedding_model,
-            "vision_model": state.vision_model
-        }
+            "fallback_model": state.fallback_model,
+            "intent_model": state.intent_model,
+            "pruner_model": state.pruner_model,
+            "healer_model": state.healer_model,
+            "critic_model": state.critic_model,
+            "embedding_model": state.embedding_model
+        },
+        "defaults": defaults
     }
 
 @router.post("/admin/llm/roles")
@@ -343,3 +476,93 @@ async def stop_process():
     asyncio.create_task(_exit())
     logger.warning("Agent Runner process termination requested.")
     return {"ok": True, "message": "Agent Runner stopping in 1s..."}
+
+@router.get("/admin/mcp/server/status")
+async def get_mcp_server_status():
+    """Get status of the internal MCP Server (SSE)."""
+    from agent_runner.mcp_server.router import transport
+    
+    active_sessions = []
+    if transport:
+        for sid, session in transport.sessions.items():
+            if session.active:
+                active_sessions.append({
+                    "id": sid,
+                    "name": session.client_name,
+                    "client_info": session.client_info
+                })
+            
+    return {
+        "active": True, # Always active if runner is up
+        "port": 5460, # Standard Agent Port
+        "protocol": "sse",
+        "clients": active_sessions
+    }
+
+@router.get("/admin/logs/stream")
+async def stream_logs(request: Request, services: str = "agent_runner"):
+    """
+    Stream logs via SSE using native StreamingResponse.
+    Tail relevant log files and emit lines as they are written.
+    """
+    import os
+    from fastapi.responses import StreamingResponse
+    import json
+    import asyncio
+    
+    async def event_generator():
+        files_map = {
+            "agent_runner": "agent_runner.log",
+            "router": "router.log"
+        }
+        
+        target_files = []
+        for svc in services.split(","):
+            if svc in files_map:
+                try:
+                    target_files.append((svc, open(files_map[svc], "r")))
+                except FileNotFoundError:
+                    pass
+        
+        # Seek to end
+        for _, f in target_files:
+            f.seek(0, os.SEEK_END)
+            
+        while True:
+            if await request.is_disconnected():
+                break
+                
+            has_data = False
+            for svc, f in target_files:
+                line = f.readline()
+                if line:
+                    yield f"data: {json.dumps({'service': svc, 'line': line.strip()})}\n\n"
+                    has_data = True
+            
+            if not has_data:
+                await asyncio.sleep(0.5)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@router.post("/admin/system/restart")
+async def restart_system_endpoint():
+    """Trigger a full system restart script."""
+    import asyncio
+    import os
+    from agent_runner.config import PROJECT_ROOT
+    
+    script_path = f"{PROJECT_ROOT}/bin/restart_all.sh"
+    
+    # Check if script exists
+    if not os.path.exists(script_path):
+        # Fallback to just failing/stopping (Supervisor should restart)
+        return await stop_process()
+        
+    try:
+        # Spawn detached
+        import subprocess
+        subprocess.Popen([script_path], cwd=os.path.dirname(script_path), start_new_session=True)
+        return {"ok": True, "message": "System restart triggered"}
+    except Exception as e:
+         logger.error(f"Failed to trigger restart: {e}")
+         return {"ok": False, "error": str(e)}

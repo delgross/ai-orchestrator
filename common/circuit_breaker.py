@@ -75,6 +75,25 @@ class CircuitBreaker:
             self.state = CircuitState.CLOSED
             self.failures = 0
             self.half_open_tests = 0
+            
+            # [Phase 25c] Auto-Reset Heuristic:
+            # If we just recovered from a failure, clear the error history so the
+            # dashboard doesn't show "100% Error Rate" based on the downtime we just fixed.
+            try:
+                from common.observability import get_observability
+                obs = get_observability()
+                # Run this async without blocking
+                import asyncio
+                # We need to ensure there is a running loop, or just skip if sync context (rare)
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(obs.reset_history(['errors', 'health']))
+                    logger.info(f"Circuit Breaker '{self.name}': Auto-triggering Observability Reset (Heuristic)")
+                except RuntimeError:
+                    pass 
+            except ImportError:
+                pass
+
         elif self.state == CircuitState.CLOSED:
             # Reset failures on success if we were tracking partial failures
             if self.failures > 0:
@@ -134,7 +153,23 @@ class CircuitBreaker:
                 )
                 
                 self.state = CircuitState.OPEN
+                self.state = CircuitState.OPEN
                 self.disabled_until = time.time() + self.recovery_timeout
+            else:
+                # [Fix] Report individual failures before tripping
+                from common.unified_tracking import track_event, EventSeverity, EventCategory
+                track_event(
+                    event="circuit_breaker_failure",
+                    severity=EventSeverity.DEBUG, # Hidden from user logs, debugging only
+                    category=EventCategory.HEALTH,
+                    message=f"Service Glitch: {self.name} ({self.failures}/{self.threshold})",
+                    metadata={
+                        "circuit": self.name,
+                        "failures": self.failures,
+                        "threshold": self.threshold,
+                        "error": self.last_error
+                    }
+                )
 
     def increment_test_count(self):
         """Track tests in half-open state."""

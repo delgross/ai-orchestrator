@@ -1,0 +1,14 @@
+Starting check...
+{
+  "ok": true,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"ok\": true, \"facts\": []}"
+      }
+    ],
+    "isError": false
+  },
+  "id": 1767242352371
+}

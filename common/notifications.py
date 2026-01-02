@@ -272,38 +272,38 @@ class NotificationManager:
                 # Ideally this should be async, but this method internal is sync currently.
                 # In a full async loop we'd use create_task.
                 try:
-                    # Quick synchronous hack or better: fire task if loop running
+                    # Clean async dispatch logic
                     try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            async def _async_post():
-                                try:
-                                    async with httpx.AsyncClient(timeout=5.0) as client:
-                                        resp = await client.post(self.webhook_url, json=payload)
-                                        if resp.status_code >= 400:
-                                             self.webhook_circuit.record_failure(weight=1, error=f"HTTP {resp.status_code}")
-                                        else:
-                                             self.webhook_circuit.record_success()
-                                except Exception as e:
-                                    self.webhook_circuit.record_failure(weight=1, error=e)
-                                    logger.warning(f"Failed to send webhook (async): {e}")
+                        loop = asyncio.get_running_loop()
+                        # Running in an event loop: Use async client in a background task
+                        async def _async_post():
+                            try:
+                                async with httpx.AsyncClient(timeout=5.0) as client:
+                                    resp = await client.post(self.webhook_url, json=payload)
+                                    if resp.status_code >= 400:
+                                         self.webhook_circuit.record_failure(weight=1, error=f"HTTP {resp.status_code}")
+                                    else:
+                                         self.webhook_circuit.record_success()
+                            except Exception as e:
+                                self.webhook_circuit.record_failure(weight=1, error=e)
+                                logger.warning(f"Failed to send webhook (async): {e}")
 
-                            loop.create_task(_async_post())
-                        else:
-                            # Fallback for sync contexts
-                            resp = httpx.post(self.webhook_url, json=payload, timeout=5.0)
-                            if resp.status_code >= 400:
-                                self.webhook_circuit.record_failure(weight=1, error=f"HTTP {resp.status_code}")
-                            else:
-                                self.webhook_circuit.record_success()
-
+                        loop.create_task(_async_post())
                     except RuntimeError:
-                         # No event loop
-                         resp = httpx.post(self.webhook_url, json=payload, timeout=5.0)
-                         if resp.status_code >= 400:
-                            self.webhook_circuit.record_failure(weight=1, error=f"HTTP {resp.status_code}")
-                         else:
-                            self.webhook_circuit.record_success()
+                         # No event loop running: Fallback to synchronous call
+                         try:
+                             resp = httpx.post(self.webhook_url, json=payload, timeout=5.0)
+                             if resp.status_code >= 400:
+                                self.webhook_circuit.record_failure(weight=1, error=f"HTTP {resp.status_code}")
+                             else:
+                                self.webhook_circuit.record_success()
+                         except Exception as e:
+                             self.webhook_circuit.record_failure(weight=1, error=e)
+                             logger.warning(f"Failed to send webhook (sync): {e}")
+
+                except Exception as e:
+                    self.webhook_circuit.record_failure(weight=1, error=e)
+                     # Fallthrough logging handled by outer block
 
                 except Exception as e:
                     self.webhook_circuit.record_failure(weight=1, error=e)

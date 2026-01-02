@@ -13,8 +13,9 @@ from common.unified_tracking import track_event, EventSeverity, EventCategory
 
 logger = logging.getLogger("agent_runner")
 
-async def tool_mcp_proxy(state: AgentState, server: str, tool: str, arguments: Dict[str, Any], bypass_circuit_breaker: bool = False) -> Dict[str, Any]:
+async def tool_mcp_proxy(state: AgentState, server: str, tool: str, arguments: Dict[str, Any] = None, bypass_circuit_breaker: bool = False) -> Dict[str, Any]:
     """Proxy a tool call to a configured MCP server."""
+    arguments = arguments or {}
     if not state.mcp_servers:
         return {"ok": False, "error": "No MCP servers configured"}
     cfg = state.mcp_servers.get(server)
@@ -133,6 +134,57 @@ async def tool_mcp_proxy(state: AgentState, server: str, tool: str, arguments: D
             return res
 
     except Exception as e:
-        logger.error(f"Execution error in tool_mcp_proxy for {server}::{tool}: {e}")
+        import traceback
+        logger.error(f"Execution error in tool_mcp_proxy for {server}::{tool}: {traceback.format_exc()}")
         state.mcp_circuit_breaker.record_failure(server, weight=2, error=e)
         return {"ok": False, "error": f"Transport error: {str(e)}"}
+
+async def tool_import_mcp_config(state: AgentState, raw_text: str) -> Dict[str, Any]:
+    """
+    Smartly parse and import MCP server configurations from raw text or JSON.
+    This uses an LLM to interpret the input (e.g. "Install the weather server using npx...") 
+    and updates the system configuration automatically.
+    """
+    try:
+        from agent_runner.mcp_parser import parse_mcp_config_with_llm
+        from agent_runner.config import load_mcp_servers
+        from agent_runner.config_manager import ConfigManager
+        
+        # 1. Parse
+        parsed_servers = await parse_mcp_config_with_llm(state, raw_text)
+        if not parsed_servers:
+            return {"ok": False, "error": "Could not identify any valid MCP server configurations in text."}
+        
+        # 2. Save using ConfigManager (Source of Truth)
+        manager = ConfigManager(state)
+        success = await manager.save_mcp_config(parsed_servers)
+        
+        if not success:
+            return {"ok": False, "error": "Failed to persist configuration to disk."}
+            
+        # 3. Reload System (Hot Reload)
+        # Use ServiceRegistry to break circular dependency and access the Engine instance
+        from agent_runner.registry import ServiceRegistry
+        
+        # Kill existing processes first
+        await state.cleanup_all_stdio_processes()
+        await load_mcp_servers(state)
+        
+        # Access engine via registry to trigger discovery
+        try:
+            engine = ServiceRegistry.get_engine()
+            await engine.discover_mcp_tools()
+            logger.info("[tool_import_mcp_config] Triggered MCP tool discovery on Engine.")
+        except RuntimeError:
+            logger.warning("[tool_import_mcp_config] Could not access AgentEngine from registry. Discovery skipped (requires manual reload).")
+        
+        return {
+            "ok": True, 
+            "message": f"Successfully imported {len(parsed_servers)} servers: {list(parsed_servers.keys())}. "
+                       "Configuration saved and system reloaded.",
+            "added": list(parsed_servers.keys())
+        }
+        
+    except Exception as e:
+        logger.error(f"Import failed: {e}")
+        return {"ok": False, "error": str(e)}

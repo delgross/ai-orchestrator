@@ -3,6 +3,7 @@ import logging
 import time
 from typing import Any, Dict, List
 import httpx
+import re
 
 logger = logging.getLogger("agent_runner.intent")
 
@@ -34,43 +35,83 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str)
         pass
 
     prompt = (
-        "You are the Tool Selector (The Maître d').\n"
+        "SYSTEM DIRECTIVE: YOU ARE A JSON GENERATOR. OUTPUT ONLY JSON. NO EXPLANATION.\n"
         f"User Query: '{query}'\n\n"
-        "Available Discretionary Tools (Menu):\n"
+        "Menu:\n"
         f"{tool_menu_summary}\n\n"
         f"{suggestions_str}"
-        "Task: Select the 'target_servers' from the menu that are required for this query.\n"
-        "Note: Core tools (Memory, Time, Thinking) are ALREADY loaded. Only select from the menu if needed.\n"
-        "Response Format: {\"target_servers\": [\"server1\"]}"
+        "Task: Return the list of servers required.\n"
+        "Constraint 1: Core tools (Time) are pre-loaded. Do NOT select them.\n"
+        "Constraint 2: IF the user refers to past conversations, specific facts, personal details, or implies context (e.g. 'it', 'that'), YOU MUST SELECT 'project-memory'.\n"
+        "Constraint 3: If 'fetch', 'browse', 'weather' are needed, select them.\n\n"
+        "Example Output:\n"
+        "{\"target_servers\": [\"tavily-search\"]}\n"
+        "{\"target_servers\": []}\n\n"
+        "YOUR RESPONSE (JSON ONLY):"
     )
 
     try:
+        # Circuit Breaker Check
+        model = state.intent_model
+        if not state.mcp_circuit_breaker.is_allowed(model):
+            logger.warning(f"Maître d' Short-Circuited: Model '{model}' is broken.")
+            return {"target_servers": []}
+
         # Helper for explicit fast call
-        async with httpx.AsyncClient() as client:
+        headers = {}
+        if getattr(state, "router_auth_token", None):
+            headers["Authorization"] = f"Bearer {state.router_auth_token}"
+
+        async with httpx.AsyncClient(headers=headers) as client:
             payload = {
-                "model": state.agent_model, # e.g. gpt-4o-mini
+                "model": model, 
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "response_format": {"type": "json_object"}
             }
             url = f"{state.gateway_base}/v1/chat/completions"
-            logger.info(f"Maître d' URL: {url}")
+            logger.info(f"Maître d' URL: {url} (Model: {model})")
+            
             r = await client.post(url, json=payload, timeout=25.0)
+            
             if r.status_code == 200:
                 try:
                     data = r.json()
                     content = data["choices"][0]["message"]["content"]
-                    return json.loads(content)
-                except json.JSONDecodeError:
+                    logger.info(f"Maître d' Decision: {content}")
+                    
+                    # Record Success
+                    state.mcp_circuit_breaker.record_success(model)
+                    
+                    # Robust JSON Extraction (Handle "Here is the JSON: {...}")
+                    try:
+                        # 1. Try pure JSON
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        # 2. Try Regex Extraction
+                        match = re.search(r"(\{.*\"target_servers\".*\})", content, re.DOTALL)
+                        if match:
+                            return json.loads(match.group(1))
+                        raise # Re-raise to trigger error handler below
+
+                except (json.JSONDecodeError, AttributeError):
                     logger.error(f"Maître d' JSON Error. Body: {r.text[:500]}")
+                    state.mcp_circuit_breaker.record_failure(model) # JSON error might mean model is outputting garbage
                     return {"target_servers": []}
+                    
             elif r.status_code == 429:
                 logger.warning("Maître d' Overloaded (429). Bypassing intent classification.")
-                return {"target_servers": []} # Fail Open
+                # We don't trip breaker for 429 usually, but could.
+                return {"target_servers": []} 
+            else:
+                 logger.warning(f"Maître d' HTTP {r.status_code}: {r.text}")
+                 state.mcp_circuit_breaker.record_failure(model)
+                 
     except Exception as e:
         logger.warning(f"Intent classification failed: {e}")
+        state.mcp_circuit_breaker.record_failure(state.intent_model)
     
-    # Safe Fallback: Return empty (Core tools will still be loaded by get_all_tools)
+    # Safe Fallback
     return {"target_servers": []}
 
 async def generate_search_query(messages: List[Dict[str, Any]], state: Any, call_gateway_fn: Any) -> str:

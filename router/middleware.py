@@ -54,3 +54,4 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             state.error_count += 1
             raise e
+

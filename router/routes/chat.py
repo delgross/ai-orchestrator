@@ -71,7 +71,8 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
             async def stream_wrapper():
                 try:
                     # Proper streaming proxy using start.client.stream
-                    async with state.client.stream("POST", url, json=body, timeout=300.0) as r:
+                    headers = {"X-Request-ID": request_id}
+                    async with state.client.stream("POST", url, json=body, headers=headers, timeout=120.0) as r:
                         if r.status_code >= 400:
                             # Handle error headers/early exit
                             err_msg = f"Agent returned {r.status_code}"
@@ -97,10 +98,10 @@ async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, mode
                     pass
 
             return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
-        else:
             # Standard JSON proxy
+            headers = {"X-Request-ID": request_id}
             try:
-                r = await state.client.post(url, json=body, timeout=300.0)
+                r = await state.client.post(url, json=body, headers=headers, timeout=120.0)
                 if r.status_code >= 500:
                    logger.warning(f"Agent Runner returned {r.status_code}. Returning 503 to client.")
                    return JSONResponse({"error": {"message": "Agent Runner Unavailable (Warming Up / Building)", "type": "service_unavailable", "code": 503}}, status_code=503)

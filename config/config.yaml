@@ -1,7 +1,7 @@
 agent_runner:
   circuit_breaker:
     threshold: 5
-    timeout: 60.0
+    timeout: 300.0
   fallback:
     enabled: true
     model: ollama:llama3.3:70b-instruct-q8_0
@@ -11,12 +11,12 @@ agent_runner:
     max_list_entries: 10000
     max_read_bytes: 100000000
     max_tool_steps: 50
-  model: ollama:llama3.3:70b-instruct-q8_0
+  model: xai:grok-2-1212
   periodic_tasks:
     time_update:
       enabled: true
       interval: 60.0
-      local_model: ollama:mistral:latest
+      local_model: ollama:llama3.1:latest
       output_file: time/current_time.txt
       priority: low
       prompt: 'Get the current date and time and write it to {output_file}.
@@ -38,10 +38,10 @@ agent_runner:
         '
       type: file
     weather_update:
-      enabled: true
+      enabled: false
       idle_only: false
       interval: 300.0
-      local_model: ollama:mistral:latest
+      local_model: ollama:llama3.1:latest
       mcp_server: weather
       output_file: weather/current_weather.txt
       priority: low
@@ -103,7 +103,7 @@ model_intelligence:
     skills:
     - Super-Intelligence
     - Infinite Context Management
-  ollama:mistral:latest:
+  ollama:llama3.1:latest:
     preferred_for:
     - interface_designer
     - mechanic
@@ -155,7 +155,7 @@ personas:
   mechanic:
     mission: Expert in system health, log analysis, and automated error recovery.
     name: The System Mechanic
-    preferred_model: ollama:mistral:latest
+    preferred_model: ollama:llama3.1:latest
     tools:
     - run_command
     - list_dir
@@ -212,25 +212,20 @@ router:
         mode: moderate
   port: 5455
   preferred_models:
-  - agent:mcp
-  - ollama:qwq:latest
-  - ollama:qwen3:30b
-  - ollama:mistral:latest
-  - openai:gpt-4o
-  - openai:gpt-4o-mini
-  - openai:o1
-  - openai:o3-mini
+  - openai:gpt-5.1
+  - openai:gpt-5.2
+  - xai:grok-2-1212
   - ollama:llama3.3:70b-instruct-q8_0
+  - ollama:llama3.1:latest
+  - openai:gpt-4o-mini
+  - agent:mcp
+  - openai:o1
+  - ollama:qwq:latest
+  - ollama:mistral:latest
   - gemini-1.5-pro
   - gemini-exp-1206
-  - gemini-3-pro-preview
-  - gemini-3-flash-preview
   - grok-4-1-fast-reasoning
-  - grok-4-1-fast-non-reasoning
-  - grok-4-fast-reasoning
-  - grok-4-fast-non-reasoning
-  - grok-code-fast-1
-  - perplexity:llama-3.1-sonar-large
+  - grok-3
   rag:
     base_url: http://127.0.0.1:5555
     query_path: /query

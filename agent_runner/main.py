@@ -4,6 +4,7 @@ import time
 import os
 import uvicorn
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from common.logging_setup import setup_logger
 from common.constants import OBJ_MODEL
@@ -82,24 +83,68 @@ async def on_startup():
     if alert_path:
         get_notification_manager().configure(alert_file_path=alert_path)
 
+    # Initialize Memory Server (Internal Access) [Phase 13 fix]
+    from agent_runner.memory_server import MemoryServer
+    from agent_runner.registry import ServiceRegistry
+    
+    memory_server = MemoryServer()
+    # Ensure it's connected (lazy init handled by class, but let's pre-warm)
+    try:
+        await memory_server.initialize()
+        ServiceRegistry.register_memory_server(memory_server)
+        logger.info("Internal MemoryServer registered.")
+    except Exception as e:
+        logger.warning(f"Failed to initialize internal MemoryServer: {e}")
+
     # Initialize Task Manager and Background Workers
     from agent_runner.background_tasks import get_task_manager
     tm = get_task_manager()
     await tm.start()
-    
-    # Register core tasks
-    # (Moved to file-based scheduler: see agent_runner/tasks/definitions/)
-    # from agent_runner.memory_tasks import memory_backup_task, memory_consolidation_task
-    # from agent_runner.maintenance_tasks import daily_research_task
-    
-    # tm.register("memory_backup", memory_backup_task, interval=3600*12) 
-    # tm.register("consolidator", memory_consolidation_task, interval=3600*24)
-    # tm.register("daily_research", daily_research_task, interval=3600*24)
 
+    # [PHASE 44] Fire-and-Forget System Ingestion
+    from agent_runner.system_ingestor import SystemIngestor
+    ingestor = SystemIngestor(state)
+    asyncio.create_task(ingestor.run())
+    logger.info("System Ingestion task triggered (Background).")
+    
     # Load Dynamic Tasks from Config (pass in-memory config)
     from agent_runner.task_loader import register_tasks_from_config
-    register_tasks_from_config(tm, state.config)
+    await register_tasks_from_config(tm, state.config, state)
     
+    # [PHASE RAG] Unified Lifecycle: Start RAG Server as Subprocess
+    # This ensures it is covered by the 'Safety Net' (atexit) and dies when Agent dies.
+    import sys
+    import subprocess
+    from agent_runner.transports.stdio import _ACTIVE_SUBPROCESSES
+    
+    rag_port = 5555
+    rag_script = Path(__file__).parent.parent / "rag_server.py"
+    
+    # Check if already running (to avoid conflict if manually started)
+    # Simple check: try to connect? Or just assume we own it in Production.
+    # For robustness, we spawn.
+    logger.info(f"Spawning RAG Server (Unified Lifecycle) on port {rag_port}...")
+    try:
+        # Use same python interpreter as agent
+        rag_proc = subprocess.Popen(
+            [sys.executable, str(rag_script)],
+            cwd=str(rag_script.parent),
+            stdout=subprocess.DEVNULL, # Redirect logs or keep them?
+            stderr=subprocess.DEVNULL  # For now silence to avoid clutter, logs go to file in script?
+            # actually rag_server logs to console usually. 
+        )
+        _ACTIVE_SUBPROCESSES.add(rag_proc)
+        logger.info(f"RAG Server spawned with PID {rag_proc.pid}")
+        state.rag_process = rag_proc # Keep ref
+    except Exception as e:
+        logger.error(f"Failed to spawn RAG server: {e}")
+
+    # [PHASE RAG] Start RAG Ingestor Watchdog
+    from agent_runner.rag_ingestor import start_rag_watcher
+    # Use config or default
+    rag_url = state.config.get("mcp_servers", {}).get("rag", {}).get("url", f"http://127.0.0.1:{rag_port}")
+    start_rag_watcher(rag_url, state)
+
     logger.info("Agent Runner Lifecycle Initialized.")
 
 async def on_shutdown():
@@ -107,6 +152,11 @@ async def on_shutdown():
     logger.info("Stopping Agent Runner services...")
     from agent_runner.background_tasks import get_task_manager
     await get_task_manager().stop()
+    
+    # [FIX] Ensure MCP subprocesses are killed to prevent orphans
+    logger.info("Cleaning up MCP processes...")
+    await state.cleanup_all_stdio_processes()
+    
     logger.info("Cleanup complete.")
 
 # Initialize the modularized FastAPI app
@@ -117,4 +167,4 @@ app.router.lifespan_context = lifespan
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5460))
-    uvicorn.run("agent_runner.main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("agent_runner.main:app", host="127.0.0.1", port=port, reload=True)

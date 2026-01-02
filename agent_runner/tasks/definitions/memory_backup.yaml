@@ -1,7 +1,7 @@
 name: memory_backup
 type: agent
 enabled: true
-schedule: "43200" # Every 12 hours
+schedule: "*/1 hours" # Every 1 hour
 priority: low
 idle_only: true
 prompt: "Trigger a full database backup of the project memory."

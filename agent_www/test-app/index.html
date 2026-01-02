@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Hello Antigravity</title>
+    <style>
+        body {
+            background: #111;
+            color: #eee;
+            font-family: sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .card {
+            background: #222;
+            padding: 2rem;
+            border-radius: 1rem;
+            border: 1px solid #333;
+            text-align: center;
+        }
+
+        h1 {
+            margin-top: 0;
+            color: #00ff9d;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="card">
+        <h1>App Factory Online</h1>
+        <p>This app was served by the Orchestrator.</p>
+        <p>Time: <span id="time"></span></p>
+    </div>
+    <script>
+        document.getElementById('time').innerText = new Date().toLocaleTimeString();
+    </script>
+</body>
+
+</html>

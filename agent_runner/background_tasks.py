@@ -62,7 +62,9 @@ class Task:
     error_count: int = 0
     last_error: Optional[str] = None
     last_duration: Optional[float] = None  # Actual duration of last run
+    last_duration: Optional[float] = None  # Actual duration of last run
     running: bool = False  # Whether task is currently executing
+    min_tempo: Optional[Any] = None # Minimum Tempo required to run (e.g. Tempo.REFLECTIVE)
 
 
 class BackgroundTaskManager:
@@ -134,6 +136,7 @@ class BackgroundTaskManager:
         description: str = "",
         max_retries: int = 3,
         retry_delay: float = 60.0,
+        min_tempo: Optional[Any] = None,
     ) -> None:
         """
         Register a background task.
@@ -145,8 +148,9 @@ class BackgroundTaskManager:
             schedule: For scheduled tasks, cron-like string (e.g., "14:30" or "*/15 minutes")
             delay: For one-time tasks, seconds to wait before running
             enabled: Whether task is enabled
-            idle_only: Whether to only run when system is idle
+            idle_only: Whether to only run when system is idle (Deprecated: use min_tempo)
             priority: Task priority (critical, high, medium, low, background)
+            min_tempo: Minimum Tempo required (default: None)
             estimated_duration: Estimated duration in seconds
             dependencies: List of task names that must complete first
             description: Human-readable description
@@ -181,13 +185,39 @@ class BackgroundTaskManager:
             description=description,
             max_retries=max_retries,
             retry_delay=retry_delay,
+            min_tempo=min_tempo,
         )
+        # Apply extra kwargs if we didn't add to init yet (safe approach) or update object
+        # Actually better to just update the object after init since we don't want to break signature of register unless we fully updated it
+        # But we can update signature of register above, let's just do it cleanly.
         
         self.tasks[name] = task
         logger.info(
             f"Registered background task: {name} "
             f"({task_type.value}, priority={priority.value}, idle_only={idle_only})"
         )
+        
+        # If manager is already running, start the task immediately
+        if self.running and task.enabled:
+            self._start_task_wrapper(name, task)
+            logger.info(f"Started task immediately: {name}")
+
+    def _start_task_wrapper(self, name: str, task: Task) -> None:
+        """Helper to start the appropriate loop for a task type."""
+        if name in self._task_handles:
+             # Already running (or at least handle exists)
+             return
+
+        if task.task_type == TaskType.PERIODIC:
+            handle = asyncio.create_task(self._run_periodic_task(task))
+        elif task.task_type == TaskType.SCHEDULED:
+            handle = asyncio.create_task(self._run_scheduled_task(task))
+        elif task.task_type == TaskType.ONCE:
+            handle = asyncio.create_task(self._run_once_task(task))
+        else:
+            return
+        
+        self._task_handles[name] = handle
     
     def unregister(self, name: str) -> None:
         """Unregister a task."""
@@ -297,13 +327,44 @@ class BackgroundTaskManager:
                     if dep_task.error_count > 0:
                         logger.warning(f"Task '{task.name}' dependency '{dep_name}' has errors")
         
-        # Check idleness if required
+        # Check idleness if required (Legacy)
         if task.idle_only and self._idle_checker and not self._idle_checker():
-            # For background priority, silently skip; for others, log
             if task.priority == TaskPriority.BACKGROUND:
                 return
             logger.debug(f"Skipping idle-only task '{task.name}': System not idle")
             return
+
+        # Check Tempo (New Platform Feature)
+        if task.min_tempo:
+            from agent_runner.agent_runner import get_shared_state
+            # Map Tempo Enum to integer for comparison if needed, or assume Ordered Enum
+            # But Python Enums aren't ordered by default unless IntEnum.
+            # Let's map explicitly for safety: FOCUSED=0, ALERT=1, REFLECTIVE=2, DEEP=3
+            
+            state = get_shared_state()
+            current_tempo = state.get_current_tempo()
+            
+            tempo_values = {
+                "FOCUSED": 0,
+                "ALERT": 1,
+                "REFLECTIVE": 2,
+                "DEEP": 3
+            }
+            
+            # handle if min_tempo is string or enum
+            req_val = -1
+            if hasattr(task.min_tempo, "name"):
+                req_val = tempo_values.get(task.min_tempo.name, 99)
+            elif isinstance(task.min_tempo, str):
+                req_val = tempo_values.get(task.min_tempo, 99)
+            
+            cur_val = tempo_values.get(current_tempo.name, 0)
+            
+            if cur_val < req_val:
+                # System is too busy for this task
+                if task.priority != TaskPriority.BACKGROUND:
+                     logger.debug(f"Skipping task '{task.name}': Current Tempo {current_tempo.name} < Min Tempo {task.min_tempo}")
+                return
         
         start_time = time.time()
         try:
@@ -339,11 +400,17 @@ class BackgroundTaskManager:
             )
             
             if should_retry:
-                # Schedule retry
-                retry_time = time.time() + task.retry_delay
+                # Schedule retry with deterministic jitter (based on task name and attempt)
+                import random
+                # We use a seed based on name to be somewhat stable but still jittered
+                random.seed(f"{task.name}_{task.consecutive_failures}")
+                jitter = random.uniform(0.8, 1.2)
+                actual_delay = task.retry_delay * jitter
+                
+                retry_time = time.time() + actual_delay
                 logger.warning(
                     f"Task '{task.name}' failed (attempt {task.consecutive_failures}/{task.max_retries}), "
-                    f"retrying in {task.retry_delay}s"
+                    f"retrying in {actual_delay:.1f}s (jittered from {task.retry_delay}s)"
                 )
                 # For periodic tasks, adjust next_run to retry time
                 if task.task_type == TaskType.PERIODIC:
@@ -530,7 +597,7 @@ class BackgroundTaskManager:
                         
                         # This registers or updates the task in self.tasks
                         # The loader handles checking if it exists/needs update
-                        register_tasks_from_config(self, wrapper_config)
+                        await register_tasks_from_config(self, wrapper_config)
                         
                     except Exception as e:
                         logger.error(f"Failed to load task definition {file_path.name}: {e}")
@@ -564,16 +631,7 @@ class BackgroundTaskManager:
             if not task.enabled:
                 continue
             
-            if task.task_type == TaskType.PERIODIC:
-                handle = asyncio.create_task(self._run_periodic_task(task))
-            elif task.task_type == TaskType.SCHEDULED:
-                handle = asyncio.create_task(self._run_scheduled_task(task))
-            elif task.task_type == TaskType.ONCE:
-                handle = asyncio.create_task(self._run_once_task(task))
-            else:
-                continue
-            
-            self._task_handles[name] = handle
+            self._start_task_wrapper(name, task)
             logger.info(f"Started task: {name}")
     
     async def stop(self) -> None:

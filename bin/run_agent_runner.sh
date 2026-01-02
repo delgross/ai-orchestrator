@@ -5,7 +5,7 @@ set -e
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/agent_runner/agent_runner.env"
-VENV_PYTHON="$ROOT_DIR/agent_runner/.venv/bin/python"
+VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
 UVICORN_ARGS=(agent_runner.main:app --host 127.0.0.1 --port 5460)
 
 load_env() {
@@ -45,7 +45,7 @@ start_app() {
   ensure_path
   # Auto-reload in development (set DEV_MODE=1 to enable)
   if [ "${DEV_MODE:-0}" = "1" ]; then
-    exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}" --reload
+    exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}"
   else
     exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}"
   fi

@@ -1,10 +1,12 @@
 
 import logging
+import os
 
 # Try importing modal
 try:
     import modal
-    has_modal = True
+    # Only enable if package exists AND env var is set
+    has_modal = os.getenv("ENABLE_MODAL", "false").lower() == "true"
 except ImportError:
     has_modal = False
 

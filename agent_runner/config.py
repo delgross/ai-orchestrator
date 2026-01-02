@@ -72,6 +72,29 @@ async def load_mcp_servers(state: AgentState) -> None:
 
     # 3. Auto-Sync to Project Memory
     # This ensures the database always has the latest server list for RAG/Tools
+    
+    # 3.5 Load from Sovereign Memory (DB) [Phase 51]
+    try:
+        if hasattr(state, "memory"):
+            db_servers = await state.memory._execute_query("SELECT * FROM mcp_server")
+            if db_servers:
+                logger.info(f"MCP: Loaded {len(db_servers)} servers from Sovereign Memory.")
+                for srv in db_servers:
+                    name = srv["name"]
+                    cmd = [srv.get("command", "")]
+                    if srv.get("args"):
+                        cmd.extend(srv["args"])
+                    
+                    cfg = {
+                        "cmd": cmd,
+                        "env": srv.get("env", {}),
+                        "enabled": srv.get("enabled", True),
+                        "type": srv.get("type", "stdio")
+                    }
+                    state.mcp_servers[name] = cfg
+    except Exception as e:
+        logger.warning(f"Failed to load MCP servers from Sovereign DB: {e}")
+
     if "project-memory" in state.mcp_servers:
         from agent_runner.tools.mcp import tool_mcp_proxy
         logger.info("Syncing MCP server definitions to Project Memory...")
@@ -119,30 +142,4 @@ async def load_mcp_servers(state: AgentState) -> None:
 
 # Note: load_agent_runner_limits removed as its logic moved to AgentState._load_base_config()
 
-async def save_mcp_to_config(new_servers: Dict[str, Any]) -> bool:
-    """Save/Merge new MCP servers into config/mcp.yaml."""
-    config_path = Path(__file__).parent.parent / "config" / "mcp.yaml"
-    
-    # Ensure directory exists
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        data = {}
-        if config_path.exists():
-            with open(config_path, "r") as f:
-                data = yaml.safe_load(f) or {}
-            
-        if "mcp_servers" not in data:
-            data["mcp_servers"] = {}
-            
-        # Merge
-        for name, cfg in new_servers.items():
-            data["mcp_servers"][name] = cfg
-            
-        with open(config_path, "w") as f:
-            yaml.dump(data, f, sort_keys=False, indent=2)
-            
-        return True
-    except Exception as e:
-        logger.error(f"Failed to save MCP to mcp.yaml: {e}")
-        return False
+

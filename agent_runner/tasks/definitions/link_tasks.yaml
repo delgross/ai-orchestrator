@@ -1,0 +1,16 @@
+name: link_tasks
+type: agent
+enabled: false
+schedule: "1200" # Every 20 minutes
+idle_only: true
+priority: low
+description: "The Historian: Associate chats with tasks."
+prompt: |
+  Read the current `task.md` file (via `read_file` tool).
+  Scan recent 'episode' rows.
+  
+  For each episode:
+  1. Determine which Task ID or Phase it relates to.
+  2. UPDATE the episode row to set `metadata.task_id = "Phase 49"`.
+  
+  This allows us to generate "Work Logs" automatically by querying `SELECT * FROM episode WHERE metadata.task_id = 'Phase 49'`.

@@ -241,7 +241,12 @@ async def call_ollama_chat(
         logger.error(f"Ollama call failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    content = j.get("message", {}).get("content", "")
+    msg_obj = j.get("message", {})
+    if isinstance(msg_obj, dict):
+        content = msg_obj.get("content", "")
+    else:
+        # Fallback if message is string or other
+        content = str(msg_obj)
     
     usage = {
         "prompt_tokens": j.get("prompt_eval_count", 0),

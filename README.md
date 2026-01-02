@@ -23,15 +23,17 @@ The system focuses on:
 
 - `agent_runner/`: The "Engine Room" - manages agent loops, memory, and tools.
 - `router/`: The "Switchboard" - OpenAI-compatible proxy and provider management.
-- `common/`: Shared utilities (Tracking, Anomaly Detection).
+- `common/`: Shared utilities (Tracking, Observability).
 - `dashboard/`: Real-time observability and control interface.
-- `config/`: System and user configuration.
+- `config/`: System and user configuration (including `user_profile.txt`).
+- `scripts/`: System setup and utility/verification scripts.
+- `logs/`: Centralized service and task logs.
 
 ## 🚦 Quick Start
 
 1. **Configure Environment**: Copy `.env.example` to `.env` and add your keys.
 2. **Start Services**: Run `./manage.sh start`.
-3. **Open Dashboard**: Visit `http://localhost:3000`.
+3. **Open Dashboard**: Visit `http://localhost:5455/dashboard/v2/index.html`.
 
 ---
-*For detailed implementation history, see the [Walkthrough](file:///Users/bee/.gemini/antigravity/brain/ed9b58ca-970d-4497-9aaa-49c3823ee3ed/walkthrough.md)*
+*For detailed implementation history, see the [Walkthrough](file:///Users/bee/.gemini/antigravity/brain/eaf70aaf-5449-45ea-949f-f6904d3c9a69/walkthrough.md)*

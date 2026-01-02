@@ -11,6 +11,11 @@ from common.constants import OBJ_MODEL, ROLE_SYSTEM, ROLE_TOOL
 from common.unified_tracking import track_event, EventSeverity, EventCategory
 import agent_runner.intent as intent
 from agent_runner.executor import ToolExecutor
+from common.notifications import notify_critical
+from common.budget import get_budget_tracker
+# [PHASE 42]
+from agent_runner.memory_server import MemoryServer
+import math
 
 logger = logging.getLogger("agent_runner")
 
@@ -18,6 +23,7 @@ class AgentEngine:
     def __init__(self, state: AgentState):
         self.state = state
         self.executor = ToolExecutor(state)
+        self.memory = MemoryServer(state)
 
     # --- Delegate Methods to Executor ---
     
@@ -51,7 +57,7 @@ class AgentEngine:
         if not self.state.internet_available:
             # Check if target model is remote. 
             # We treat 'ollama:' and 'local:' as safe. Everything else (openai:, gpt-, claude-, etc.) is suspect.
-            is_safe_local = target_model.startswith(("ollama:", "local:", "test:"))
+            is_safe_local = self.state.is_local_model(target_model)
             
             if not is_safe_local:
                 fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
@@ -121,6 +127,14 @@ class AgentEngine:
                 
             except Exception as e:
                 # 5. Failure -> Record
+                if "429" in str(e):
+                    # Proactive Budget Alert (Monitor Stream)
+                    notify_critical(
+                        title="Model Call Rejection",
+                        message=f"Model '{attempt_model}' rejected call (429). Check Budget or Rate Limits.",
+                        source="AgentEngine"
+                    )
+                
                 logger.error(f"Model call failed for '{attempt_model}': {e}")
                 self.state.mcp_circuit_breaker.record_failure(attempt_model)
                 last_error = str(e)
@@ -132,16 +146,82 @@ class AgentEngine:
 
 
 
-    async def get_system_prompt(self, user_messages: Optional[List[Dict[str, Any]]] = None) -> str:
+    async def _load_registry_cache(self):
+        """Load permanent memory files into RAM cache."""
+        try:
+            registry_dir = os.path.join(self.state.agent_fs_root, "data", "permanent")
+            if not os.path.exists(registry_dir):
+                return ""
+            
+            cache_str = ""
+            # Recursive Walk for Nested Project Contexts
+            for root, dirs, files in os.walk(registry_dir):
+                for f in files:
+                    if f.endswith(".md"):
+                        path = os.path.join(root, f)
+                        # Relative path for the header (e.g. "antigravity/todo.md")
+                        rel_path = os.path.relpath(path, registry_dir)
+                        try:
+                            with open(path, "r") as fh:
+                                content = fh.read().strip()
+                                # Header format: [Project/Filename]
+                                cache_str += f"\n--- INTERNAL REGISTRY: [{rel_path}] ---\n{content}\n"
+                        except Exception as read_err:
+                             logger.error(f"Failed to read registry file {rel_path}: {read_err}")
+            
+            self.registry_cache = cache_str
+            return cache_str
+        except Exception as e:
+            logger.error(f"Registry load error: {e}")
+            return ""
+
+    async def get_system_prompt(self, user_messages: Optional[List[Dict[str, Any]]] = None, skip_refinement: bool = False) -> str:
         """Construct the dynamic system prompt with memory context and environmental awareness."""
+        
+        # JIT Load Registry if empty (Startup)
+        if not hasattr(self, "registry_cache") or self.registry_cache is None:
+            await self._load_registry_cache()
+            
         memory_facts = ""
         memory_status_msg = ""
         if user_messages:
             try:
                 # Use LLM to generate a context-aware search query
-                search_query = await self._generate_search_query(user_messages)
+                # [PHASE 14] BYPASS: Skip expensive query refinement for local/periodic tasks
+                if skip_refinement:
+                    search_query = ""
+                else:
+                    search_query = await self._generate_search_query(user_messages)
+                
+                # [FEATURE-11] Context Rehydration (Startup Awareness)
+                # We proactively load the "system_architecture" bank to ensure the agent knows itself.
+                # We also list available banks to give the agent a "Map" of its mind.
+                from agent_runner.tools.mcp import tool_mcp_proxy
+                
+                # 1. Fetch Architecture (Fast, cached ideally, but for now direct)
+                arch_ctx = ""
+                try:
+                    arch_res = await tool_mcp_proxy(self.state, "project-memory", "query_facts", {"kb_id": "system_architecture", "limit": 50}, bypass_circuit_breaker=True)
+                    if arch_res.get("ok"):
+                        # Facts come as a list of dicts directly from query_facts (unlike search which wraps in content)
+                        # Wait, tool_mcp_proxy returns the raw tool result. 
+                        # query_facts returns {"ok": True, "facts": [...]}
+                        # Let's check the result structure carefully.
+                        raw_res = arch_res.get("result", {})
+                        if isinstance(raw_res, str): raw_res = json.loads(raw_res)
+                        
+                        arch_facts = raw_res.get("facts", [])
+                        if arch_facts:
+                            fact_lines = [f"- {f.get('entity')} {f.get('relation')} {f.get('target')}" for f in arch_facts]
+                            arch_ctx = (
+                                "\n### SELF-AWARENESS (Internal Architecture)\n"
+                                "You are aware of your own internal components. Do not hallucinate external tools.\n"
+                                + "\n".join(fact_lines) + "\n"
+                            )
+                except Exception as e:
+                    logger.warning(f"Failed to hydrate architecture context: {e}")
+
                 if search_query:
-                    from agent_runner.tools.mcp import tool_mcp_proxy
                     
                     t0_mem = time.time()
                     search_res = await tool_mcp_proxy(self.state, "project-memory", "semantic_search", {"query": search_query, "limit": 10}, bypass_circuit_breaker=True)
@@ -185,19 +265,13 @@ class AgentEngine:
         current_time_str = time.strftime("%Y-%m-%d %H:%M:%S")
 
         # JIT Recovery: If system thinks it's offline, double-check one last time before giving up.
-        if not self.state.internet_available:
-             try:
-                 # Quick check to 1.1.1.1 (fastest)
-                 # We need to import here to avoid circulars if possible, or assume it's available
-                 import httpx
-                 # Use a temp client for this emergency check to avoid shared state locking issues
-                 async with httpx.AsyncClient(timeout=3.0) as jit_client:
-                     jit_res = await jit_client.head("https://1.1.1.1")
-                     if jit_res.status_code < 400:
-                         logger.info("JIT Internet Check PASSED. Overriding stale offline state.")
-                         self.state.internet_available = True
-             except Exception as jit_e:
-                 logger.warning(f"JIT Internet Check failed: {jit_e}")
+        # JIT Recovery: If system thinks it's offline, OR just as a sanity check before prompting
+        # We always want correct state before generating prompts.
+        # [REMOVED] JIT Internet Check
+        # We now rely entirely on the background health_monitor to maintain state.internet_available.
+        # This prevents blocking prompt generation on network latency and avoids "flapping" state.
+            
+        # Removed "Forced Internet" Hack (Phase 12 Cleanup)
 
         if self.state.internet_available:
             env_instructions = (
@@ -212,6 +286,10 @@ class AgentEngine:
                 "Inform the user that you are operating offline if they ask for real-time information.\n"
                 "Rely on your internal knowledge and the 'project-memory' and 'filesystem' tools."
             )
+
+        # [MEMORY REGISTRY INJECTION]
+        if hasattr(self, "registry_cache") and self.registry_cache:
+            env_instructions += f"\n\n### PERMANENT MEMORY REGISTRY (Always Available)\n{self.registry_cache}\n"
 
         # Check for service outages via circuit breaker
         service_alerts = ""
@@ -276,12 +354,13 @@ class AgentEngine:
             "Use the tools provided to you to be the most helpful assistant possible.\n"
             "IMPORTANT: Focus on the user's LATEST message. Do not maintain context from unrelated previous topics.\n"
             "MEMORY CONSTRAINT: You have access to retrieved memory/facts below. Do NOT mention them unless they are DIRECTLY relevant to answering the CURRENT question. Do not say 'Regarding X...' if the user didn't ask about X."
-            f"{memory_facts}"
+            f"{memory_facts}\n"
+            f"{arch_ctx}"
             f"{files_info}"
         )
         return prompt
 
-    async def agent_loop(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, request_id: Optional[str] = None) -> Dict[str, Any]:
+    async def agent_loop(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, request_id: Optional[str] = None, skip_refinement: bool = False) -> Dict[str, Any]:
         # Context Pruning: Prevent "Choking" on long histories
         PRUNE_LIMIT = 20
         if len(user_messages) > PRUNE_LIMIT:
@@ -303,11 +382,18 @@ class AgentEngine:
             active_model = fallback
 
         # 1. Context Injection: Get dynamic prompt
-        system_prompt = await self.get_system_prompt(user_messages)
+        system_prompt = await self.get_system_prompt(user_messages, skip_refinement=skip_refinement)
         messages = [{"role": ROLE_SYSTEM, "content": system_prompt}] + user_messages
         steps = 0
-        active_tools = tools or await self.get_all_tools()
+        active_tools = tools or await self.get_all_tools(user_messages)
         
+        # [SAFETY CLAMP] OpenAI limit is 128 tools.
+        if len(active_tools) > 120:
+             logger.warning(f"Tool Count {len(active_tools)} exceeds limit. Truncating to 120.")
+             active_tools = active_tools[:120]
+
+        logger.info(f"DEBUG: Active Tools passed to Model: {[t['function']['name'] for t in active_tools]}")
+
         while steps < self.state.max_tool_steps:
             steps += 1
             response = await self.call_gateway_with_tools(messages, active_model, active_tools)
@@ -347,7 +433,7 @@ class AgentEngine:
                             
                             # 2. Attempt Fallback (Logic centralized below)
                             await self._handle_fallback(messages, active_tools, worker_draft)
-                        await self._handle_fallback(messages, active_tools, worker_draft)
+
                 
                 # Store episode before returning final answer
                 if request_id:
@@ -451,7 +537,7 @@ class AgentEngine:
         
         # Offline Fallback
         if not self.state.internet_available:
-            is_safe_local = target_model.startswith(("ollama:", "local:", "test:"))
+            is_safe_local = self.state.is_local_model(target_model)
             if not is_safe_local:
                 target_model = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
 
@@ -479,12 +565,31 @@ class AgentEngine:
                 "tools": active_tools,
                 "tool_choice": "auto",
                 "stream": True,
+                "stream_options": {"include_usage": True}, # Request precise billing data
+                "logprobs": True, # Request confidence data
+                "top_logprobs": 1
             }
 
             try:
+                # Metrics Capture
+                t0_stream = time.time()
+                t_first = None
+                token_count = 0
+                
+                # Verified Response Fields
+                exact_usage = None
+                finish_reason = None
+                provider_req_id = None
+                
+                # Confidence Calculation
+                total_prob = 0.0
+                confidence_count = 0
+
                 # Streaming Call
                 async with client.stream("POST", url, json=payload, headers=headers, timeout=self.state.http_timeout) as response:
                     response.raise_for_status()
+                    provider_req_id = response.headers.get("x-request-id", "")
+                    
                     async for line in response.aiter_lines():
                         if not line.strip():
                             continue
@@ -494,22 +599,117 @@ class AgentEngine:
                                 break
                             try:
                                 data = json.loads(data_str)
+                                
+                                # 1. Capture Usage (if present)
+                                if "usage" in data and data["usage"]:
+                                    exact_usage = data["usage"]
+                                    
+                                # 2. Capture Content & Finish Reason
+                                if "choices" in data and len(data["choices"]) > 0:
+                                    choice = data["choices"][0]
+                                    delta = choice.get("delta", {})
+                                    
+                                    # TTFT Check
+                                    if delta.get("content") and t_first is None:
+                                        t_first = time.time()
+                                    
+                                    if delta.get("content"):
+                                        token_count += 1
+                                        
+                                    if choice.get("finish_reason"):
+                                        finish_reason = choice.get("finish_reason")
+                                    
+                                    # 3. Capture Logprobs (Confidence)
+                                    # OpenAI/Grok format: choices[0].logprobs.content[].logprob
+                                    if choice.get("logprobs") and choice["logprobs"].get("content"):
+                                        # Note: In streaming, 'content' might be a list of 1 item corresponding to the delta
+                                        # But usually logprobs come with the token.
+                                        # Check format: 'logprobs': {'content': [{'token': 'The', 'logprob': -0.001, ...}]}
+                                        content_probs = choice["logprobs"].get("content", [])
+                                        for cp in content_probs:
+                                            if "logprob" in cp:
+                                                # Convert log-prob to linear prob: e^logprob
+                                                # -0.001 -> 0.999
+                                                try:
+                                                    prob = math.exp(cp["logprob"])
+                                                    total_prob += prob
+                                                    confidence_count += 1
+                                                except: pass # overflow/math error
+                                        
                                 yield data
                             except Exception:
                                 pass
                 
-                # If we finished the stream successfully, return (break loop)
+                # If we finished the stream successfully
+                duration = time.time() - t0_stream
+                ttft_ms = ((t_first - t0_stream) * 1000) if t_first else 0.0
+                tps = token_count / max(0.1, duration)
+                
+                # Calculate Confidence
+                avg_confidence = (total_prob / confidence_count) if confidence_count > 0 else 0.0
+                
+                # Prepare Metadata
+                meta = {
+                    "model": attempt_model,
+                    "ttft_ms": int(ttft_ms),
+                    "tps": round(tps, 2),
+                    "duration_sec": round(duration, 2),
+                    "finish_reason": finish_reason,
+                    "provider_req_id": provider_req_id,
+                    "estimated_tokens": token_count,
+                    "confidence_score": round(avg_confidence, 4)
+                }
+                
+                if exact_usage:
+                    meta["usage"] = exact_usage
+                    # Update billing accuracy
+                    meta["billing_tokens"] = exact_usage.get("total_tokens", 0)
+
+                # --- FINANCIAL ACCOUNTING ---
+                try:
+                    tracker = get_budget_tracker()
+                    # Determine tokens for billing
+                    p_tok = exact_usage.get("prompt_tokens", 0) if exact_usage else 0
+                    c_tok = exact_usage.get("completion_tokens", token_count) if exact_usage else token_count
+                    
+                    # If we didn't get usage (e.g. local), we implicitly don't charge (rate=0), OR we estimate if it's a paid model that failed to send usage.
+                    # But estimate_cost handles known models.
+                    if p_tok == 0 and not exact_usage:
+                         # Rough estimate for prompt if missing
+                         p_tok = len(json.dumps(messages)) // 4
+                         
+                    cost = tracker.estimate_cost(attempt_model, p_tok, c_tok)
+                    if cost > 0:
+                        tracker.record_usage("agent_runner", cost)
+                        meta["cost_usd"] = round(cost, 6)
+                except Exception as budget_e:
+                    logger.warning(f"Failed to record budget cost: {budget_e}")
+
+                track_event(
+                    "stream_completed", 
+                    category=EventCategory.PERFORMANCE, 
+                    severity=EventSeverity.INFO, 
+                    message=f"Stream OK ({len(json.dumps(meta))}b meta)",
+                    metadata=meta
+                )
+
                 self.state.mcp_circuit_breaker.record_success(attempt_model)
                 return 
 
             except Exception as e:
+                if "429" in str(e):
+                     notify_critical(
+                        title="Stream Rejection",
+                        message=f"Model '{attempt_model}' stream rejected (429). Likely Budget Limit.",
+                        source="AgentEngine"
+                    )
                 logger.error(f"Streaming failed for '{attempt_model}': {e}")
                 self.state.mcp_circuit_breaker.record_failure(attempt_model)
                 # Loop to next candidate
 
         raise HTTPException(status_code=500, detail="All streaming models failed.")
 
-    async def agent_stream(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, request_id: Optional[str] = None):
+    async def agent_stream(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, request_id: Optional[str] = None, skip_refinement: bool = False):
         """
         Generator that manages the Agent Loop and yields real-time events.
         Events:
@@ -528,7 +728,7 @@ class AgentEngine:
                 user_messages.pop(0)
 
         # Context Injection
-        system_prompt = await self.get_system_prompt(user_messages)
+        system_prompt = await self.get_system_prompt(user_messages, skip_refinement=skip_refinement)
         messages = [{"role": ROLE_SYSTEM, "content": system_prompt}] + user_messages
         active_tools = await self.get_all_tools(user_messages)
         
@@ -644,5 +844,16 @@ class AgentEngine:
                 # We already yielded tokens.
                 # Append to history and break.
                 messages.append(assistant_msg)
-                yield {"type": "done", "stop_reason": "end_turn"}
+                
+                # [PHASE 42] Async Memory Storage (Fire and Forget)
+                yield {"type": "done"}
+
+                # [MEMORY] Store Episode in Memory Server (Async/Non-blocking)
+                if hasattr(self, "memory") and self.memory:
+                    logger.info(f"DEBUG: Triggering async store_episode for {request_id}")
+                    # We use create_task to fire and forget
+                    asyncio.create_task(self.memory.store_episode(request_id, messages))
+                else:
+                    logger.warning("DEBUG: Memory server not available in engine")
+            
                 break

@@ -1,0 +1,9 @@
+name: rag_ingest
+type: module
+module: agent_runner.rag_ingestor
+function: rag_ingestion_task
+schedule: interval
+interval: 30
+description: "Scans the RAG Ingest folder for new documents and processes them."
+priority: high
+idle_only: false

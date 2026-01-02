@@ -1,80 +1,29 @@
 mcp_servers:
-  exa:
-    query_params:
-      exaApiKey: c34af6d2-015f-4b20-8021-c6a77bbf0001
-    requires_internet: true
-    type: sse
-    url: https://mcp.exa.ai/mcp
+  sequential-thinking:
+    type: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-sequential-thinking'
+    cmd:
+    - npx
+    - -y
+    - '@modelcontextprotocol/server-sequential-thinking'
   fetch:
     cmd:
     - uvx
     - mcp-server-fetch
     type: stdio
-  filesystem:
-    cmd:
-    - npx
-    - -y
-    - '@modelcontextprotocol/server-filesystem'
-    - /Users/bee/Sync/Antigravity/ai
-    - /Users/bee/Downloads
-    type: stdio
-  firecrawl-mcp:
-    cmd:
-    - env
-    - FIRECRAWL_API_KEY=fc-ca465c22960b45ebbb246c8cbbae468d
-    - npx
-    - -y
-    - firecrawl-mcp
-    env:
-      FIRECRAWL_API_KEY: fc-ca465c22960b45ebbb246c8cbbae468d
-    requires_internet: true
-    type: stdio
-  macos_automator:
-    cmd:
-    - npx
-    - -y
-    - '@steipete/macos-automator-mcp@latest'
-    env: {}
-    type: stdio
-  mcp-pandoc:
-    cmd:
-    - uvx
-    - mcp-pandoc
-    type: stdio
-  memory-search:
-    cmd:
-    - npx
-    - -y
-    - '@modelcontextprotocol/server-memory'
-    env:
-      SEARCH_API_KEY: test_key_123
-    requires_internet: true
-    type: stdio
   ollama:
     cmd:
-    - /Users/bee/Sync/Antigravity/ai/agent_runner/.venv/bin/python
+    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
     - /Users/bee/Sync/Antigravity/ai/agent_runner/ollama_server.py
     env:
       OLLAMA_BASE: http://127.0.0.1:11434
     type: stdio
-  perplexity:
-    cmd:
-    - npx
-    - -y
-    - '@perplexity-ai/mcp-server'
-    env:
-      PERPLEXITY_API_KEY: REDACTED
-    requires_internet: true
-    type: stdio
-  playwright:
-    cmd:
-    - npx
-    - '@playwright/mcp@latest'
-    env: {}
-    type: stdio
   project-memory:
     cmd:
-    - /Users/bee/Sync/Antigravity/ai/agent_runner/.venv/bin/python
+    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
     - /Users/bee/Sync/Antigravity/ai/agent_runner/memory_server.py
     env:
       EMBED_MODEL: ollama:mxbai-embed-large
@@ -85,16 +34,19 @@ mcp_servers:
       SURREAL_URL: ws://127.0.0.1:8000/rpc
       SURREAL_USER: root
     type: stdio
-  scrapezy:
-    cmd:
-    - npx
-    - '@scrapezy/mcp'
-    - --api-key=REDACTED
-    - --json
-    env:
-      SCRAPEZY_API_KEY: REDACTED
+  sonos-ts-mcp:
+    args:
+    - -y
+    - sonos-ts-mcp@latest
+    command: npx
+    enabled: true
+    env: {}
     requires_internet: true
     type: stdio
+    cmd:
+    - npx
+    - -y
+    - sonos-ts-mcp@latest
   system-control:
     cmd:
     - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
@@ -125,8 +77,11 @@ mcp_servers:
     - uvx
     - mcp-server-time
     type: stdio
-  weather:
-    cmd:
-    - npx
+  git:
+    command: npx
+    args:
     - -y
-    - '@iflow-mcp/weather-mcp'
+    - '@cyanheads/git-mcp-server'
+    disabled: false
+    auto_upgrade: true
+    type: stdio

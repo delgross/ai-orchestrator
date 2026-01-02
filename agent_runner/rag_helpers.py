@@ -3,9 +3,11 @@ import json
 import base64
 import time
 import asyncio
+import io
 import re
 from typing import Any, Dict
 from pathlib import Path
+from agent_runner.registry import ServiceRegistry
 
 logger = logging.getLogger("agent_runner.rag_helpers")
 
@@ -49,16 +51,50 @@ async def _process_locally(file_path: Path, state: Any, http_client: Any) -> str
             # CSV parsing uses 'open', so we run in thread
             def parse_csv():
                 import csv
-                with open(file_path, newline='') as csvfile:
-                    reader = csv.reader(csvfile)
-                    lines = list(reader)
-                    if lines:
-                        headers = lines[0]
-                        res = "| " + " | ".join(headers) + " |\n"
-                        res += "| " + " | ".join(["---"] * len(headers)) + " |\n"
-                        for row in lines[1:]:
-                            res += "| " + " | ".join([str(c) for c in row]) + " |\n"
-                        return res
+                import io
+                
+                # Check file encoding via crude heuristic? Defaults to utf-8 from open()
+                try:
+                    with open(file_path, 'r', newline='', encoding='utf-8') as csvfile:
+                        # Sniff to find dialect?
+                        sample = csvfile.read(1024)
+                        csvfile.seek(0)
+                        sniffer = csv.Sniffer()
+                        try:
+                            dialect = sniffer.sniff(sample)
+                            has_header = sniffer.has_header(sample)
+                        except:
+                            dialect = 'excel'
+                            has_header = True # Assume header
+                        
+                        reader = csv.reader(csvfile, dialect=dialect)
+                        rows = list(reader)
+                        
+                        if not rows: return ""
+                        
+                        # Markdown Table Generator
+                        # Ensure all rows have same column count as header
+                        header = rows[0]
+                        col_count = len(header)
+                        
+                        md_lines = []
+                        # Header
+                        md_lines.append("| " + " | ".join(str(h).replace("|", "&#124;").replace("\n", " ") for h in header) + " |")
+                        # Separator
+                        md_lines.append("| " + " | ".join(["---"] * col_count) + " |")
+                        # Data
+                        for row in rows[1:]:
+                            # Pad row if short
+                            row += [""] * (col_count - len(row))
+                            # Truncate if long? Or just take first N? 
+                            # Let's just zip to range
+                            formatted_row = [str(c).replace("|", "&#124;").replace("\n", " ") for c in row[:col_count]]
+                            md_lines.append("| " + " | ".join(formatted_row) + " |")
+                            
+                        return "\n".join(md_lines)
+                except UnicodeDecodeError:
+                    # Fallback to latin-1
+                    pass
                 return ""
             content = await asyncio.to_thread(parse_csv)
         except Exception as e:
@@ -81,7 +117,7 @@ async def _process_locally(file_path: Path, state: Any, http_client: Any) -> str
                 ]
             }
             v_url = f"{state.gateway_base}/v1/chat/completions"
-            v_res = await http_client.post(v_url, json=vision_payload, timeout=60.0)
+            v_res = await http_client.post(v_url, json=vision_payload, headers={"X-Skip-Refinement": "true"}, timeout=60.0)
             if v_res.status_code == 200:
                 content = v_res.json()["choices"][0]["message"]["content"]
             else:
@@ -126,7 +162,7 @@ async def _process_locally(file_path: Path, state: Any, http_client: Any) -> str
                             ]}
                         ]
                     }
-                    v_res = await http_client.post(f"{state.gateway_base}/v1/chat/completions", json=vision_payload, timeout=45.0)
+                    v_res = await http_client.post(f"{state.gateway_base}/v1/chat/completions", json=vision_payload, headers={"X-Skip-Refinement": "true"}, timeout=45.0)
                     if v_res.status_code == 200:
                         ocr_text.append(v_res.json()["choices"][0]["message"]["content"])
                 except: pass
@@ -154,10 +190,17 @@ def _assess_local_quality(content: str, ext: str) -> dict:
          return {'score': 0.1, 'is_noise': True, 'reason': "Too Short (<50 chars)"}
 
     # 2. Log File / System Noise Detection
-    # Heuristic: High density of timestamps or error codes
+    # Heuristic: High density of timestamps AND log keywords
     import re
     timestamp_density = len(re.findall(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', content[:2000])) / (val_len / 100) if val_len > 0 else 0
-    if timestamp_density > 0.5: # More than 0.5 timestamps per 100 chars? It's a log.
+    
+    # Check for common log keywords to confirm it's a system log
+    log_keywords = ["INFO", "DEBUG", "ERROR", "WARN", "CRITICAL", "TRACE"]
+    has_log_keywords = any(k in content[:1000] for k in log_keywords)
+
+    # Transcripts often have timestamps but no log levels.
+    # Only flag if density is high AND keywords are present, OR density is extremely high (>2.0)
+    if (timestamp_density > 0.5 and has_log_keywords) or (timestamp_density > 2.0):
          return {'score': 0.2, 'is_noise': True, 'reason': "System Log Detected"}
 
     return {'score': 0.6, 'is_noise': False, 'reason': "Baseline Acceptable"}
@@ -182,11 +225,8 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
     
     if quality_report['is_noise']:
         logger.warning(f"SOUS CHEF: Rejected {file_path.name} (Score: {quality_report['score']}, Reason: {quality_report['reason']})")
-        # Move to Deferred/Trash or just skip indexing?
-        # For safety, we skip indexing but don't delete yet (user can review).
-        # We treat it as if 'ingestion failed' essentially, but logically.
-        # Let's just return early.
-        return 
+        # Raise exception to trigger Pause in ingestor
+        raise ValueError(f"Quality Check Failed: {quality_report['reason']}")
 
     # 1. LIBRARIAN (Universal Content-Based Sorting)
     # We ignore the folder structure for routing/authority and rely 100% on the AI.
@@ -216,23 +256,35 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
         lib_prompt = (
             f"Categorize this new entry.\nFilename: {file_path.name}\nContent Snippet: {content[:1000]}\n"
             "Identify domain [farm-noc, osu-med, farm-beekeeping, etc] or new.\n"
-            "Return JSON: {'kb_id': '...', 'authority': 0.7, 'is_volatile': false, 'global_summary': '...', 'shadow_tags': []}"
+            "Return JSON ONLY: {'kb_id': '...', 'authority': 0.7, 'is_volatile': false, 'global_summary': '...', 'shadow_tags': []}"
         )
         lib_payload = {
             "model": state.task_model,
             "messages": [{"role": "user", "content": lib_prompt}],
             "response_format": {"type": "json_object"}
         }
-        lib_resp = await http_client.post(f"{state.gateway_base}/v1/chat/completions", json=lib_payload, timeout=30.0)
+        lib_resp = await http_client.post(f"{state.gateway_base}/v1/chat/completions", json=lib_payload, headers={"X-Skip-Refinement": "true"}, timeout=30.0)
+        
         if lib_resp.status_code == 200:
-            lib_data = json.loads(lib_resp.json()["choices"][0]["message"]["content"])
+            raw_content = lib_resp.json()["choices"][0]["message"]["content"]
+            # Clean Markdown wrappers
+            if "```json" in raw_content:
+                raw_content = raw_content.split("```json")[1].split("```")[0]
+            elif "```" in raw_content:
+                raw_content = raw_content.split("```")[1].split("```")[0]
+            
+            lib_data = json.loads(raw_content.strip())
             kb_id = lib_data.get("kb_id", "default")
             authority = lib_data.get("authority", 0.7)
             global_summary = lib_data.get("global_summary", "")
             tags = lib_data.get("shadow_tags", [])
             if tags: shadow_tags.extend(tags)
+            logger.info(f"LIBRARIAN: Assigned {file_path.name} to {kb_id} (Auth: {authority})")
+        else:
+             logger.warning(f"Librarian API failed: {lib_resp.status_code} {lib_resp.text}")
+
     except Exception as e:
-        logger.warning(f"Librarian classification failed: {e}")
+        logger.warning(f"Librarian classification failed for {file_path.name}: {e}")
 
     # 2. DEDUPLICATION
     # (Skipped for brevity/latency - we trust RAG to handle updates usually, or we can add it back later)
@@ -261,42 +313,84 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
     if shadow_tags:
         payload["content"] += f"\n\n[Index Keywords: {', '.join(shadow_tags)}]"
 
+    rag_error = None
     try:
         resp = await http_client.post(f"{rag_base_url}/ingest", json=payload, timeout=60.0)
         resp.raise_for_status()
         logger.info(f"RAG server ingested {file_path.name} into {kb_id}")
     except Exception as e:
         logger.error(f"Failed to send {file_path.name} to RAG backend: {e}")
-        # Proceed anyway? Or stop? Usually stop if RAG fails.
-        # But we might want to save the sidecar at least.
-        pass
+        rag_error = e # Defer raising so Graph Extraction can still happen
 
     # 4. GRAPH CONSTRUCTION (The Fusion Patch)
+    facts_stored = 0
     try:
         # Check if Cloud H100 already did the work (Fast Track)
         if cloud_metadata and cloud_metadata.get("entities"):
             logger.info(f"GRAPH: Fast-tracking {len(cloud_metadata['entities'])} entities from H100.")
-            # The Cloud returns ["Name (Type)", ...]. The Graph API accepts this list.
-            await http_client.post(
-                f"{rag_base_url}/ingest/graph", 
-                json={"entities": cloud_metadata["entities"], "relations": [], "origin_file": file_path.name}, 
-                timeout=30.0
-            )
+            memory_server = ServiceRegistry.get_memory_server()
+            if memory_server:
+                count = 0
+                for entity in cloud_metadata["entities"]:
+                    if isinstance(entity, str):
+                        await memory_server.store_fact(entity, "mentioned_in", file_path.name, context="H100 Extraction")
+                        count += 1
+                logger.info(f"GRAPH: Stored {count} facts from H100.")
+                facts_stored += count
+
         else:
             # Fallback: Local Extraction (Slower, less accurate)
-            extract_prompt = f"Analyze for Knowledge Graph:\n{content[:4000]}\nReturn JSON: {{'entities': [], 'relations': []}}"
+            extract_prompt = (
+                f"Analyze this text to extract Knowledge Graph Facts.\n"
+                f"Text: {content[:4000]}\n"
+                "Return JSON with a list of facts: {'facts': [{'entity': '...', 'relation': '...', 'target': '...'}]}"
+            )
             v_resp = await http_client.post(
                 f"{state.gateway_base}/v1/chat/completions", 
                 json={"model": state.task_model, "messages": [{"role": "user", "content": extract_prompt}], "response_format": {"type": "json_object"}}, 
+                headers={"X-Skip-Refinement": "true"},
                 timeout=60.0
             )
             if v_resp.status_code == 200:
-                g_data = json.loads(v_resp.json()["choices"][0]["message"]["content"])
-                if g_data.get("entities") or g_data.get("relations"):
-                    await http_client.post(f"{rag_base_url}/ingest/graph", json={"entities": g_data["entities"], "relations": g_data["relations"], "origin_file": file_path.name}, timeout=30.0)
-                    logger.info(f"GRAPH: Extracted {len(g_data['entities'])} nodes (Local).")
+                raw_g = v_resp.json()["choices"][0]["message"]["content"]
+                g_data = json.loads(raw_g)
+                facts = g_data.get("facts", [])
+                
+                # Support legacy format just in case
+                if not facts and g_data.get("entities"):
+                     facts = [{"entity": e, "relation": "mentioned_in", "target": file_path.name} for e in g_data["entities"]]
+
+                if facts:
+                    memory_server = ServiceRegistry.get_memory_server()
+                    if memory_server:
+                        count = 0
+                        for f in facts:
+                            await memory_server.store_fact(
+                                f.get("entity"), 
+                                f.get("relation"), 
+                                f.get("target"), 
+                                context=f"Extracted from {file_path.name}"
+                            )
+                            count += 1
+                        logger.info(f"GRAPH: Extracted and Stored {count} facts (Local).")
+                        facts_stored += count
+                    else:
+                        logger.warning("GRAPH: MemoryServer not available in Registry.")
     except Exception as e:
         logger.warning(f"Graph extraction failed: {e}")
+
+    # [RELIABILITY PATCH] Unrecoverable Content Fallback
+    if facts_stored == 0:
+        logger.info("GRAPH: Zero facts extracted (or extraction failed). Storing Raw Content Fallback.")
+        memory_server = ServiceRegistry.get_memory_server()
+        if memory_server:
+            await memory_server.store_fact(
+                entity=file_path.name, 
+                relation="contains_text", 
+                target=content[:100] + "..." if len(content) > 100 else content,
+                context=content[:4000], # Embed up to 4k chars as context
+                confidence=0.8
+            )
 
     # 5. SMART FILING (Simple Flat Strategy)
     # User Request: "I like them the way they are", "Ignore directories".
@@ -345,3 +439,7 @@ keywords: [{', '.join(shadow_tags)}]
         
     except Exception as e:
         logger.error(f"Filing failed for {file_path.name}: {e}")
+
+    # [RESILIENCE] Late raise of RAG backend error
+    if rag_error:
+        raise rag_error

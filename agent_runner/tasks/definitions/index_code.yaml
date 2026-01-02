@@ -1,0 +1,18 @@
+name: index_code
+type: agent
+enabled: false
+schedule: "1800" # Every 30 minutes
+idle_only: true
+priority: low
+description: "The Librarian: Extract and index code snippets."
+prompt: |
+  Scan recent 'episode' rows for code blocks (```...```).
+  For each block found:
+  1. Determine the Language (Python, SQL, YAML).
+  2. Generate a 1-line description of what the code does.
+  3. Hash the content to check for duplicates.
+  4. IF new: INSERT into `code_snippets` (create table if needed) with fields:
+     - language
+     - description
+     - content
+     - source_episode_id

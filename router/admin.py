@@ -1,9 +1,10 @@
 import os
+import json
 import shutil
 import time
 import logging
 from typing import Any, Optional
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from router.config import state, VERSION
 from router.providers import load_providers
@@ -13,7 +14,10 @@ logger = logging.getLogger("router.admin")
 
 async def _proxy_agent_runner(method: str, path: str, json_body: Any = None):
     from router.config import AGENT_RUNNER_URL
-    url = f"{AGENT_RUNNER_URL}/admin{path}"
+    # Ensure path doesn't result in double /admin/admin
+    clean_path = path if not path.startswith("/admin") else path[6:]
+    if not clean_path.startswith("/"): clean_path = "/" + clean_path
+    url = f"{AGENT_RUNNER_URL}/admin{clean_path}"
     try:
         if method == "GET":
             r = await state.client.get(url, timeout=10.0)
@@ -97,9 +101,11 @@ async def health_summary():
         "critical_count": len(open_breakers),
         "warning_count": len(anomalies),
         "open_breakers": open_breakers,
+        "anomalies": anomalies,
         "latest_anomaly": anomalies[0] if anomalies else None,
         "overall_status": all_breakers  # Full dump for UI to parse if needed
     }
+
 
 @router.get("/background-tasks")
 async def proxy_background_tasks():
@@ -119,9 +125,73 @@ async def proxy_memory_facts(query: str = "", limit: int = 100):
     path = f"/memory/facts?query={query}&limit={limit}"
     return await _proxy_agent_runner("GET", path)
 
+@router.post("/mcp/toggle")
+async def proxy_mcp_toggle(request: Request):
+    body = await request.json()
+    return await _proxy_agent_runner("POST", "/mcp/toggle", body)
+
+@router.post("/mcp/upload-config")
+async def proxy_mcp_upload_config(raw_text: str = Form(...)):
+    """Proxy MCP config upload to Agent Runner."""
+    from router.config import AGENT_RUNNER_URL
+    try:
+        # We must forward as form data
+        # Using state.client.post with 'data' argument sends form-urlencoded
+        r = await state.client.post(
+            f"{AGENT_RUNNER_URL}/admin/mcp/upload-config", 
+            data={"raw_text": raw_text},
+            timeout=30.0
+        )
+        return JSONResponse(r.json(), status_code=r.status_code)
+    except Exception as e:
+        logger.error(f"Failed to proxy MCP upload: {e}")
+        return {"ok": False, "error": str(e)} 
+
+@router.post("/mcp/upload-config-json")
+async def proxy_mcp_upload_json(request: Request):
+    """Proxy JSON payload to Agent Runner's new JSON-compatible endpoint."""
+    body = await request.json()
+    return await _proxy_agent_runner("POST", "/mcp/upload-config-json", body)
+
+@router.get("/mcp/server/status")
+async def proxy_mcp_server_status():
+    """Proxy MCP server status request to Agent Runner."""
+    return await _proxy_agent_runner("GET", "/admin/mcp/server/status")
+
+@router.post("/ingestion/resume")
+async def resume_ingestion():
+    """Resume a paused ingestion pipeline."""
+    return await _proxy_agent_runner("POST", "/ingestion/resume")
+
+@router.post("/ingestion/pause")
+async def pause_ingestion():
+    """Manually pause the ingestion pipeline."""
+    return await _proxy_agent_runner("POST", "/ingestion/pause")
+
+@router.post("/ingestion/clear-and-resume")
+async def proxy_ingestion_clear():
+    return await _proxy_agent_runner("POST", "/ingestion/clear-and-resume")
+
+@router.get("/ingestion/status")
+async def proxy_ingestion_status():
+    return await _proxy_agent_runner("GET", "/ingestion/status")
+
+@router.get("/memory/status")
+async def proxy_memory_status():
+    return await _proxy_agent_runner("GET", "/memory/status")
+
 @router.get("/circuit-breaker/status")
 async def proxy_cb_status():
-    return await _proxy_agent_runner("GET", "/circuit-breaker/status")
+    """Correctly aggregated status for all services (Router + Agent)."""
+    router_breakers = state.circuit_breakers.get_status()
+    agent_breakers = {}
+    try:
+        # Fetch from agent (which returns {"breakers": {...}, ...})
+        data = await _proxy_agent_runner("GET", "/circuit-breaker/status")
+        agent_breakers = data.get("breakers", {})
+    except: pass
+    
+    return {"ok": True, "breakers": {**router_breakers, **agent_breakers}}
 
 # Dashboard Tracking Proxies
 @router.get("/dashboard/insights")
@@ -171,6 +241,58 @@ async def toggle_mcp(enabled: bool):
 async def proxy_telemetry_log(request: Request):
     body = await request.json()
     return await _proxy_agent_runner("POST", "/telemetry/log", body)
+
+@router.get("/observability/trace")
+async def get_request_traces(limit: int = 50):
+    """Return recent request traces (Request Lifecycle)."""
+    try:
+        from common.observability import get_observability
+        from dataclasses import asdict
+        obs = get_observability()
+        # Get recent completed requests
+        requests = [asdict(r) for r in list(obs.completed_requests)[-limit:]]
+        # Reverse to show newest first
+        return {"ok": True, "traces": requests[::-1]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@router.get("/observability/stuck")
+async def get_stuck_requests_endpoint(timeout: float = 30.0):
+    """Return currently stuck requests."""
+    try:
+        from common.observability import get_observability
+        obs = get_observability()
+        stuck = await obs.get_stuck_requests(timeout_seconds=timeout)
+        return {"ok": True, "stuck_requests": stuck}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@router.post("/observability/anomalies/{anomaly_id}/ack")
+async def acknowledge_anomaly_endpoint(anomaly_id: str):
+    """Acknowledge an anomaly."""
+    from common.observability import get_observability
+    obs = get_observability()
+    success = obs.acknowledge_anomaly(anomaly_id)
+    return {"ok": success}
+
+@router.post("/observability/reexamine")
+async def reexamine_observability(request: Request):
+    """
+    Force re-examination/reset of observability metrics.
+    Body: {"targets": ["traces", "counters", ...]} (Optional, defaults to all)
+    """
+    try:
+        from common.observability import get_observability
+        body = await request.json()
+        targets = body.get("targets", ["all"])
+        
+        obs = get_observability()
+        await obs.reset_history(targets)
+        
+        return {"ok": True, "message": f"Reset targets: {targets}"}
+    except Exception as e:
+        logger.error(f"Re-examine failed: {e}")
+        return {"ok": False, "error": str(e)}
 
 @router.get("/observability/anomalies")
 async def get_anomalies(limit: int = 50):
@@ -233,9 +355,15 @@ async def get_circuit_breakers():
     return {"ok": True, "breakers": state.circuit_breakers.get_status()}
 
 @router.post("/circuit-breakers/{name}/reset")
+@router.post("/circuit-breaker/reset/{name}")
 async def reset_circuit_breaker(name: str):
-    """Manually reset a specific circuit breaker."""
+    """Manually reset a specific circuit breaker (Router + Agent)."""
     state.circuit_breakers.reset(name)
+    # Also attempt to reset in Agent
+    try:
+        await _proxy_agent_runner("POST", f"/circuit-breaker/reset/{name}")
+    except:
+        pass
     return {"ok": True, "message": f"Circuit breaker '{name}' reset"}
 
 @router.post("/circuit-breakers/reset-all")
@@ -410,9 +538,6 @@ async def set_default_embedding_model(model: str):
     state.default_embedding_model = model
     return {"ok": True, "message": f"Default embedding model set to {model}"}
 
-@router.get("/logs/tail")
-async def proxy_logs_tail(lines: int = 100):
-    return await _proxy_agent_runner("GET", f"/logs/tail?lines={lines}")
 
 @router.get("/docs/list")
 async def proxy_docs_list():
@@ -449,6 +574,29 @@ async def stop_router():
     asyncio.create_task(_exit())
     return {"ok": True, "message": "Router stopping in 1s..."}
 
+@router.post("/system/restart")
+async def restart_system():
+    """Trigger a full system restart (Agent + Router)."""
+    # Verify Restart Script Exists
+    import os
+    import subprocess
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script_path = os.path.join(root_dir, "bin", "restart_all.sh")
+    
+    # If script doesn't exist, try local logic
+    if not os.path.exists(script_path):
+         # Try at least to restart agent, then self
+         await restart_agent_runner()
+         await restart_router()
+         return {"ok": True, "message": "Triggered sequential restart sequence"}
+
+    try:
+        # Spawn detached process
+        subprocess.Popen([script_path], cwd=os.path.dirname(script_path), start_new_session=True)
+        return {"ok": True, "message": "System restart triggered via script"}
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to trigger restart script: {e}"}
+
 @router.post("/system/process/router/restart")
 async def restart_router():
     """Restart the Router process using os.execv."""
@@ -481,7 +629,7 @@ async def start_agent_runner():
     # Spawn
     # We assume standard location: module agent_runner.main
     # We need to run it as a detached process or background
-    cmd = [sys.executable, "-m", "uvicorn", "agent_runner.main:app", "--host", "0.0.0.0", "--port", "5460"]
+    cmd = [sys.executable, "-m", "uvicorn", "agent_runner.main:app", "--host", "127.0.0.1", "--port", "5460"]
     
     try:
         subprocess.Popen(cmd, cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -527,6 +675,14 @@ async def get_budget():
         "percent_used": (b.current_spend / max(0.01, b.daily_limit_usd)) * 100
     }
 
+@router.post("/budget/reset")
+async def reset_budget():
+    """Reset the current budget spend."""
+    from common.budget import get_budget_tracker
+    b = get_budget_tracker()
+    b.reset()
+    return {"ok": True, "message": "Budget reset successfully."}
+
 @router.get("/config/yaml")
 async def get_config_yaml():
     """Read config.yaml content."""
@@ -571,7 +727,7 @@ async def tail_log(lines: int = 10, service: str = "agent_runner"):
             
         text = data.decode('utf-8', errors='replace')
         all_lines = text.splitlines()
-        return {"ok": True, "lines": all_lines[-lines:]}
+        return {"ok": True, "logs": all_lines[-lines:]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -599,3 +755,81 @@ async def get_cloud_uplink_logs(lines: int = 15):
         return {"ok": True, "logs": text.splitlines()[-lines:]}
     except Exception as e:
         return {"ok": False, "logs": [f"> Error reading uplink: {e}"]}
+
+@router.get("/dashboard/state")
+async def get_dashboard_state():
+    """Aggregated state for the V2 Dashboard to minimize polling."""
+    import asyncio
+    
+    # 1. Gather all data in parallel
+    try:
+        [status, summary, metrics, budget, llms, ingestion, memory_stats] = await asyncio.gather(
+            system_status(),
+            health_summary(),
+            get_observability_stats(),
+            get_budget(),
+            get_llm_status(),
+            proxy_ingestion_status(),
+            proxy_memory_status(),
+            return_exceptions=True
+        )
+        
+        return {
+            "ok": True,
+            "timestamp": time.time(),
+            "status": status if not isinstance(status, Exception) else {"error": str(status)},
+            "summary": summary if not isinstance(summary, Exception) else {"error": str(summary)},
+            "metrics": metrics if not isinstance(metrics, Exception) else {"error": str(metrics)},
+            "budget": budget if not isinstance(budget, Exception) else {"error": str(budget)},
+            "llms": llms if not isinstance(llms, Exception) else {"error": str(llms)},
+            "ingestion": ingestion if not isinstance(ingestion, Exception) else {"error": str(ingestion)},
+            "memory_stats": memory_stats if not isinstance(memory_stats, Exception) else {"error": str(memory_stats)}
+        }
+    except Exception as e:
+        logger.error(f"Dashboard state aggregation failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+@router.get("/logs/stream")
+async def stream_logs(request: Request, services: str = "agent_runner,router"):
+    """SSE endpoint for real-time log streaming."""
+    from fastapi.responses import StreamingResponse
+    import asyncio
+    
+    service_list = [s.strip() for s in services.split(",")]
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    async def log_generator():
+        # Track file positions for each service
+        positions = {}
+        log_paths = {}
+        
+        for s in service_list:
+            p = os.path.join(root_dir, "logs", f"{s}.log")
+            if os.path.exists(p):
+                log_paths[s] = p
+                # Start at the end of the file
+                positions[s] = os.path.getsize(p)
+        
+        while True:
+            if await request.is_disconnected():
+                break
+                
+            for s, path in log_paths.items():
+                try:
+                    current_size = os.path.getsize(path)
+                    if current_size > positions[s]:
+                        with open(path, "r", encoding="utf-8", errors="replace") as f:
+                            f.seek(positions[s])
+                            lines = f.readlines()
+                            positions[s] = f.tell()
+                            
+                            for line in lines:
+                                if line.strip():
+                                    data = json.dumps({"service": s, "line": line.strip()})
+                                    yield f"data: {data}\n\n"
+                except Exception as e:
+                    logger.error(f"Error streaming logs for {s}: {e}")
+                    
+            await asyncio.sleep(0.5) # Poll files every 500ms
+            
+    return StreamingResponse(log_generator(), media_type="text/event-stream")

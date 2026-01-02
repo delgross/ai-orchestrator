@@ -325,45 +325,79 @@ start_surreal() {
 }
 
 # Stop router
+# Stop router
 stop_router() {
   local router_status=$(check_router)
   IFS='|' read -r router_port router_http router_launchd router_pid <<< "$router_status"
   
+  # 1. Try launchd stop
   if [ "$router_launchd" = "true" ]; then
     echo "Stopping router via launchd..."
     launchctl bootout "$DOMAIN" "$ROUTER_PLIST" 2>/dev/null || true
-    sleep 1
+    # Wait for it to die (up to 5s)
+    for i in {1..10}; do
+      if ! port_in_use "$ROUTER_PORT"; then break; fi
+      sleep 0.5
+    done
   fi
   
-  if [ "$router_port" = "true" ] && [ -n "$router_pid" ]; then
-    echo "Killing router process (PID: $router_pid)..."
-    kill "$router_pid" 2>/dev/null || true
-    sleep 1
-    if port_in_use "$ROUTER_PORT"; then
-      echo "Force killing..."
-      kill -9 "$router_pid" 2>/dev/null || true
+  # 2. Check if still alive (Zombie or Manual Process)
+  if port_in_use "$ROUTER_PORT"; then
+    local current_pid=$(get_port_pid "$ROUTER_PORT")
+    if [ -n "$current_pid" ]; then
+      echo "Process still running (PID: $current_pid). Sending SIGTERM..."
+      kill "$current_pid" 2>/dev/null || true
+      
+      # Wait again
+      for i in {1..6}; do
+        if ! port_in_use "$ROUTER_PORT"; then break; fi
+        sleep 0.5
+      done
+      
+      # 3. Force Kill
+      if port_in_use "$ROUTER_PORT"; then
+        echo "Force killing stuck process..."
+        kill -9 "$current_pid" 2>/dev/null || true
+      fi
     fi
   fi
 }
 
 # Stop agent-runner
+# Stop agent-runner
 stop_agent() {
   local agent_status=$(check_agent)
   IFS='|' read -r agent_port agent_http agent_launchd agent_pid <<< "$agent_status"
   
+  # 1. Try launchd stop
   if [ "$agent_launchd" = "true" ]; then
     echo "Stopping agent-runner via launchd..."
     launchctl bootout "$DOMAIN" "$AGENT_PLIST" 2>/dev/null || true
-    sleep 1
+    # Wait for it to die (up to 5s)
+    for i in {1..10}; do
+      if ! port_in_use "$AGENT_PORT"; then break; fi
+      sleep 0.5
+    done
   fi
   
-  if [ "$agent_port" = "true" ] && [ -n "$agent_pid" ]; then
-    echo "Killing agent-runner process (PID: $agent_pid)..."
-    kill "$agent_pid" 2>/dev/null || true
-    sleep 1
-    if port_in_use "$AGENT_PORT"; then
-      echo "Force killing..."
-      kill -9 "$agent_pid" 2>/dev/null || true
+  # 2. Check if still alive (Zombie or Manual Process)
+  if port_in_use "$AGENT_PORT"; then
+    local current_pid=$(get_port_pid "$AGENT_PORT")
+    if [ -n "$current_pid" ]; then
+      echo "Process still running (PID: $current_pid). Sending SIGTERM..."
+      kill "$current_pid" 2>/dev/null || true
+      
+      # Wait again
+      for i in {1..6}; do
+        if ! port_in_use "$AGENT_PORT"; then break; fi
+        sleep 0.5
+      done
+      
+      # 3. Force Kill
+      if port_in_use "$AGENT_PORT"; then
+        echo "Force killing stuck process..."
+        kill -9 "$current_pid" 2>/dev/null || true
+      fi
     fi
   fi
 }
@@ -433,13 +467,14 @@ start_all() {
     start_agent
   fi
 
-  local rag_status=$(check_rag)
-  IFS='|' read -r rag_port rag_http rag_launchd rag_pid <<< "$rag_status"
-  if [ "$rag_http" = "true" ]; then
-    echo -e "${GREEN}RAG Server already running${NC}"
-  else
-    start_rag
-  fi
+  # [UNIFIED LIFECYCLE] RAG Server is now spawned by Agent Runner
+  # local rag_status=$(check_rag)
+  # IFS='|' read -r rag_port rag_http rag_launchd rag_pid <<< "$rag_status"
+  # if [ "$rag_http" = "true" ]; then
+  #   echo -e "${GREEN}RAG Server already running${NC}"
+  # else
+  #   start_rag
+  # fi
   
   echo ""
   sleep 2

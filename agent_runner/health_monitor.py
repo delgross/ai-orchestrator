@@ -210,33 +210,33 @@ async def check_internet_connectivity() -> bool:
     """Check if the system has internet access using multiple reliable targets."""
     # ISOLATION FIX: Use a dedicated, fresh client for connectivity checks.
     # Do NOT reuse the shared app client (_http_client) to avoid pool exhaustion or deadlocks.
+    async def check_target(client, url):
+        try:
+            r = await client.head(url, timeout=5.0)
+            if r.status_code < 400: return True
+        except: pass
+        return False
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as private_client:
-            # Robust Multi-Target Check
             targets = [
                 "https://www.google.com",
                 "https://www.cloudflare.com",
                 "https://www.microsoft.com",
-                "https://1.1.1.1" # Cloudflare DNS (IP fallback)
+                "https://1.1.1.1"
             ]
             
-            # We only need ONE to succeed to be "Online"
-            for target in targets:
-                try:
-                    # Short timeout per target to fail fast (increased to 5.0s for stability)
-                    response = await private_client.head(target, timeout=5.0)
-                    if response.status_code < 400:
-                        return True
-                    else:
-                        logger.debug(f"Internet check target {target} returned {response.status_code}")
-                except Exception as e:
-                    logger.debug(f"Internet check target {target} failed: {e}")
-                    continue
-                    
-            logger.warning("Internet check failed for ALL targets. System is likely OFFLINE.")
+            # Concurrent Race: Return True on FIRST success
+            tasks = [check_target(private_client, t) for t in targets]
+            for f in asyncio.as_completed(tasks):
+                if await f:
+                    return True
+            
+            logger.warning("Internet check failed for ALL targets.")
             return False
+
     except Exception as e:
-        logger.error(f"Critical error during internet check creation: {e}")
+        logger.error(f"Critical error during internet check: {e}")
         return False
 
 
@@ -247,7 +247,7 @@ async def health_check_task() -> None:
     # Update internet availability state
     if _state:
         # Only check every 60 seconds to avoid noise
-        if time.time() - _state.last_internet_check > 60:
+        if time.time() - _state.last_internet_check > 10:
             original_state = _state.internet_available
             _state.internet_available = await check_internet_connectivity()
             _state.last_internet_check = time.time()

@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Questionable Insight Dashboard</title>
-    <link rel="stylesheet" href="/v2/styles.css?v=2.9.0">
+    <link rel="stylesheet" href="styles.css?v=2.9.1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -21,45 +21,41 @@
         <div class="brand">
             <div class="logo-text">?</div>
             <h1>QUESTIONABLE INSIGHT</h1>
-            <div id="clock" class="clock"
-                style="font-family: 'JetBrains Mono'; font-size: 0.9rem; color: var(--text-muted);">
-                00:00:00</div>
-        </div>
-        <div class="status-groups">
-            <div class="status-item" id="status-router">
-                <span class="label">ROUTER</span>
-                <span class="indicator online"></span>
-                <span class="value">--</span>
-            </div>
-            <!-- Moved MCP Tools Status here -->
-            <div class="status-item" id="status-mcp-tools">
-                <span class="label">MCP TOOLS</span>
-                <span class="indicator online"></span>
-                <span class="value">ENABLED</span>
-            </div>
-            <div class="status-item" id="status-mcp">
-                <span class="label">AGENT</span>
-                <span class="indicator online"></span>
-                <span class="value">--</span>
-            </div>
-            <div class="status-item" id="status-ollama">
-                <span class="label">OLLAMA</span>
-                <span class="indicator pending"></span>
-                <span class="value">--</span>
-            </div>
-            <!-- Clock removed -->
-            <div class="status-item" id="status-db">
-                <span class="label">DATABASE</span>
-                <span class="indicator online"></span>
-                <span class="value">--</span>
-            </div>
-            <div class="status-item" id="status-internet">
-                <span class="label">INTERNET</span>
-                <span class="indicator online"></span>
-                <span class="value">--</span>
+            <div id="clock" class="clock">00:00:00</div>
+            <div class="status-groups-compact">
+                <div class="status-item" id="status-router" title="Router Status">
+                    <span class="indicator unknown"></span> <span class="value">ROUTER</span>
+                </div>
+                <div class="status-item" id="status-mcp-tools" title="MCP Interface">
+                    <span class="indicator unknown"></span> <span class="value">TOOLS</span>
+                </div>
+                <div class="status-item" id="status-mcp" title="Agent Core">
+                    <span class="indicator unknown"></span> <span class="value">AGENT</span>
+                </div>
+                <div class="status-item" id="status-ollama" title="Ollama (LLM)">
+                    <span class="indicator unknown"></span> <span class="value">LLM</span>
+                </div>
+                <div class="status-item" id="status-db" title="SurrealDB Memory">
+                    <span class="indicator unknown"></span> <span class="value">DB</span>
+                </div>
+                <!-- New Memory & Ingestion Indicators -->
+                <div class="status-item rag" id="status-rag" title="RAG Query Engine">
+                    <span class="indicator unknown"></span> <span class="value">RAG</span>
+                </div>
+                <div class="status-item" id="status-memory-engine" title="Memory Engine (State)">
+                    <span class="indicator unknown"></span> <span class="value">MEM</span>
+                </div>
+                <div class="status-item" id="status-data-ingest" title="Data Ingestion Pipeline">
+                    <span class="indicator unknown"></span> <span class="value">INGEST</span>
+                </div>
+                <div class="status-item" id="status-internet" title="Internet Connectivity">
+                    <span class="indicator unknown"></span> <span class="value">NET</span>
+                </div>
+                <div class="status-item" id="status-budget" title="Daily Budget">
+                    <span class="indicator unknown"></span> <span class="value">BUDGET</span>
+                </div>
             </div>
         </div>
-        <!-- Clock removed -->
     </header>
 
     <!-- System Health Sentinel (Persistent Alert) -->
@@ -103,7 +99,7 @@
         <button class="action-btn sm" id="btn-health-check">
             <span class="icon">🩺</span> Run Health Check
         </button>
-        <div style="width:1px; height:24px; background:var(--glass-border); margin:0 0.5rem;"></div>
+        <div class="divider"></div>
         <button class="action-btn sm"
             onclick="fetch('/admin/system/process/router/restart', {method:'POST'}).then(() => alert('Router restarting...'))"
             title="Restart Router Process">
@@ -117,6 +113,14 @@
     </div>
 
     <main class="dashboard-container">
+        <!-- Sidebar Widget: Anomaly Inbox -->
+        <div id="anomaly-widget" class="glass"
+            style="margin-bottom: 10px; padding: 10px; cursor: pointer; border-left: 3px solid var(--text-secondary); display:none;"
+            onclick="switchTab('anomalies')">
+            <div style="font-size: 0.8rem; font-weight: bold;">System Health</div>
+            <div id="anomaly-widget-status" style="font-size: 0.9rem;">No Active Issues</div>
+        </div>
+
         <!-- Tab Navigation -->
         <nav class="tab-strip glass">
             <button class="tab-link active" data-tab="overview">
@@ -128,16 +132,16 @@
             <button class="tab-link" data-tab="tools">
                 <span class="icon">🔧</span> MCP Servers
             </button>
-            <button class="tab-link" data-tab="cost">
+            <button class="tab-link" data-tab="cost" style="display:none;">
                 <span class="icon">💰</span> Cost
             </button>
             <button class="tab-link" data-tab="docs">
                 <span class="icon">📚</span> Docs
             </button>
-            <button class="tab-link" data-tab="config">
+            <button class="tab-link" data-tab="config" style="display:none;">
                 <span class="icon">⚙️</span> Config
             </button>
-            <button class="tab-link" data-tab="misc">
+            <button class="tab-link" data-tab="misc" style="display:none;">
                 <span class="icon">🧩</span> Misc
             </button>
             <button class="tab-link" data-tab="chat">
@@ -148,6 +152,12 @@
             </button>
             <button class="tab-link" data-tab="logs">
                 <span class="icon">📝</span> Logs
+            </button>
+            <button class="tab-link" data-tab="breakers">
+                <span class="icon">⚡</span> Breakers
+            </button>
+            <button class="tab-link" data-tab="anomalies">
+                <span class="icon">⚠️</span> Anomalies
             </button>
         </nav>
 
@@ -164,28 +174,53 @@
                                 <option value="router">Raw Router</option>
                             </select>
                             <span id="chat-status" class="status-indicator">Ready</span>
-                            <span id="chat-live-log"
-                                style="font-size: 0.75rem; color: var(--text-muted); margin-left: 10px; font-family: 'JetBrains Mono'; opacity: 0.5;">(Log
-                                Area Ready)</span>
+                            <span id="chat-live-log" class="chat-live-log">(Log Area Ready)</span>
                         </div>
                     </div>
-                    <div id="chat-messages" class="chat-container mono"
-                        style="flex-grow: 1; overflow-y: auto; padding: 20px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 20px;">
+                    <div id="chat-messages" class="chat-container mono">
                         <div class="chat-message system">System: Ready to connect to Port 5455.</div>
                     </div>
-                    <div class="chat-input-area" style="display: flex; gap: 10px; align-items: flex-end;">
-                        <button id="btn-chat-mic" class="action-btn sm"
-                            style="padding: 0 15px; height: 60px; background: #333;" title="Voice Input">🎤</button>
+                    <div class="chat-input-area">
+                        <button id="btn-chat-mic" class="action-btn sm" title="Voice Input">🎤</button>
                         <textarea id="chat-input" class="code-editor"
-                            style="height: 60px; min-height: 60px; flex-grow: 1;"
                             placeholder="Type your message... (Shift+Enter to send)"></textarea>
-                        <button id="btn-chat-send" class="action-btn primary" style="height: 60px;">Send</button>
+                        <button id="btn-chat-send" class="action-btn primary">Send</button>
                     </div>
                     <div style="margin-top: 10px; display: flex; gap: 15px; align-items: center;">
-                        <label
-                            style="color: #aaa; font-size: 0.8em; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                        <label class="tts-label">
                             <input type="checkbox" id="chat-tts-toggle"> 🔊 Read Responses Aloud
                         </label>
+                    </div>
+                </div>
+            </div>
+            <!-- Anomalies Tab -->
+            <div id="anomalies" class="tab-content">
+                <div class="card glass wide full-height flex-col">
+                    <div class="card-header">
+                        <h3>Anomaly Inbox</h3>
+                        <div class="flex-row-center">
+                            <span id="anomaly-count-badge" class="badge">0 New</span>
+                            <button class="action-btn sm" onclick="fetchAnomalies()">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="table-container flex-grow">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Severity</th>
+                                    <th>Metric</th>
+                                    <th>Deviation</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="anomaly-table-body">
+                                <tr>
+                                    <td colspan="6" class="text-center">Loading...</td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -195,8 +230,11 @@
                     <div class="card-header">
                         <h3>Orchestrator Memory (SurrealDB)</h3>
                         <div class="flex-row-center">
-                            <input type="text" id="memory-search-input" placeholder="Search facts..."
-                                style="padding: 0.5rem; border-radius: 8px; border: 1px solid var(--glass-border); background: rgba(0,0,0,0.3); color: white; width: 300px;">
+                            <div id="memory-functioning-indicator" class="status-item"
+                                style="margin-right:15px; font-size:0.8rem;">
+                                <span class="indicator unknown"></span> <span class="value">STATUS: --</span>
+                            </div>
+                            <input type="text" id="memory-search-input" placeholder="Search facts...">
                             <button class="action-btn sm" onclick="fetchMemoryFacts()">Search</button>
                         </div>
                     </div>
@@ -212,7 +250,10 @@
                     <div class="card glass wide full-width" style="grid-column: span 2;">
                         <div class="card-header">
                             <h3>System Role & Model Orchestration</h3>
-                            <button class="action-btn sm" onclick="fetchSystemRoles()">Refresh Roles</button>
+                            <div class="flex-row-center">
+                                <button class="action-btn sm" onclick="openRoleConfigModal()">Configure Models</button>
+                                <button class="action-btn sm" onclick="fetchSystemRoles()">Refresh</button>
+                            </div>
                         </div>
                         <div class="role-table-container">
                             <table class="role-table">
@@ -220,13 +261,12 @@
                                     <tr>
                                         <th>Role</th>
                                         <th>Current Assigned Model</th>
-                                        <th>Select New Model</th>
-                                        <th>Action</th>
+                                        <!-- Actions removed from Overview -->
                                     </tr>
                                 </thead>
                                 <tbody id="roles-table-body">
                                     <tr>
-                                        <td colspan="4" class="text-center">Loading Roles...</td>
+                                        <td colspan="2" class="text-center">Loading Roles...</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -282,11 +322,10 @@
                         <div
                             class="card-header border-bottom border-secondary d-flex justify-content-between align-items-center">
                             <h3>H100 Uplink</h3>
-                            <span class="badge bg-primary" id="cloud-status-badge"
-                                style="background:var(--accent-blue); padding:2px 8px; border-radius:4px; font-size:0.8rem;">OFFLINE</span>
+                            <span class="badge uplink-badge" id="cloud-status-badge">OFFLINE</span>
                         </div>
                         <div class="card-body p-0">
-                            <div id="cloud-terminal" class="terminal-box" style="height: 150px;">
+                            <div id="cloud-terminal" class="terminal-box">
                                 > Listening for H100 telemetry...
                             </div>
                         </div>
@@ -365,130 +404,219 @@
                         <h3>MCP Servers & Tools</h3>
                         <div class="search-box">
                             <input type="text" id="tool-search" placeholder="Filter servers...">
-                        </div>
-                    </div>
-                    <div id="mcp-servers-list" class="mcp-grid">
-                        <div class="placeholder-box">Loading MCP Servers...</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Cost Tab -->
-            <div id="cost" class="tab-content">
-                <div class="card glass">
-                    <h3>Daily API Budget</h3>
-                    <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:1rem;">
-                        <div>
-                            <div style="font-size:3rem; font-weight:700;" id="costDisplay">Loading...</div>
-                            <div style="color:var(--text-secondary);" id="limitDisplay">Limit: --</div>
-                        </div>
-                        <div style="text-align:right;">
-                            <div style="font-size:1.5rem; font-weight:bold;" id="percentDisplay">--%</div>
-                            <div style="font-size:0.8rem; color:var(--text-secondary);">Used Today</div>
-                        </div>
-                    </div>
-
-                    <div style="background:rgba(255,255,255,0.1); height:10px; border-radius:5px; overflow:hidden;">
-                        <div id="costBar"
-                            style="width:0%; height:100%; background:var(--success); transition:width 0.5s;"></div>
-                    </div>
-
-                    <p style="margin-top:1rem; font-size:0.9rem; color:var(--text-secondary);">
-                        Estimates based on input/output tokens. Actual provider billing may vary slightly.
-                        Resets daily at 00:00 UTC.
-                    </p>
-                    <button class="action-btn sm" onclick="refreshCost()" style="margin-top:1rem;">🔄 Refresh
-                        Cost</button>
-                </div>
-            </div>
-
-            <!-- Misc Tab -->
-            <div id="misc" class="tab-content">
-                <div class="grid-layout">
-                    <div class="card glass wide">
-                        <h3>Full Provider Status</h3>
-                        <div id="llm-status-list-misc" class="mcp-grid">
-                            <div class="placeholder-box">Loading Status...</div>
-                        </div>
-                    </div>
-
-                    <div class="card glass">
-                        <h3>System Controls</h3>
-                        <div style="display:flex; flex-direction:column; gap:0.8rem;">
-                            <button class="action-btn"
-                                onclick="fetch('/admin/reload', {method:'POST'}).then(()=>location.reload())">
-                                ⚡ Hot Reload Config
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Config Edit Tab (Smart) -->
-            <div id="config" class="tab-content">
-                <div class="grid-layout">
-                    <!-- Control Panel -->
-                    <div class="card glass" style="grid-column: span 1;">
-                        <h3>✨ Smart Config Manager</h3>
-                        <p style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:1rem;">
-                            Describe the changes you want (e.g., "Remove the fetch-docker server", "Set timeout to 600",
-                            "Enable debug mode").
-                            The Agent will safely edit <code>config.yaml</code> for you.
-                        </p>
-
-                        <textarea id="config-instruction" class="code-editor" style="height:150px; margin-bottom:1rem;"
-                            placeholder="Type your instructions here..."></textarea>
-
-                        <div class="controls" style="display:flex; justify-content:space-between; align-items:center;">
-                            <button class="action-btn primary" id="btn-smart-config" onclick="runSmartConfig()">🤖 Apply
-                                Changes</button>
-                            <span id="smart-config-status" class="status-msg"></span>
-                        </div>
-
-                        <div id="smart-config-log" class="log-viewer mono"
-                            style="margin-top:1rem; height:200px; font-size:0.8rem; background:rgba(0,0,0,0.3);">
-                            Agent output will appear here...
-                        </div>
-                    </div>
-
-                    <!-- File Viewer (Read Only reference) -->
-                    <div class="card glass" style="grid-column: span 1;">
-                        <div class="card-header">
-                            <h3>File Manager</h3>
                             <div class="flex-row-center">
-                                <select id="config-file-selector" class="config-select" style="max-width: 150px;">
-                                    <option value="" disabled selected>Select...</option>
-                                </select>
-                                <button class="action-btn sm" id="btn-save-config" title="Save File to Disk">
-                                    <span class="icon">💾</span> Save
-                                </button>
-                                <button class="action-btn sm" onclick="loadConfigFile()" title="Reload from Disk">
-                                    <span class="icon">🔄</span>
+                                <button class="action-btn sm" id="btn-reload-mcp"
+                                    onclick="fetch('/admin/reload-mcp', {method:'POST'}).then(()=>showNotification('MCP Reloaded'))">
+                                    🔄 Reload Servers
                                 </button>
                             </div>
                         </div>
-                        <textarea id="config-editor" class="code-editor mono"
-                            style="height: 400px; opacity: 0.9; background: #111;"
-                            placeholder="Loading config..."></textarea>
-                    </div>
-                </div>
-            </div>
+                        <!-- Ingestion Controller -->
+                        <!-- Ingestion Controller (Permanent) -->
+                        <div id="ingestion-controller" class="card glass"
+                            style="margin-bottom: 20px; border: 1px solid var(--glass-border);">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <div>
+                                    <h4 id="ingest-status-title" style="margin:0;">Ingestion Pipeline</h4>
+                                    <div id="ingest-pause-reason"
+                                        style="font-size:0.85rem; margin-top:4px; color:var(--text-secondary);">
+                                        Monitoring...
+                                    </div>
+                                </div>
+                                <div id="ingestion-action-buttons" style="display:flex; gap:8px;">
+                                    <button id="btn-pause-ingest" class="action-btn sm" onclick="pauseIngestion()">
+                                        ⏸️ Pause
+                                    </button>
+                                    <button id="btn-resume-ingest" class="action-btn sm primary"
+                                        onclick="resumeIngestion()" style="display:none;">
+                                        ▶️ Resume
+                                    </button>
+                                    <button id="btn-clear-resume" class="action-btn sm primary" style="display:none;"
+                                        onclick="clearAndResumeIngestion()">⚠️ Clear & Resume</button>
+                                </div>
+                            </div>
+                        </div>
 
-            <!-- Logs Tab -->
-            <div id="logs" class="tab-content">
-                <div class="card glass wide full-height">
-                    <div class="card-header">
-                        <h3>System Logs (Live Stream)</h3>
-                        <div class="log-controls">
-                            <button class="action-btn sm" id="btn-refresh-logs">Refresh Tail</button>
-                            <button class="action-btn sm" id="btn-clear-logs">Clear View</button>
+                        <!-- MCP Server Status (New) -->
+                        <div id="mcp-server-status-card" class="card glass"
+                            style="margin-bottom: 20px; border: 1px solid var(--glass-border); display:none;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <div>
+                                    <h4 style="margin:0; color:var(--accent-neon);">MCP Server Active</h4>
+                                    <div style="font-size:0.85rem; color:var(--text-secondary); margin-top:4px;">
+                                        Port: <span class="mono">5460</span> (SSE)
+                                    </div>
+                                </div>
+                                <div id="mcp-connected-clients" style="font-size:0.85rem; text-align:right;">
+                                    No Clients Connected
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="mcp-servers-list" class="mcp-grid">
+                            <div class="placeholder-box">Loading MCP Servers...</div>
                         </div>
                     </div>
-                    <div id="log-container" class="log-viewer mono">
-                        <div class="log-entry info">System: Initializing log stream...</div>
+                </div>
+
+                <!-- Cost Tab -->
+                <div id="cost" class="tab-content">
+                    <div class="card glass">
+                        <h3>Daily API Budget</h3>
+                        <div
+                            style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:1rem;">
+                            <div>
+                                <div id="costDisplay" class="cost-value-big">Loading...</div>
+                                <div id="limitDisplay" class="cost-limit">Limit: --</div>
+                            </div>
+                            <div class="text-right">
+                                <div id="percentDisplay" class="cost-percent">--%</div>
+                                <div class="cost-label-sm">Used Today</div>
+                            </div>
+                        </div>
+
+                        <div class="cost-progress-bg">
+                            <div id="costBar" class="progress-fill"></div>
+                        </div>
+
+                        <p style="margin-top:1rem; font-size:0.9rem; color:var(--text-secondary);">
+                            Estimates based on input/output tokens. Actual provider billing may vary slightly.
+                            Resets daily at 00:00 UTC.
+                        </p>
+                        <button class="action-btn sm" onclick="refreshCost()" style="margin-top:1rem;">🔄 Refresh
+                            Cost</button>
                     </div>
                 </div>
-            </div>
+
+                <!-- Misc Tab -->
+                <div id="misc" class="tab-content">
+                    <div class="grid-layout">
+                        <div class="card glass wide">
+                            <h3>Full Provider Status</h3>
+                            <div id="llm-status-list-misc" class="mcp-grid">
+                                <div class="placeholder-box">Loading Status...</div>
+                            </div>
+                        </div>
+
+                        <div class="card glass">
+                            <h3>System Controls</h3>
+                            <div style="display:flex; flex-direction:column; gap:0.8rem;">
+                                <button class="action-btn"
+                                    onclick="fetch('/admin/reload', {method:'POST'}).then(()=>location.reload())">
+                                    ⚡ Hot Reload Config
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Config Edit Tab (Smart) -->
+                <div id="config" class="tab-content">
+                    <div class="grid-layout">
+                        <!-- Control Panel -->
+                        <div class="card glass" style="grid-column: span 1;">
+                            <h3>✨ Smart Config Manager</h3>
+                            <p style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:1rem;">
+                                Describe the changes you want (e.g., "Remove the fetch-docker server", "Set timeout to
+                                600",
+                                "Enable debug mode").
+                                The Agent will safely edit <code>config.yaml</code> for you.
+                            </p>
+
+                            <textarea id="config-instruction" class="code-editor"
+                                style="height:150px; margin-bottom:1rem;"
+                                placeholder="Type your instructions here..."></textarea>
+
+                            <div class="controls"
+                                style="display:flex; justify-content:space-between; align-items:center;">
+                                <button class="action-btn primary" id="btn-smart-config" onclick="runSmartConfig()">🤖
+                                    Apply
+                                    Changes</button>
+                                <span id="smart-config-status" class="status-msg"></span>
+                            </div>
+
+                            <div id="smart-config-log" class="log-viewer mono">
+                                Agent output will appear here...
+                            </div>
+                        </div>
+
+                        <!-- File Viewer (Read Only reference) -->
+                        <div class="card glass" style="grid-column: span 1;">
+                            <div class="card-header">
+                                <h3>File Manager</h3>
+                                <div class="flex-row-center">
+                                    <select id="config-file-selector" class="config-select" style="max-width: 150px;">
+                                        <option value="" disabled selected>Select...</option>
+                                    </select>
+                                    <button class="action-btn sm" id="btn-save-config" title="Save File to Disk">
+                                        <span class="icon">💾</span> Save
+                                    </button>
+                                    <button class="action-btn sm" onclick="loadConfigFile()" title="Reload from Disk">
+                                        <span class="icon">🔄</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <textarea id="config-editor" class="code-editor mono"
+                                placeholder="Loading config..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logs Tab -->
+                <div id="logs" class="tab-content">
+                    <div class="card glass wide full-height">
+                        <div class="card-header">
+                            <h3>System Logs (Live Stream)</h3>
+                            <div class="log-controls">
+                                <button class="action-btn sm" id="btn-refresh-logs">Refresh Tail</button>
+                                <button class="action-btn sm" id="btn-clear-logs">Clear View</button>
+                            </div>
+                        </div>
+                        <div id="log-container" class="log-viewer mono">
+                            <div class="log-entry info">System: Initializing log stream...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Breakers Tab -->
+                <div id="breakers" class="tab-content">
+                    <div class="card glass wide full-height">
+                        <div class="card-header">
+                            <h3>Circuit Breaker Status</h3>
+                            <div class="search-box">
+                                <div class="flex-row-center">
+                                    <button class="action-btn sm" id="btn-reload-breakers" onclick="fetchBreakerData()">
+                                        🔄 Refresh Status
+                                    </button>
+                                    <button class="action-btn sm primary"
+                                        onclick="if(confirm('Reset ALL Circuit Breakers?')) fetch('/admin/circuit-breaker/reset-all', {method:'POST'}).then(() => fetchBreakerData())">
+                                        ⚠️ Reset ALL
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="role-table-container">
+                            <table class="role-table">
+                                <thead>
+                                    <tr>
+                                        <th>Service / Server</th>
+                                        <th>State</th>
+                                        <th>Failures</th>
+                                        <th>Last Error</th>
+                                        <th>Cooldown</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="breaker-table-body">
+                                    <tr>
+                                        <td colspan="6" class="text-center">Loading Breakers...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
 
         </section>
     </main>
@@ -505,10 +633,34 @@
         <div class="modal glass">
             <div class="modal-header">
                 <h3 id="modal-title">Tool Details</h3>
-                <button class="close-modal">&times;</button>
+                <button class="close-modal" onclick="closeToolsModal()">&times;</button>
             </div>
             <div class="modal-body" id="modal-content">
                 <!-- Content injected here -->
+            </div>
+        </div>
+    </div>
+
+    <div id="role-config-modal" class="modal-overlay">
+        <div class="modal glass" style="max-width: 800px; width: 90%;">
+            <div class="modal-header">
+                <h3>Configure System Roles</h3>
+                <button class="close-modal" onclick="closeRoleConfigModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <table class="role-table">
+                    <thead>
+                        <tr>
+                            <th>Role</th>
+                            <th>Current Model</th>
+                            <th>New Assignment</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="role-config-table-body">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -518,15 +670,142 @@
         <div class="modal glass">
             <div class="modal-header">
                 <h3 id="model-modal-title">Available Models</h3>
-                <button class="close-modal">&times;</button>
+                <button class="close-modal" onclick="closeToolsModal()">&times;</button>
             </div>
             <div class="modal-body" id="model-modal-content">
             </div>
         </div>
     </div>
 
+    <!-- SYSTEM LOGS VIEW -->
+    <div id="logs-view" class="view" style="display: none;">
+        <div class="card terminal-card">
+            <h2>System Logs</h2>
+            <div id="system-logs" class="log-window"></div>
+            <div class="log-controls">
+                <button class="btn" onclick="clearLogs()">Clear</button>
+                <label><input type="checkbox" id="auto-scroll" checked> Auto-scroll</label>
+            </div>
+        </div>
+    </div>
+
+    <!-- DIAGNOSTICS VIEW (Phase 25 & 25b) -->
+    <div id="diagnostics-view" class="view" style="display: none;">
+        <!-- Controls -->
+        <div style="margin-bottom: 20px; display: flex; justify-content: flex-end;">
+            <button class="btn primary" onclick="forceReexamine()">
+                <span class="icon">🔄</span> Re-Examine System (Reset Metrics)
+            </button>
+        </div>
+
+        <!-- Top Metrics Row -->
+        <div class="grid-layout">
+            <div class="card status-card">
+                <h2>Throughput</h2>
+                <div class="status-indicator">
+                    <div class="status-item">
+                        <span class="label">RPS</span>
+                        <span class="value" id="diag-rps">0.0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Tokens/Sec</span>
+                        <span class="value" id="diag-tps">0.0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Latency P99</span>
+                        <span class="value" id="diag-p99">0ms</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card status-card">
+                <h2>Cache Efficiency</h2>
+                <div class="status-indicator">
+                    <div class="status-item">
+                        <span class="label">Hit Rate</span>
+                        <span class="value" id="diag-cache-rate">0%</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Hits</span>
+                        <span class="value" id="diag-cache-hits">0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Misses</span>
+                        <span class="value" id="diag-cache-misses">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card status-card">
+                <h2>Concurrency</h2>
+                <div class="status-indicator">
+                    <div class="status-item">
+                        <span class="label">Active</span>
+                        <span class="value" id="diag-active">0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Wait Time</span>
+                        <span class="value" id="diag-wait">0ms</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Queue</span>
+                        <span class="value" id="diag-queue">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stuck Requests -->
+        <div class="card">
+            <h2>Stuck Requests (>30s)</h2>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Age</th>
+                            <th>Stage</th>
+                            <th>Path</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="diag-stuck-table">
+                        <tr>
+                            <td colspan="5" style="text-align:center">No stuck requests</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Request Trace Table -->
+        <div class="card">
+            <h2>Recent Request Traces</h2>
+            <div class="table-container" style="max-height: 500px; overflow-y: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Method</th>
+                            <th>Path</th>
+                            <th>Status</th>
+                            <th>Duration</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="diag-trace-table">
+                        <tr>
+                            <td colspan="6" style="text-align:center">Loading traces...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="/v2/app.js?v=2.9.0"></script>
+    <script src="app.js?v=2.9.7"></script>
 </body>
 
 </html>
+```

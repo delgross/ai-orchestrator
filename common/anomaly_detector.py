@@ -11,8 +11,11 @@ import logging
 import statistics
 import time
 import math
+import json
+import os
+import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +28,13 @@ class AnomalySeverity(Enum):
     WARNING = "warning"
     CRITICAL = "critical"
 
+class AnomalyStatus(Enum):
+    """Status tracking for anomalies."""
+    NEW = "new"
+    ACKNOWLEDGED = "acknowledged"
+    RESOLVED = "resolved"
+    IGNORED = "ignored"
+
 
 @dataclass
 class Anomaly:
@@ -36,6 +46,22 @@ class Anomaly:
     severity: AnomalySeverity
     timestamp: float
     metadata: Dict[str, Any]
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    status: AnomalyStatus = AnomalyStatus.NEW
+
+    def to_dict(self):
+        """Convert to dictionary for serialization."""
+        d = asdict(self)
+        d['severity'] = self.severity.value
+        d['status'] = self.status.value
+        return d
+
+    @classmethod
+    def from_dict(cls, d):
+        """Load from dictionary."""
+        d['severity'] = AnomalySeverity(d['severity'])
+        d['status'] = AnomalyStatus(d['status'])
+        return cls(**d)
 
 
 class AnomalyDetector:
@@ -60,6 +86,38 @@ class AnomalyDetector:
         
         # Detected anomalies
         self.recent_anomalies: deque = deque(maxlen=1000)
+        self.persistence_path = "data/anomalies.json"
+        self._load_state()
+
+    def _save_state(self):
+        """Persist anomalies to disk."""
+        try:
+            os.makedirs(os.path.dirname(self.persistence_path), exist_ok=True)
+            data = [a.to_dict() for a in self.recent_anomalies]
+            with open(self.persistence_path, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save anomalies: {e}")
+
+    def _load_state(self):
+        """Load anomalies from disk."""
+        if not os.path.exists(self.persistence_path):
+            return
+        try:
+            with open(self.persistence_path, 'r') as f:
+                data = json.load(f)
+                self.recent_anomalies = deque([Anomaly.from_dict(d) for d in data], maxlen=1000)
+        except Exception as e:
+            logger.error(f"Failed to load anomalies: {e}")
+
+    def acknowledge_anomaly(self, anomaly_id: str) -> bool:
+        """Mark an anomaly as acknowledged."""
+        for a in self.recent_anomalies:
+            if a.id == anomaly_id:
+                a.status = AnomalyStatus.ACKNOWLEDGED
+                self._save_state()
+                return True
+        return False
     
     # Metrics that typically follow a Log-Normal distribution (e.g., latency)
     LOG_NORMAL_METRICS = {"process_request", "total_response_time_ms", "avg_latency_ms"}
@@ -208,6 +266,7 @@ class AnomalyDetector:
                 metadata=metadata or {}
             )
             self.recent_anomalies.append(anomaly)
+            self._save_state()
             return anomaly
             
         return None

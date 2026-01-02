@@ -1,0 +1,14 @@
+name: enrich_episodes
+type: agent
+enabled: false
+schedule: "600" # Every 10 minutes
+idle_only: true
+priority: low
+description: "The Annotator: Enrich recent episodes with topics and context."
+prompt: |
+  Scan the 'episode' table for rows created in the last hour that satisfy `metadata IS NULL`.
+  For each episode:
+  1. ANALYZE the content for Key Topics (e.g. "Database", "Authentication") and Sentiment.
+  2. RESOLVE ambiguous references (e.g. change "fix the file" to "fix [main.py]").
+  3. UPDATE the row to set `metadata = { topics: [...], resolved_context: "..." }`.
+  Do not move the data; just improve it.
