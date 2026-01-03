@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (targetTab === 'config') fetchConfigFiles();
             if (targetTab === 'docs') fetchDocsList();
             if (targetTab === 'ollama') fetchOllamaModels();
-            if (targetTab === 'memory') fetchMemoryFacts();
+            // memory tab removed
             if (targetTab === 'breakers') fetchBreakerData();
             if (targetTab === 'logs') {
                 fetchLogTail();
@@ -463,25 +463,25 @@ document.addEventListener('DOMContentLoaded', () => {
             // Defines the Grand Unified Role List
             const roleLabels = {
                 // --- 1. Core ---
-                "agent_model": "Agent Runner (The Brain)",
-                "router_model": "Gateway / Router (Traffic)",
-                "task_model": "Task Executor (Worker)",
-                "summarization_model": "Summarizer (Memory)",
+                "agent_model": "Agent Model",
+                "intent_model": "Maître d",
+                "router_model": "Router Model",
+                "task_model": "Tasker",
+                "summarization_model": "Summarizer Model",
 
                 // --- 2. Unveiled ---
-                "vision_model": "Vision Engine (Image Analysis)",
-                "mcp_model": "Generic Tool Host (External)",
-                "finalizer_model": "Finalizer (Reasoning Check)",
-                "fallback_model": "Safety Net (Offline Backup)",
+                "vision_model": "Vision Model",
+                "mcp_model": "MCP",
+                "finalizer_model": "Finalizer",
+                "fallback_model": "Fallback Model",
 
                 // --- 3. Intelligence ---
-                "intent_model": "Maître d' (Intent Classifier)",
-                "pruner_model": "Context Pruner (Memory Surgeon)",
-                "healer_model": "System Healer (Self-Repair)",
-                "critic_model": "Critic / Validator (Safety)",
+                "pruner_model": "RAG Server",
+                "healer_model": "Diagnostician",
+                "critic_model": "Critique Model",
 
                 // --- 4. Foundation ---
-                "embedding_model": "Embedding Engine (Vectors)"
+                "embedding_model": "Embedding Model"
             };
 
             // Helper to generate grouped options
@@ -515,8 +515,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 return `
                     ${activeButMissing || ''}
-                    <optgroup label="Local (Ollama)">${localOpts.join('')}</optgroup>
                     <optgroup label="Cloud / API">${cloudOpts.join('')}</optgroup>
+                    <optgroup label="Local (Ollama)">${localOpts.join('')}</optgroup>
                  `;
             };
 
@@ -527,16 +527,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (tbodyOverview && rolesData.roles) {
                 // Define category order
                 const categories = [
-                    { name: "Core Roles", keys: ["agent_model", "router_model", "task_model", "summarization_model"] },
+                    { name: "Core Roles", keys: ["agent_model", "intent_model", "router_model", "task_model", "summarization_model"] },
                     { name: "Advanced Roles", keys: ["vision_model", "mcp_model", "finalizer_model", "fallback_model"] },
-                    { name: "Intelligent Roles", keys: ["intent_model", "pruner_model", "healer_model", "critic_model"] },
+                    { name: "Intelligent Roles", keys: ["pruner_model", "healer_model", "critic_model"] },
                     { name: "Infrastructure", keys: ["embedding_model"] }
                 ];
 
                 let html = "";
                 categories.forEach(cat => {
                     // Filter keys that exist in data
-                    const validKeys = cat.keys.filter(k => rolesData.roles[k]);
+                    const validKeys = cat.keys.filter(k => rolesData.roles[k] || k === "agent_model");
+
                     if (validKeys.length > 0) {
                         html += `<tr class="section-header"><td colspan="2" style="background:var(--bg-card); font-size:0.75rem; color:var(--text-muted); padding-top:10px; font-weight:bold; letter-spacing:0.5px;">${cat.name.toUpperCase()}</td></tr>`;
                         validKeys.forEach(key => {
@@ -564,10 +565,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (tbodyModal && rolesData.roles) {
                 // Reuse categories for consistency
                 const categories = [
-                    { name: "Core Roles", keys: ["agent_model", "router_model", "task_model", "summarization_model"] },
+                    { name: "Core Roles", keys: ["agent_model", "intent_model", "router_model", "task_model", "summarization_model"] },
                     { name: "Advanced Roles", keys: ["vision_model", "mcp_model", "finalizer_model", "fallback_model"] },
-                    { name: "Intelligent Roles", keys: ["intent_model", "pruner_model", "healer_model", "critic_model"] },
-                    { name: "Infrastructure (DANGER ZONE)", keys: ["embedding_model"] }
+                    { name: "Intelligent Roles", keys: ["pruner_model", "healer_model", "critic_model"] },
+                    { name: "Infrastructure", keys: ["embedding_model"] }
                 ];
 
                 let html = "";

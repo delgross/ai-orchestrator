@@ -2379,11 +2379,11 @@
 
         // Fetch agent-runner model info with timeout
         const agentRes = await Promise.race([
-          fetchJson(agentBase + "/", headers),
+          fetchJson(agentBase + "/admin/llm/roles", headers),
           new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000))
         ]).catch(() => ({ ok: false }));
-        // The root endpoint now returns the model config directly
-        const agentModels = agentRes || {};
+        // The endpoint returns { ok: true, roles: { ... } }
+        const agentModels = agentRes.roles || {};
 
         // Models are now included in the root endpoint response
         // Fallback values for backward compatibility
@@ -2416,10 +2416,18 @@
           },
           {
             id: "agent",
-            name: "Agent Model",
-            description: "Main agent reasoning and tool-calling",
+            name: "Agent Brain",
+            description: "Main agent reasoning and tool-calling (The Engineer)",
             model: agentModels.agent_model || "Not configured",
             icon: "🧠",
+            editable: true
+          },
+          {
+            id: "intent",
+            name: "Intent Brain",
+            description: "Decides on routing, safety, and clarification (Maître d')",
+            model: agentModels.intent_model || "Not configured",
+            icon: "🎩",
             editable: true
           },
           {
@@ -2597,6 +2605,7 @@
       // Map service IDs to backend model field names
       const fieldMap = {
         "agent": "agent_model",
+        "intent": "intent_model",
         "mcp": "mcp_model",
         "task": "task_model",
         "summarization": "summarization_model",
@@ -2617,11 +2626,11 @@
         // Use the standardized /admin/roles endpoint 
         const endpoint = "/admin/roles";
         console.log("Setting model:", { serviceId, fieldName, agentBase, endpoint, modelId, url: agentBase + endpoint });
-        
+
         const payload = {
-            updates: {
-                [fieldName]: modelId
-            }
+          updates: {
+            [fieldName]: modelId
+          }
         };
 
         const result = await postJson(agentBase + endpoint, headers, payload);

@@ -1,0 +1,15 @@
+{
+    "agent_model": "xai:grok-3",
+    "router_model": "ollama:mistral:latest",
+    "task_model": "xai:grok-3",
+    "summarization_model": "ollama:mistral:latest",
+    "vision_model": "ollama:llama3.2-vision",
+    "mcp_model": "xai:grok-3",
+    "finalizer_model": "ollama:mistral:latest",
+    "fallback_model": "ollama:mistral:latest",
+    "intent_model": "ollama:llama3.1:latest",
+    "pruner_model": "ollama:mistral:latest",
+    "healer_model": "ollama:llama3.3:70b-instruct-q8_0",
+    "critic_model": "ollama:llama3.3:70b-instruct-q8_0",
+    "embedding_model": "ollama:mxbai-embed-large:latest"
+}

@@ -113,13 +113,7 @@
     </div>
 
     <main class="dashboard-container">
-        <!-- Sidebar Widget: Anomaly Inbox -->
-        <div id="anomaly-widget" class="glass"
-            style="margin-bottom: 10px; padding: 10px; cursor: pointer; border-left: 3px solid var(--text-secondary); display:none;"
-            onclick="switchTab('anomalies')">
-            <div style="font-size: 0.8rem; font-weight: bold;">System Health</div>
-            <div id="anomaly-widget-status" style="font-size: 0.9rem;">No Active Issues</div>
-        </div>
+        <!-- Sidebar Widget: Anomaly Inbox (Removed) -->
 
         <!-- Tab Navigation -->
         <nav class="tab-strip glass">
@@ -147,17 +141,11 @@
             <button class="tab-link" data-tab="chat">
                 <span class="icon">💬</span> Chat
             </button>
-            <button class="tab-link" data-tab="memory">
-                <span class="icon">🧠</span> Memory
-            </button>
             <button class="tab-link" data-tab="logs">
                 <span class="icon">📝</span> Logs
             </button>
             <button class="tab-link" data-tab="breakers">
                 <span class="icon">⚡</span> Breakers
-            </button>
-            <button class="tab-link" data-tab="anomalies">
-                <span class="icon">⚠️</span> Anomalies
             </button>
             <button class="tab-link" data-tab="diagnostics-view">
                 <span class="icon">🩺</span> Diagnostics
@@ -196,56 +184,10 @@
                     </div>
                 </div>
             </div>
-            <!-- Anomalies Tab -->
-            <div id="anomalies" class="tab-content">
-                <div class="card glass wide full-height flex-col">
-                    <div class="card-header">
-                        <h3>Anomaly Inbox</h3>
-                        <div class="flex-row-center">
-                            <span id="anomaly-count-badge" class="badge">0 New</span>
-                            <button class="action-btn sm" onclick="fetchAnomalies()">Refresh</button>
-                        </div>
-                    </div>
-                    <div class="table-container flex-grow">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Time</th>
-                                    <th>Severity</th>
-                                    <th>Metric</th>
-                                    <th>Deviation</th>
-                                    <th>Status</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="anomaly-table-body">
-                                <tr>
-                                    <td colspan="6" class="text-center">Loading...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-            <!-- Memory Tab -->
-            <div id="memory" class="tab-content">
-                <div class="card glass wide full-height flex-col">
-                    <div class="card-header">
-                        <h3>Orchestrator Memory (SurrealDB)</h3>
-                        <div class="flex-row-center">
-                            <div id="memory-functioning-indicator" class="status-item"
-                                style="margin-right:15px; font-size:0.8rem;">
-                                <span class="indicator unknown"></span> <span class="value">STATUS: --</span>
-                            </div>
-                            <input type="text" id="memory-search-input" placeholder="Search facts...">
-                            <button class="action-btn sm" onclick="fetchMemoryFacts()">Search</button>
-                        </div>
-                    </div>
-                    <div id="memory-results" class="flex-grow scroll-y p-1">
-                        <div class="placeholder-box">Loading facts...</div>
-                    </div>
-                </div>
-            </div>
+
+            <!-- Anomalies Tab (Removed) -->
+            <!-- Memory Tab (Removed) -->
+
             <!-- Overview Tab -->
             <div id="overview" class="tab-content active show">
                 <div class="grid-layout">
@@ -299,7 +241,7 @@
                                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
                                     <td class="mono" style="color:var(--accent-ok); padding:12px;">5460</td>
                                     <td style="font-weight:600; padding:12px;">Agent Runner</td>
-                                    <td style="padding:12px;">The Brain. Handles MCP tools & logic.</td>
+                                    <td style="padding:12px;">Core Engine. Handles MCP tools & logic.</td>
                                 </tr>
                                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
                                     <td class="mono" style="color:var(--accent-warn); padding:12px;">11434</td>
