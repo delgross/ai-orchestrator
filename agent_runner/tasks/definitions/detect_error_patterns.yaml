@@ -1,15 +1,25 @@
 name: detect_error_patterns
 type: agent
-enabled: false
-schedule: "3600" # Every hour
-idle_only: true
-priority: low
-description: "The Diagnostician: Group repeated errors."
+schedule: "300" # Every 5 minutes (Checking for Anomalies)
+idle_only: false # Run even if busy, because errors are critical
+priority: high
+description: "The Diagnostician: Analyze Novel Anomalies (The Unknowns)"
 prompt: |
-  Scan 'episode' rows where `role='system'` or `role='tool'` and content contains "Error" or "Exception".
-  Group these errors by stack trace or error message similarity.
-  
-  For clusters with > 3 occurrences in the last 24h:
-  1. Generate a "Problem Statement" (e.g. "The Database is locking on writes").
-  2. Search for any successful resolutions in subsequent messages.
-  3. Create a `system_state` entry: `known_issue: { problem: "...", frequency: N, potential_fix: "..." }`.
+  **ROLE**: You are The Diagnostician. 
+  The 'Sorter' service has already filtered known logs. Your job is to analyze the **UNKNOWN ANOMALIES**.
+
+  **TOOLS**:
+  1. `query_logs(needs_review=True, limit=50)` -> *Query filtered logs*.
+  2. `add_lexicon_entry(pattern, label, severity)` -> *IMMUNIZE system against this error*.
+
+  **PROCEDURE**:
+  1. Fetch logs where `needs_review = true`.
+  2. For each Anomaly:
+     - **Analyze**: What is this? Is it a code bug? Infra issue?
+     - **Refine**: Can you write a Regex to catch this?
+     - **IMMUNIZE**: If confident, call `add_lexicon_entry` to save the pattern.
+  3. **REPORTING**:
+     - Create a task result summary.
+     - If critical, write to `logs/live_diagnostics.md`.
+
+  **GOAL**: Empty the "Unknown" queue by converting them to "Known" patterns via Immunization.

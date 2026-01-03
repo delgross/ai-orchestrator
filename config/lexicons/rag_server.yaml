@@ -1,0 +1,30 @@
+- label: "INGEST_OK"
+  regex: "Ingest.*completed"
+  severity: "INFO"
+  description: "Standard successful file ingestion"
+  template: "✅ [Task] Ingestion Completed"
+
+- label: "INDEX_MAINTENANCE"
+  regex: "HNSW.*index"
+  severity: "DEBUG"
+  description: "Vector database maintenance"
+  template: "⚙️ [Index] HNSW Maintenance Active"
+
+- label: "DB_CONNECTION_ERROR"
+  regex: "ConnectionRefusedError.*(8000|5432)"
+  severity: "CRITICAL"
+  description: "Cannot talk to SurrealDB"
+  template: "🔴 [Defense] Database Connection Failed (Port {1}). Logic Suspended."
+
+- label: "EMPTY_INGEST"
+  regex: "Content is empty"
+  severity: "WARNING"
+  description: "User uploaded empty file"
+  template: "⚠️ [Input] Empty File Uploaded"
+
+- label: "LIFECYCLE_START"
+  regex: "Application startup complete"
+  severity: "INFO"
+  description: "Server started"
+  template: "🟢 [Lifecycle] RAG Server ONLINE"
+

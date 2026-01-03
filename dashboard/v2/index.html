@@ -159,6 +159,9 @@
             <button class="tab-link" data-tab="anomalies">
                 <span class="icon">⚠️</span> Anomalies
             </button>
+            <button class="tab-link" data-tab="diagnostics-view">
+                <span class="icon">🩺</span> Diagnostics
+            </button>
         </nav>
 
         <!-- View Content Area -->
@@ -618,6 +621,23 @@
                     </div>
                 </div>
 
+                <!-- DIAGNOSTICS VIEW (Phase 25 & 25b) -->
+                <div id="diagnostics-view" class="tab-content">
+                    <div class="grid-layout">
+                        <!-- Stream Terminal -->
+                        <div class="card terminal-card" style="grid-column: span 3; height: 60vh;">
+                            <div class="card-header">
+                                <h3>🧠 Diagnostician Stream (Live)</h3>
+                                <div class="flex-row-center">
+                                    <span class="status-indicator active">Connected</span>
+                                </div>
+                            </div>
+                            <div id="diag-stream-log" class="log-window mono" style="height: 100%;">
+                                <div class="log-entry info">Connecting to Diagnostician stream...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
         </section>
     </main>
 

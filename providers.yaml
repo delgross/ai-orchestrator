@@ -9,3 +9,9 @@ providers:
     base_url: https://api.perplexity.ai
     api_key_env: PERPLEXITY_API_KEY
 
+  xai:
+    type: openai_compat
+    base_url: https://api.x.ai/v1
+    api_key_env: XAI_API_KEY
+
+

@@ -9,7 +9,7 @@ from pathlib import Path
 from agent_runner.state import AgentState
 from agent_runner.memory_server import MemoryServer
 
-logger = logging.getLogger("config_manager")
+logger = logging.getLogger(__name__)
 
 class ConfigManager:
     """
@@ -54,6 +54,46 @@ class ConfigManager:
         
         return True
 
+    async def set_config_value(self, key: str, value: Any) -> bool:
+        """
+        Update a Configuration Value (Model, Timeout, etc).
+        Target: system_config.json (Backup), config_state (Master), AgentState (Runtime)
+        """
+        logger.info(f"Updating Config: {key} -> {value}")
+        
+        # 1. Update Sovereign Memory
+        try:
+            await self._update_db_config(key, value, "api")
+        except Exception as e:
+            logger.error(f"Failed to update Config in DB: {e}")
+            return False
+
+        # 2. Update Runtime
+        self._update_state_attributes(key, value)
+        
+        # 3. Update Disk Backup (system_config.json)
+        try:
+            config_path = self.state.agent_fs_root.parent / "system_config.json"
+            cfg = {}
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    cfg = json.load(f)
+            
+            # Use lowercase for json compatibility usually, but state attributes are mapped from UPPER.
+            # system_config.json typically uses lowercase keys (e.g. "vision_model").
+            # Let's map UPPER -> lower for file storage if it matches standard keys.
+            file_key = key.lower()
+            cfg[file_key] = value
+            
+            with open(config_path, "w") as f:
+                json.dump(cfg, f, indent=4)
+                
+            logger.info(f"Backed up {key} to {config_path}")
+        except Exception as e:
+            logger.error(f"Failed to patch system_config.json: {e}")
+        
+        return True
+
     async def _update_db_config(self, key: str, value: Any, source: str):
         """UPSERT into config_state table."""
         q = """
@@ -73,6 +113,14 @@ class ConfigManager:
         elif key == "TASK_MODEL": self.state.task_model = value
         elif key == "VISION_MODEL": self.state.vision_model = value
         elif key == "EMBEDDING_MODEL": self.state.embedding_model = value
+        elif key == "MCP_MODEL": self.state.mcp_model = value
+        elif key == "SUMMARIZATION_MODEL": self.state.summarization_model = value
+        elif key == "FINALIZER_MODEL": self.state.finalizer_model = value
+        elif key == "FALLBACK_MODEL": self.state.fallback_model = value
+        elif key == "INTENT_MODEL": self.state.intent_model = value
+        elif key == "PRUNER_MODEL": self.state.pruner_model = value
+        elif key == "HEALER_MODEL": self.state.healer_model = value
+        elif key == "CRITIC_MODEL": self.state.critic_model = value
         # Add more mappings as needed
 
     async def _patch_env_file(self, key: str, value: str):
@@ -262,3 +310,170 @@ class ConfigManager:
         except Exception as e:
             logger.error(f"Failed to reverse sync task {task_name}: {e}")
             return False
+
+    def start_watcher(self):
+        """
+        Starts the Config Watcher to monitor system_config.json for changes.
+        This enables 'Hot Swap' capability.
+        """
+        try:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
+
+            class ConfigHandler(FileSystemEventHandler):
+                def __init__(self, manager):
+                    self.manager = manager
+                    self.config_path = str(manager.state.agent_fs_root.parent / "system_config.json")
+                    self.last_ts = 0
+
+                def on_modified(self, event):
+                    filename = Path(event.src_path).name
+                    
+                    if filename == "system_config.json":
+                        import time
+                        # De-bounce
+                        if time.time() - self.last_ts < 1.0: return
+                        self.last_ts = time.time()
+                        logger.info(f"Config Watcher: Detected change in {filename}")
+                        asyncio.run_coroutine_threadsafe(self.manager.sync_from_disk(), self.manager.state.loop)
+
+                    elif filename == ".env":
+                        import time
+                        if time.time() - self.last_ts < 1.0: return
+                        self.last_ts = time.time()
+                        logger.info(f"Config Watcher: Detected change in {filename}")
+                        asyncio.run_coroutine_threadsafe(self.manager.sync_env_from_disk(), self.manager.state.loop)
+
+                    elif filename == "config.yaml":
+                        import time
+                        if time.time() - self.last_ts < 1.0: return
+                        self.last_ts = time.time()
+                        logger.info(f"Config Watcher: Detected change in {filename}")
+                        asyncio.run_coroutine_threadsafe(self.manager.sync_base_config_from_disk(), self.manager.state.loop)
+
+                    elif filename == "mcp.yaml":
+                        import time
+                        if time.time() - self.last_ts < 1.0: return
+                        self.last_ts = time.time()
+                        logger.info(f"Config Watcher: Detected change in {filename}")
+                        asyncio.run_coroutine_threadsafe(self.manager.sync_mcp_from_disk(), self.manager.state.loop)
+
+            # Determine paths to watch
+            root_dir = self.state.agent_fs_root.parent
+            config_dir = root_dir / "config"
+            
+            observer = Observer()
+            handler = ConfigHandler(self)
+            
+            # Watch Root for system_config.json and .env
+            observer.schedule(handler, str(root_dir), recursive=False)
+            
+            # Watch Config Dir for config.yaml and mcp.yaml
+            if config_dir.exists():
+                observer.schedule(handler, str(config_dir), recursive=False)
+            
+            observer.start()
+            logger.info(f"Sovereign Config Watcher started on {root_dir} and {config_dir}")
+            
+            self.observer = observer
+
+        except ImportError:
+            logger.warning("Watchdog not installed. Config Hot-Swap disabled.")
+        except Exception as e:
+            logger.error(f"Failed to start Config Watcher: {e}")
+
+    async def sync_from_disk(self):
+        """
+        Reads system_config.json from disk and updates DB + Runtime.
+        Triggered by Watchdog.
+        """
+        config_path = self.state.agent_fs_root.parent / "system_config.json"
+        
+        if not config_path.exists():
+            return
+
+        logger.info("Syncing Config from Disk to Sovereign Memory...")
+        try:
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+                
+            # Iterate and Upsert to DB
+            for key, val in cfg.items():
+                # Store in DB
+                await self._update_db_config(key.upper(), val, "hot_swap")
+                # Update Runtime immediately
+                self._update_state_attributes(key.upper(), val)
+                
+            logger.info("Config Sync Complete. Runtime State Updated.")
+            
+        except Exception as e:
+            logger.error(f"Config Sync Failed: {e}")
+
+    async def sync_env_from_disk(self):
+        """Syncs .env changes to Sovereign Memory (Secrets)."""
+        env_path = self.state.agent_fs_root.parent / ".env"
+        if not env_path.exists(): return
+        
+        logger.info("[Watcher] Syncing .env to Sovereign Memory...")
+        try:
+            import dotenv
+            # Load without touching os.environ yet
+            values = dotenv.dotenv_values(env_path)
+            
+            for key, val in values.items():
+                if val:
+                    # Update DB (Source=env)
+                    await self._update_db_config(key, val, "env")
+                    # Update Runtime
+                    os.environ[key] = val
+                    self._update_state_attributes(key, val)
+                    
+            logger.info("[Watcher] .env Sync Complete.")
+        except Exception as e:
+            logger.error(f"Failed to sync .env: {e}")
+
+    async def sync_base_config_from_disk(self):
+        """Syncs config.yaml changes to Sovereign Memory (Base Config)."""
+        config_path = self.state.agent_fs_root.parent / "config" / "config.yaml"
+        if not config_path.exists(): return
+
+        logger.info("[Watcher] Syncing config.yaml to Sovereign Memory...")
+        try:
+            with open(config_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+
+            # We flatten critical keys for the DB or store as JSON blob?
+            # Creating a 'base_config' entry might be cleaner, but user wants granular overrides.
+            # For now, we allow high-level keys to update runtime attributes.
+            
+            for key, val in cfg.items():
+                # We trust config.yaml structure matches some internal expectation
+                # Update DB (Source=config_yaml)
+                await self._update_db_config(key.upper(), val, "config_yaml")
+                # Update Runtime
+                self._update_state_attributes(key.upper(), val)
+                
+            logger.info("[Watcher] config.yaml Sync Complete.")
+        except Exception as e:
+            logger.error(f"Failed to sync config.yaml: {e}")
+
+    async def sync_mcp_from_disk(self):
+        """Syncs mcp.yaml changes to Sovereign Memory (MCP Servers)."""
+        mcp_path = self.state.agent_fs_root.parent / "config" / "mcp.yaml"
+        if not mcp_path.exists(): return
+
+        logger.info("[Watcher] Syncing mcp.yaml to Sovereign Memory...")
+        try:
+            with open(mcp_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+                
+            servers = data.get("mcp_servers", {})
+            for name, config in servers.items():
+                # Re-use update logic but ensure we don't write back to disk
+                # calling update_mcp_server updates DB.
+                # update_mcp_server current impl has `pass` for disk write, so it is safe.
+                await self.update_mcp_server(name, config)
+                
+            logger.info(f"[Watcher] mcp.yaml Sync Complete ({len(servers)} servers updated).")
+        except Exception as e:
+            logger.error(f"Failed to sync mcp.yaml: {e}")

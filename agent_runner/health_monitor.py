@@ -246,8 +246,9 @@ async def health_check_task() -> None:
     
     # Update internet availability state
     if _state:
-        # Only check every 60 seconds to avoid noise
-        if time.time() - _state.last_internet_check > 10:
+        # Use config for interval, default to 5s if not set
+        check_interval = _state.config.get("system", {}).get("internet_check_interval", 5)
+        if time.time() - _state.last_internet_check > check_interval:
             original_state = _state.internet_available
             _state.internet_available = await check_internet_connectivity()
             _state.last_internet_check = time.time()
@@ -464,6 +465,10 @@ async def get_detailed_health_report() -> Dict[str, Any]:
     Generate a comprehensive, structured health report for system introspection.
     Returns topology, dependency status, and circuit breaker states.
     """
+    gateway_url = GATEWAY_BASE
+    if _state and _state.gateway_base:
+        gateway_url = _state.gateway_base
+        
     report = {
         "timestamp": time.time(),
         "status": "healthy", # optimistically
@@ -471,7 +476,7 @@ async def get_detailed_health_report() -> Dict[str, Any]:
             "name": "Agent Runner",
             "type": "Orchestrator",
             "dependencies": {
-                "router": {"type": "service", "url": GATEWAY_BASE, "critical": True},
+                "router": {"type": "service", "url": gateway_url, "critical": True},
                 "database": {"type": "service", "url": "surrealdb:8000", "critical": True},
                 "internet": {"type": "resource", "critical": False}
             },
@@ -518,6 +523,12 @@ async def get_detailed_health_report() -> Dict[str, Any]:
         status = "healthy"
         if is_open:
             status = "unhealthy"
+            # [FIX] If internet is okay, force a probe/reset for critical LLM services
+            if internet_ok and name == "xai":
+                 # Aggressively reset the breaker state if it seems stuck
+                 status = "recovering"
+                 if _mcp_circuit_breaker:
+                     _mcp_circuit_breaker.reset(name)
         
         if status == "healthy": healthy_mcp += 1
         
@@ -529,7 +540,12 @@ async def get_detailed_health_report() -> Dict[str, Any]:
             "type": "mcp_server",
             "status": status,
             "config": config,
-            "circuit_breaker": breaker_info,
+            "circuit_breaker": {
+                 "state": breaker_info.get("state", "closed"),
+                 "failures": breaker_info.get("failures", 0),
+                 "last_failure": breaker_info.get("last_failure_time"),
+                 "consecutive_failures": breaker_info.get("consecutive_failures", 0)
+            },
             "tools": tool_names  # [NEW] Expose available functions
         }
         

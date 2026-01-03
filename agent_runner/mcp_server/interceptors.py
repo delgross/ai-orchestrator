@@ -63,6 +63,52 @@ class PrivacyInterceptor(ToolInterceptor):
         self._cache_ttl = 60.0
 
     async def before_execution(self, tool_name: str, args: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        # [Refactor #5] Handle Resource Reads
+        if tool_name == "read_resource":
+            uri = args.get("uri")
+            if uri and uri.startswith("memory://"):
+                # Extract kb_id
+                import re
+                match = re.match(r"memory://([^/]+)/summary", uri)
+                if match:
+                    target_kb = match.group(1)
+                    client_name = context.get("client_name", "unknown")
+                    
+                    # --- REUSED LOGIC (Ideally extract method) ---
+                    from agent_runner.registry import ServiceRegistry
+                    
+                    # Check Cache
+                    cache_key = (target_kb, client_name)
+                    cached = self._cache.get(cache_key)
+                    if cached:
+                        allowed, ts = cached
+                        if time.time() - ts < self._cache_ttl:
+                            if not allowed:
+                                 raise PermissionError(f"Access Denied (Cached): Memory Bank '{target_kb}' is PRIVATE.")
+                            return args 
+
+                    mem = ServiceRegistry.get_memory_server()
+                    if not mem: 
+                        raise PermissionError("Access Denied: System Memory Service Unavailable.")
+                    
+                    res = await mem.get_bank_config(target_kb)
+                    is_allowed = True
+                    owner = "unknown"
+                    
+                    if res.get("ok"):
+                        config = res.get("config", {})
+                        is_private = config.get("is_private", False)
+                        owner = config.get("owner", "")
+                        
+                        if is_private and owner != client_name:
+                             is_allowed = False
+                    
+                    self._cache[cache_key] = (is_allowed, time.time())
+                    
+                    if not is_allowed:
+                         logger.warning(f"[PrivacyInterceptor] Access Denied. Client '{client_name}' tried to read private bank '{target_kb}' owned by '{owner}'.")
+                         raise PermissionError(f"Access Denied: Memory Bank '{target_kb}' is PRIVATE and owned by '{owner}'.")
+
         if tool_name in ["query_facts", "semantic_search"]:
             target_kb = args.get("kb_id")
             client_name = context.get("client_name", "unknown")

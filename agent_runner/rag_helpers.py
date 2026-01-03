@@ -43,8 +43,24 @@ async def _process_locally(file_path: Path, state: Any, http_client: Any) -> str
     content = ""
     ext = file_path.suffix.lower()
     
-    if ext in ('.txt', '.md'):
+    if ext in ('.txt', '.md', '.py', '.js', '.json', '.yaml', '.yml', '.sh'):
         content = await aio_read_text(file_path)
+
+    elif ext in ('.mp3', '.m4a', '.wav', '.mp4', '.mpeg'):
+        # Local Audio Transcription (M3 Ultra)
+        def parse_audio():
+            import whisper
+            # Load model (lazy load or cached?)
+            # For now, we load per call. M3 Ultra is fast enough, or we can cache globally if needed.
+            # Using 'medium' as a balanced default. 'large' is possible on 256GB RAM.
+            try:
+                model = whisper.load_model("medium.en")
+                result = model.transcribe(str(file_path))
+                return result["text"]
+            except Exception as e:
+                return f"[Audio Transcription Failed: {e}]"
+        
+        content = await asyncio.to_thread(parse_audio)
         
     elif ext == '.csv':
         try:
@@ -162,7 +178,7 @@ async def _process_locally(file_path: Path, state: Any, http_client: Any) -> str
                             ]}
                         ]
                     }
-                    v_res = await http_client.post(f"{state.gateway_base}/v1/chat/completions", json=vision_payload, headers={"X-Skip-Refinement": "true"}, timeout=45.0)
+                    v_res = await http_client.post(f"{state.gateway_base}/v1/chat/completions", json=vision_payload, headers={"X-Skip-Refinement": "true"}, timeout=90.0)
                     if v_res.status_code == 200:
                         ocr_text.append(v_res.json()["choices"][0]["message"]["content"])
                 except: pass
@@ -202,6 +218,11 @@ def _assess_local_quality(content: str, ext: str) -> dict:
     # Only flag if density is high AND keywords are present, OR density is extremely high (>2.0)
     if (timestamp_density > 0.5 and has_log_keywords) or (timestamp_density > 2.0):
          return {'score': 0.2, 'is_noise': True, 'reason': "System Log Detected"}
+
+    # 3. Recursion Guard (Prevent Loop of Death)
+    # Check for System Signature (YAML frontmatter + specific keys)
+    if "ingested_at:" in content[:500] and "kb_id:" in content[:500]:
+         return {'score': 0.0, 'is_noise': True, 'reason': "RECURSION: Already Ingested"}
 
     return {'score': 0.6, 'is_noise': False, 'reason': "Baseline Acceptable"}
 
@@ -254,9 +275,12 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
 
     try:
         lib_prompt = (
-            f"Categorize this new entry.\nFilename: {file_path.name}\nContent Snippet: {content[:1000]}\n"
-            "Identify domain [farm-noc, osu-med, farm-beekeeping, etc] or new.\n"
-            "Return JSON ONLY: {'kb_id': '...', 'authority': 0.7, 'is_volatile': false, 'global_summary': '...', 'shadow_tags': []}"
+            f"Analyze this document for the Sovereign Knowledge Base.\nFilename: {file_path.name}\nSnippet: {content[:3000]}\n"
+            "1. Categorize into a Domain (kb_id) e.g. [farm-noc, osu-med, personal, tech-research, finance].\n"
+            "2. Assess Authority (0.0-1.0) - High for official docs, low for scratchpads.\n"
+            "3. Extract 3-5 key semantic search tags.\n"
+            "4. Write a concise 1-sentence summary.\n"
+            "Return JSON ONLY: {'kb_id': '...', 'authority': 0.8, 'is_volatile': false, 'global_summary': '...', 'shadow_tags': ['...']}"
         )
         lib_payload = {
             "model": state.task_model,
@@ -349,7 +373,7 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
                 f"{state.gateway_base}/v1/chat/completions", 
                 json={"model": state.task_model, "messages": [{"role": "user", "content": extract_prompt}], "response_format": {"type": "json_object"}}, 
                 headers={"X-Skip-Refinement": "true"},
-                timeout=60.0
+                timeout=120.0
             )
             if v_resp.status_code == 200:
                 raw_g = v_resp.json()["choices"][0]["message"]["content"]
@@ -404,12 +428,13 @@ async def _ingest_content(file_path: Path, content: str, state: Any, http_client
         # But wait, processed_dir_base is generic. Let's make one "Completed" folder to start.
         # Actually, let's just use the KB_ID as metadata but NOT as a folder.
         
-        target_dir = processed_dir_base
-        # If we want to be slightly tidy, we can put them in "Library" or just root.
-        # Let's use root `processed/` as requested. (Code requires target_dir to be a Path)
-        
-        # Sidecar
-        sidecar_content = f"""---
+        if processed_dir_base:
+            target_dir = processed_dir_base
+            # If we want to be slightly tidy, we can put them in "Library" or just root.
+            # Let's use root `processed/` as requested. (Code requires target_dir to be a Path)
+            
+            # Sidecar
+            sidecar_content = f"""---
 kb_id: {kb_id}
 authority: {authority}
 ingested_at: {time.strftime('%Y-%m-%d %H:%M:%S')}
@@ -419,23 +444,25 @@ keywords: [{', '.join(shadow_tags)}]
 **Summary:** {global_summary}
 ---
 {content}"""
-        # Move Original with Collision Handling
-        target_file = target_dir / file_path.name
-        if target_file.exists():
-            # Collision detected! e.g. "gas.pdf" already exists.
-            # We rename the NEW file to "gas_{timestamp}.pdf" to preserve history.
-            timestamp = int(time.time())
-            new_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
-            target_file = target_dir / new_name
-            # Update sidecar logic to match? The sidecar filename is derived from file_path.stem above.
-            # We need to update the sidecar path too.
-            sidecar_path = target_dir / f"{file_path.stem}_{timestamp}_transcript.md"
+            # Move Original with Collision Handling
+            target_file = target_dir / file_path.name
+            if target_file.exists():
+                # Collision detected! e.g. "gas.pdf" already exists.
+                # We rename the NEW file to "gas_{timestamp}.pdf" to preserve history.
+                timestamp = int(time.time())
+                new_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
+                target_file = target_dir / new_name
+                # Update sidecar logic to match? The sidecar filename is derived from file_path.stem above.
+                # We need to update the sidecar path too.
+                sidecar_path = target_dir / f"{file_path.stem}_{timestamp}_transcript.md"
+            else:
+                sidecar_path = target_dir / f"{file_path.stem}_transcript.md"
+                
+            await aio_write_text(sidecar_path, sidecar_content)
+            await aio_rename(file_path, target_file)
+            logger.info(f"FILED: {file_path.name} -> {target_file.name}")
         else:
-            sidecar_path = target_dir / f"{file_path.stem}_transcript.md"
-            
-        await aio_write_text(sidecar_path, sidecar_content)
-        await aio_rename(file_path, target_file)
-        logger.info(f"FILED: {file_path.name} -> {target_file.name}")
+            logger.info(f"READ-ONLY: Ingested {file_path.name} (Source Preserved in Place)")
         
     except Exception as e:
         logger.error(f"Filing failed for {file_path.name}: {e}")

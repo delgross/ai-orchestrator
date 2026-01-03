@@ -448,6 +448,18 @@ if has_modal:
                 "Return as a JSON list: {'missing_fields': ['Budget', ...]}"
             )
             return self._run_inference(prompt)
+        @modal.method()
+        def cloud_extract_graph_from_file(self, file_content: str):
+            """
+            Analyzes a raw file (JSON/Text) to extract a complete Knowledge Graph.
+            """
+            prompt = (
+                f"You are a Senior Data Engineer. Analyze this file content to extract the Knowledge Graph.\n"
+                f"Look for entities and explicit/implicit relationships.\n"
+                f"Content Snippet (first 10k chars): {file_content[:10000]}...\n\n"
+                "Return valid JSON ONLY: {'nodes': [{'id': '...', 'label': '...'}], 'edges': [{'source': '...', 'target': '...', 'relation': '...'}, ...]}"
+            )
+            return self._run_inference(prompt)
 
         # Helper for internal inference (DRY)
         def _run_inference(self, prompt: str):
@@ -523,3 +535,8 @@ else:
         def cloud_process_pdf(file_bytes: bytes, filename: str):
             log_uplink(f"Processing PDF (Mock): {filename}...")
             return {"text": "Mock PDF Text", "metadata": {"quality_score": 0.5}}
+
+        @staticmethod
+        def cloud_extract_graph_from_file(file_content: str):
+            log_uplink(f"Runing Cloud Graph Extraction (Mock) on {len(file_content)} bytes...")
+            return json.dumps({"edges": [], "nodes": []})

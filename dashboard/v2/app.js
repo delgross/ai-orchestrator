@@ -74,7 +74,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (targetTab === 'tools') fetchMCPData();
             if (targetTab === 'breakers') fetchBreakerData();
-            if (targetTab === 'diagnostics') fetchDiagnostics();
+            if (targetTab === 'diagnostics') {
+                fetchDiagnostics();
+                startDiagnosticsStream();
+            } else if (window.diagEventSource) {
+                window.diagEventSource.close();
+                window.diagEventSource = null;
+            }
         });
     });
 
@@ -2097,3 +2103,55 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start Polling
     setInterval(fetchAnomalies, 5000);
 });
+
+// --- PHASE 25: DIAGNOSTICS STREAM ---
+window.diagEventSource = null;
+
+window.startDiagnosticsStream = function () {
+    const logWindow = document.getElementById('diag-stream-log');
+    if (!logWindow) return;
+
+    if (window.diagEventSource) window.diagEventSource.close();
+
+    const evtSource = new EventSource("/admin/diagnostics/stream");
+    window.diagEventSource = evtSource;
+
+    evtSource.onmessage = function (e) {
+        try {
+            if (!e.data) return;
+            const data = JSON.parse(e.data);
+            const line = data.line || "";
+
+            const div = document.createElement('div');
+            div.className = 'log-entry info';
+            div.style.whiteSpace = 'pre-wrap';
+            div.style.fontFamily = "'JetBrains Mono', monospace";
+            div.style.fontSize = "0.85rem";
+
+            if (line.includes('[AI Insight]')) {
+                div.style.color = "var(--accent-neon)";
+                div.style.fontWeight = "bold";
+            } else if (line.includes('CRITICAL')) {
+                div.style.color = "var(--accent-error)";
+            } else if (line.includes('WARNING')) {
+                div.style.color = "var(--accent-warning)";
+            } else if (line.includes('INFO')) {
+                div.style.color = "var(--text-secondary)";
+            }
+
+            div.textContent = line;
+            logWindow.appendChild(div);
+            // Auto Scroll
+            logWindow.scrollTop = logWindow.scrollHeight;
+
+        } catch (err) {
+            console.warn("Stream parse error", err);
+        }
+    };
+
+    evtSource.onerror = function (e) {
+        evtSource.close();
+        // Auto-reconnect after 3s
+        setTimeout(() => { if (window.diagEventSource === evtSource) window.startDiagnosticsStream(); }, 3000);
+    };
+};

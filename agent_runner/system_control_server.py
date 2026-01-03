@@ -416,6 +416,18 @@ class SystemControlServer:
 
             return {"error": str(e)}
 
+    async def get_ingestion_status(self):
+        """Get the current status of the RAG ingestion pipeline."""
+        url = f"{AGENT_URL}/admin/ingestion/status"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"API Error ({resp.status_code}): {resp.text}"}
+            except Exception as e:
+                return {"error": f"Connection failed: {str(e)}"}
+
     async def parse_mcp_config(self, content: str):
         """Parse raw configuration text (JSON/YAML) using the System LLM and install servers."""
         url = f"{AGENT_URL}/admin/mcp/upload-config"
@@ -458,6 +470,7 @@ async def main():
         return [
             Tool(name="get_system_health", description="Check connection/uptime of topology (Router, Agent, MCPs). Returns full server list.", inputSchema={"type":"object","properties":{}}),
             Tool(name="list_active_mcp_servers", description="List all currently active MCP servers and their status.", inputSchema={"type":"object","properties":{}}),
+            Tool(name="get_ingestion_status", description="Get the status of the document ingestion queue (RAG). Use this to check if files are processed.", inputSchema={"type":"object","properties":{}}),
             Tool(name="read_service_logs", description="Read recent logs from router, agent_runner, or ollama.", inputSchema={"type":"object","properties":{"service":{"type":"string","enum":["router","agent_runner","ollama"]}, "lines":{"type":"integer","default":20}},"required":["service"]}),
             Tool(name="check_resource_usage", description="Check CPU/RAM of orchestration processes and disk usage.", inputSchema={"type":"object","properties":{}}),
             Tool(name="trigger_maintenance", description="Trigger 'backup' or 'consolidation' tasks.", inputSchema={"type":"object","properties":{"type":{"type":"string","enum":["backup","consolidation"]}},"required":["type"]}),
@@ -468,7 +481,7 @@ async def main():
             Tool(name="remove_mcp_server", description="Safely remove an MCP server from config.yaml.", inputSchema={"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
             Tool(name="ingest_file", description="Submit a file for asynchronous background ingestion (RAG/Knowledge Graph).", inputSchema={"type":"object","properties":{"source_path":{"type":"string"}},"required":["source_path"]}),
             Tool(name="parse_mcp_config", description="Parse and install MCP servers from raw configuration text (JSON/YAML) pasted by the user. Use this when the user provides a config block.", inputSchema={"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}),
-            Tool(name="update_system_config", description="Update a system configuration value (Reverse Sync). Updates Sovereign Memory (DB), Runtime, and Disk Backup (.env).", inputSchema={"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"},"type":{"type":"string","enum":["secret"],"default":"secret"}},"required":["key","value"]}),
+            Tool(name="update_system_config", description="Update a system configuration value (Reverse Sync). Updates Sovereign Memory (DB), Runtime, and Disk Backup (.env/system_config.json).", inputSchema={"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"},"type":{"type":"string","enum":["secret", "config"],"default":"config"}},"required":["key","value"]}),
         ]
 
     @server.call_tool()
@@ -485,6 +498,8 @@ async def main():
                      res = details.get("mcp", {"error": "No MCP section in health payload"})
                 else:
                      res = {"error": f"Agent Runner is {agent_section.get('status', 'unknown')}", "health_dump": health}
+            elif name == "get_ingestion_status":
+                res = await controller.get_ingestion_status()
             elif name == "read_service_logs":
                 res = await controller.read_service_logs(**args)
             elif name == "check_resource_usage":
@@ -505,6 +520,8 @@ async def main():
                 res = await controller.ingest_file(**args)
             elif name == "parse_mcp_config":
                 res = await controller.parse_mcp_config(**args)
+            elif name == "update_system_config":
+                res = await controller.update_system_config(**args)
             else:
                 raise ValueError(f"Unknown tool: {name}")
                 

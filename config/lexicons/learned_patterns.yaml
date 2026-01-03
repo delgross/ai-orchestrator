@@ -1,0 +1,16 @@
+patterns:
+- pattern: TestError.*ConnectionRefused
+  label: TEST_IMMUNIZATION_VERIFY
+  severity: INFO
+  source: diagnostician_auto_learn
+  created_at: '1767404534.089322'
+- pattern: TestError.*ConnectionRefused
+  label: TEST_IMMUNIZATION_VERIFY
+  severity: INFO
+  source: diagnostician_auto_learn
+  created_at: '1767419461.710065'
+- pattern: TestError.*ConnectionRefused
+  label: TEST_IMMUNIZATION_VERIFY
+  severity: INFO
+  source: diagnostician_auto_learn
+  created_at: '1767419506.049572'

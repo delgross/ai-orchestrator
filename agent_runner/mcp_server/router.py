@@ -167,9 +167,15 @@ async def process_message(session, message: Dict[str, Any]):
             params = message.get("params", {})
             uri = params.get("uri")
             
-            # 1. Intercept for Privacy (Manually here or via Interceptor?)
-            # Interceptors currently wraps Tools. We should ideally wrap Resources too.
-            # But let's do inline check for now to save refactor.
+            # 1. Run Interceptors (Privacy Check via PrivacyInterceptor)
+            # Create synthetic tool callArgs for the interceptor
+            args = {"uri": uri}
+            try:
+                for ic in interceptors:
+                     await ic.before_execution("read_resource", args, context)
+            except Exception as e:
+                # Blocked by interceptor
+                raise Exception(str(e))
             
             content = ""
             
@@ -180,25 +186,19 @@ async def process_message(session, message: Dict[str, Any]):
                 if match:
                     kb_id = match.group(1)
                     
-                    # Privacy Check (Manual Logic for now)
-                    # TODO: Move to Interceptor if resource usage grows
-                    from agent_runner.memory_server import MemoryServer
-                    mem = MemoryServer()
-                    cfg_res = await mem.get_bank_config(kb_id)
-                    if cfg_res.get("ok"):
-                        config = cfg_res.get("config", {})
-                        if config.get("is_private") and config.get("owner") != session.client_name:
-                             raise Exception(f"Access Denied: Resource {uri} is private.")
+                    # [Removed Inline Check - Moved to PrivacyInterceptor]
                     
-                    # Fetch Stats/Summary
-                    # We can use list_memory_banks details or specific call
-                    # Let's construct a summary
-                    # Actually, let's just dump the bank info
-                    content = f"# Memory Bank: {kb_id}\n\n"
-                    if cfg_res.get("ok"):
-                        content += f"Owner: {config.get('owner')}\n"
-                        content += f"Created: {config.get('created_at')}\n"
-                        # Maybe fetch stats?
+                    from agent_runner.registry import ServiceRegistry
+                    # We need the memory server just to fetch data now, not for auth
+                    mem = ServiceRegistry.get_memory_server()
+                    if mem:
+                         cfg_res = await mem.get_bank_config(kb_id)
+                         content = f"# Memory Bank: {kb_id}\n\n"
+                         if cfg_res.get("ok"):
+                             config = cfg_res.get("config", {})
+                             content += f"Owner: {config.get('owner')}\n"
+                             content += f"Created: {config.get('created_at')}\n"
+
                         
             elif uri == "system://logs/tail":
                 # Read log file

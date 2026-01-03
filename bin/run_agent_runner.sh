@@ -43,9 +43,9 @@ start_app() {
   cd "$ROOT_DIR"
   load_env
   ensure_path
-  # Auto-reload in development (set DEV_MODE=1 to enable)
+  RELOAD="--reload --reload-exclude 'logs/*' --reload-exclude '.gemini/*'" # in development (set DEV_MODE=1 to enable)
   if [ "${DEV_MODE:-0}" = "1" ]; then
-    exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}"
+    exec "$VENV_PYTHON" -m uvicorn $RELOAD "${UVICORN_ARGS[@]}"
   else
     exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}"
   fi

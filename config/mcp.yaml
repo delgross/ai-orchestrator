@@ -17,6 +17,7 @@ mcp_servers:
   ollama:
     cmd:
     - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
+    - -u
     - /Users/bee/Sync/Antigravity/ai/agent_runner/ollama_server.py
     env:
       OLLAMA_BASE: http://127.0.0.1:11434
@@ -24,6 +25,7 @@ mcp_servers:
   project-memory:
     cmd:
     - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
+    - -u
     - /Users/bee/Sync/Antigravity/ai/agent_runner/memory_server.py
     env:
       EMBED_MODEL: ollama:mxbai-embed-large
@@ -50,6 +52,7 @@ mcp_servers:
   system-control:
     cmd:
     - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
+    - -u
     - /Users/bee/Sync/Antigravity/ai/agent_runner/system_control_server.py
     env:
       AGENT_URL: http://127.0.0.1:5460

@@ -10,6 +10,7 @@ from agent_runner.state import AgentState
 from agent_runner.tools import fs as fs_tools
 from agent_runner.tools import mcp as mcp_tools
 from agent_runner.tools import system as system_tools
+from agent_runner.tools import memory_edit as memory_edit_tools
 # [PHASE 52]
 from agent_runner.tools import node as node_tools
 # [PHASE 53]
@@ -55,6 +56,7 @@ class ToolExecutor:
             "trigger_task": system_tools.tool_trigger_task,
             "report_missing_tool": system_tools.tool_report_missing_tool,
             "run_memory_consolidation": system_tools.tool_run_memory_consolidation,
+            "remove_memory_from_file": memory_edit_tools.tool_remove_memory_from_file,
             "check_system_health": system_tools.tool_check_system_health,
             "import_mcp_config": mcp_tools.tool_import_mcp_config,
             # Phase 52: Node Tools
@@ -330,6 +332,21 @@ class ToolExecutor:
                     "name": "run_memory_consolidation",
                     "description": "Trigger the memory consolidation process manually.",
                     "parameters": {"type": "object", "properties": {}},
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "remove_memory_from_file",
+                    "description": "Surgically 'Forget' a fact by identifying and removing the concept from a source file (preserving formatting).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_text": {"type": "string", "description": "The concept or fact to forget (e.g. 'Remove the definition of Uplink')."},
+                            "file_path": {"type": "string", "description": "The path to the source file (e.g. 'brain/system_lexicon.md')."}
+                        },
+                        "required": ["target_text", "file_path"]
+                    }
                 }
             },
             {

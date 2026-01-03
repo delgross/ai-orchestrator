@@ -13,6 +13,8 @@ from agent_runner.app import create_app
 from agent_runner.location import get_location # [NEW]
 
 # Global logger for startup/lifecycle
+# Global logger for startup/lifecycle
+setup_logger("common") # Capture library logs (Circuit Breaker, etc)
 setup_logger("agent_runner")
 logger = logging.getLogger("agent_runner")
 
@@ -31,6 +33,7 @@ async def lifespan(app):
 async def on_startup():
     """System startup routines."""
     logger.info("Initializing Agent Runner (Modularized Strategy)...")
+    await state.initialize()
     
     # Check if internet is available for cloud models
     try:
@@ -54,11 +57,11 @@ async def on_startup():
 
         initialize_health_monitor(state.mcp_servers, state.mcp_circuit_breaker, state.gateway_base, client, state)
         
-        # 3-second timeout for internet check
+        # 10-second timeout for internet check
         try:
-            state.internet_available = await asyncio.wait_for(check_internet_connectivity(), timeout=3.0)
+            state.internet_available = await asyncio.wait_for(check_internet_connectivity(), timeout=10.0)
         except asyncio.TimeoutError:
-            logger.warning("Startup internet check timed out (3s). Assuming Offline.")
+            logger.warning("Startup internet check timed out (10s). Assuming Offline.")
             state.internet_available = False
         # Do NOT close client here, it's owned by State
     except Exception as e:
@@ -145,6 +148,13 @@ async def on_startup():
     rag_url = state.config.get("mcp_servers", {}).get("rag", {}).get("url", f"http://127.0.0.1:{rag_port}")
     start_rag_watcher(rag_url, state)
 
+    # [NEW] Log Sorter Service (Micro-batch Classifier)
+    from agent_runner.services.log_sorter import LogSorterService
+    sorter = LogSorterService(state.config)
+    await sorter.start()
+    state.log_sorter = sorter # Persist in state for shutdown or access
+    logger.info("Log Sorter Service started.")
+
     logger.info("Agent Runner Lifecycle Initialized.")
 
 async def on_shutdown():
@@ -152,6 +162,10 @@ async def on_shutdown():
     logger.info("Stopping Agent Runner services...")
     from agent_runner.background_tasks import get_task_manager
     await get_task_manager().stop()
+    
+    # [NEW] Stop Log Sorter
+    if hasattr(state, 'log_sorter'):
+        await state.log_sorter.stop()
     
     # [FIX] Ensure MCP subprocesses are killed to prevent orphans
     logger.info("Cleaning up MCP processes...")

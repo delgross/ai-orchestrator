@@ -276,6 +276,12 @@ class BackgroundTaskManager:
                 logger.warning(f"Invalid interval format: {schedule}")
                 return None
         
+        # Raw seconds format: "300"
+        if isinstance(schedule, int):
+            return schedule
+        if isinstance(schedule, str) and schedule.isdigit():
+            return int(schedule)
+        
         logger.warning(f"Unsupported schedule format: {schedule}")
         return None
     

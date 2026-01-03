@@ -14,5 +14,8 @@ dependencies = [
     "pytest-mock",
     "surrealdb>=1.0.7",
     "python-multipart>=0.0.21",
+    "watchdog",
+    "mcp",
+    "tenacity>=9.1.2",
 ]
 

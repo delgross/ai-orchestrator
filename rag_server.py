@@ -8,6 +8,7 @@ import httpx
 import uvicorn
 import asyncio
 from agent_runner.state import AgentState
+import json
 
 # Configuration
 SURREAL_URL = os.getenv("SURREAL_URL", "http://localhost:8000")
@@ -19,14 +20,10 @@ GATEWAY_BASE = os.getenv("GATEWAY_BASE", "http://127.0.0.1:5455")
 ROUTER_AUTH_TOKEN = os.getenv("ROUTER_AUTH_TOKEN")
 # EMBED_MODEL removed. Relying on AgentState.
 # --- Advanced Logging Configuration ---
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger("rag_server")
+# --- Advanced Logging Configuration ---
+from common.logging_setup import setup_logger
+setup_logger("common")
+logger = setup_logger("rag_server")
 
 # --- Performance Timer Context ---
 from contextlib import asynccontextmanager
@@ -400,10 +397,7 @@ class RAGServer:
         try:
             logger.info(f"Starting search for: {query_text} (KB: {kb_id})")
             
-            # DEBUG PROBE: Verify variable passing
-            # probe_sql = f"SELECT count() FROM chunk WHERE kb_id = $kb;"
-            # probe_res = await self.execute_surreal_query(probe_sql, {"kb": kb_id})
-            # logger.info(f"DEBUG PROBE: count for {kb_id} is {probe_res}")
+
 
             embedding = await self.get_embedding(query_text)
             
@@ -469,7 +463,7 @@ class RAGServer:
             # But the user complains about 500, so catching it here will stop the 500.
             return []
 
-import json
+
 rag_backend = RAGServer()
 
 @app.on_event("startup")
@@ -477,9 +471,12 @@ async def startup_event():
     logger.info("RAG Server starting up... initializing database schema.")
     await rag_backend.ensure_db()
 
-@app.post("/ingest")
-async def ingest(req: IngestRequest):
-    # ACCURACY UPGRADE: Adaptive Sliding Window Chunking
+    await rag_backend.ensure_db()
+
+from fastapi import BackgroundTasks
+
+async def _process_ingest_background(req: IngestRequest):
+    # Re-use ingestion logic for background tasks
     text = req.content
     window_size = req.window_size
     overlap = req.overlap
@@ -493,7 +490,55 @@ async def ingest(req: IngestRequest):
             end = start + window_size
             chunks.append(text[start:end])
             start += (window_size - overlap)
-            # Prevent infinite loop if overlap >= window_size
+            if start >= len(text) or (window_size - overlap) <= 0:
+                break
+        
+    success_count = 0
+    duplicate_count = 0
+    import hashlib
+    
+    logger.info(f"INGEST (Background): Processing {len(chunks)} chunks for {req.filename or 'unknown'}")
+    
+    for p in chunks:
+        final_content = f"{req.prepend_text}{p}"
+        fingerprint = hashlib.sha256(f"{final_content}_{req.kb_id}_{req.filename}".encode()).hexdigest()
+        
+        try:
+            if await rag_backend.add_chunk(final_content, req.kb_id, req.filename, req.metadata, finger_print=fingerprint):
+                success_count += 1
+            else:
+                duplicate_count += 1
+        except Exception as e:
+            logger.error(f"Background ingest failed for chunk: {e}")
+            
+    logger.info(f"INGEST COMPLETE (Background): {success_count} stored, {duplicate_count} skipped.")
+
+
+@app.post("/ingest")
+async def ingest(req: IngestRequest, background_tasks: BackgroundTasks):
+    # HYBRID INGESTION STRATEGY
+    # Small payloads (<20KB) are processed synchronously for immediate feedback.
+    # Large payloads (like "The Blob") trigger background processing to prevent HTTP Timeouts.
+    
+    if len(req.content) > 20000:
+        logger.info(f"INGEST: Payload size {len(req.content)} > 20KB. Offloading to Background Task.")
+        background_tasks.add_task(_process_ingest_background, req)
+        return {"ok": True, "status": "accepted", "message": "Payload too large for sync processing. Ingestion started in background."}
+
+    # Synchronous processing for small files
+    text = req.content
+    window_size = req.window_size
+    overlap = req.overlap
+    
+    chunks = []
+    if len(text) <= window_size:
+        chunks = [text]
+    else:
+        start = 0
+        while start < len(text):
+            end = start + window_size
+            chunks.append(text[start:end])
+            start += (window_size - overlap)
             if start >= len(text) or (window_size - overlap) <= 0:
                 break
         
@@ -503,18 +548,8 @@ async def ingest(req: IngestRequest):
     
     logger.info(f"INGEST: Received {len(req.content)} chars. Accuracy-friendly chunking produced {len(chunks)} overlapping windows.")
     for p in chunks:
-        # Global Context Injection: Prepend the summary if provided
         final_content = f"{req.prepend_text}{p}"
-        
-        # [FEATURE: DATA INTEGRITY] Server-side Deduplication
-        # We calculate a deterministic ID based on content, KB, and filename.
-        # This prevents duplicate chunks even if the orchestrator (rag_ingestor) fails to deduplicate.
         fingerprint = hashlib.sha256(f"{final_content}_{req.kb_id}_{req.filename}".encode()).hexdigest()
-        
-        # Determine if we should overwrite or skip (defaulting to safe override or record update)
-        # add_chunk currently creates a new record. 
-        # For a truly robust fix, we update add_chunk to handle the fingerprint or check existence first.
-        # But for this diff, we use the fingerprint as the primary check point.
         
         if await rag_backend.add_chunk(final_content, req.kb_id, req.filename, req.metadata, finger_print=fingerprint):
             success_count += 1
@@ -637,11 +672,6 @@ async def ingest_graph(req: GraphIngestRequest):
         # We use proper ID record syntax: entity:id
         # CONTENT logic: MERGE to update description/metadata without wiping existing info
         entity_sql += f"""
-        LET $name = {json.dumps(ent.name)};
-        LET $type = {json.dumps(ent.type)};
-        LET $desc = {json.dumps(ent.description)};
-        LET $meta = {json.dumps(ent.metadata or {})};
-        
         LET $name = {json.dumps(ent.name)};
         LET $type = {json.dumps(ent.type)};
         LET $desc = {json.dumps(ent.description)};

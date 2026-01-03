@@ -215,6 +215,32 @@ async def update_models(config: Dict[str, str] = Body(...)):
     current_models = {k: getattr(state, k) for k in model_keys}
     return {"ok": True, "models": current_models}
 
+@router.post("/admin/config/update")
+async def update_single_config(body: Dict[str, Any] = Body(...)):
+    """
+    Update a single configuration value or secret.
+    Body: { "key": "VISION_MODEL", "value": "...", "type": "config"|"secret" }
+    """
+    state = get_shared_state()
+    key = body.get("key")
+    value = body.get("value")
+    ctype = body.get("type", "secret")
+    
+    if not key:
+        raise HTTPException(status_code=400, detail="Missing key")
+
+    # Use ConfigManager
+    if ctype == "secret":
+        success = await state.config_manager.set_secret(key, value)
+    else:
+        # Config / Model
+        success = await state.config_manager.set_config_value(key, value)
+        
+    if success:
+        return {"ok": True, "message": f"Updated {key} ({ctype})"}
+    else:
+        return {"ok": False, "error": "Failed to update configuration"}
+
 def save_system_config(state):
     """Save current state to system_config.json for persistence."""
     try:
@@ -366,6 +392,47 @@ async def get_dashboard_insights():
     # Logic moved to dashboard_tracker potentially, but for now matching main.py
     # (Assuming it was a simple passthrough or mock)
     return {"ok": True, "insights": []}
+
+@router.get("/admin/dashboard/state")
+async def get_dashboard_state():
+    """Aggregate system state for the V2 Dashboard."""
+    state = get_shared_state()
+    
+    # 1. Health & Topology
+    from agent_runner.health_monitor import get_detailed_health_report
+    health = await get_detailed_health_report()
+    
+    # 2. Ingestion Status
+    ingest_status = await get_ingestion_status()
+    
+    # 3. Circuit Breakers
+    breakers = state.mcp_circuit_breaker.get_status()
+    open_breakers = [b for b in breakers.values() if b["state"] == "open"]
+    
+    # 4. Memory Stats (Simplified)
+    # We could call get_memory_stats() but let's keep it fast
+    mem_active = hasattr(state, "memory") and state.memory is not None
+    
+    # 5. Budget (Mock/Placeholder for now as in V1)
+    budget = {
+        "percent_used": 0,
+        "current_spend": 0.0,
+        "daily_limit_usd": 50.0
+    }
+        
+    return {
+        "status": health.get("status", "healthy"),
+        "ingestion": ingest_status,
+        "memory_stats": {"active": mem_active, "mode": "Transactional" if mem_active else "Offline"},
+        "budget": budget,
+        "metrics": health.get("metrics", {}),
+        "summary": {
+            "critical_count": len(open_breakers),
+            "open_breakers": open_breakers,
+            "overall_status": breakers,
+            "latest_anomaly": None # Telemetry will populate this via other channels
+        }
+    }
 
 @router.post("/admin/dashboard/errors")
 async def track_dashboard_error(body: Dict[str, Any]):
@@ -566,3 +633,35 @@ async def restart_system_endpoint():
     except Exception as e:
          logger.error(f"Failed to trigger restart: {e}")
          return {"ok": False, "error": str(e)}
+
+@router.get("/admin/diagnostics/stream")
+async def stream_diagnostics(request: Request):
+    """
+    Stream the 'live_stream.md' file content as distinct events.
+    """
+    from fastapi.responses import StreamingResponse
+    import os
+    
+    async def diag_generator():
+        log_path = "logs/live_stream.md"
+        
+        # Ensure file exists
+        if not os.path.exists(log_path):
+             yield f"data: {json.dumps({'line': 'Waiting for diagnostics stream...'})}\n\n"
+             
+        # Tail logic
+        with open(log_path, "r") as f:
+            # Start at end
+            f.seek(0, os.SEEK_END)
+            
+            while True:
+                if await request.is_disconnected():
+                    break
+                    
+                line = f.readline()
+                if line:
+                    yield f"data: {json.dumps({'line': line.strip()})}\n\n"
+                else:
+                     await asyncio.sleep(1.0)
+                     
+    return StreamingResponse(diag_generator(), media_type="text/event-stream")

@@ -805,7 +805,7 @@ def _categorize_tool_by_pattern(tool_name: str, tool_description: str = "") -> O
     # Pattern-based categorization (order matters - more specific first)
     patterns = {
         "web_search": [
-            r"web_search", r"exa", r"tavily", r"perplexity", 
+            r"web_search", 
             r"brave_search", r"google.*search", r"search.*web", r"lookup.*web",
             r"find.*information", r"research.*web"
         ],
@@ -829,7 +829,7 @@ def _categorize_tool_by_pattern(tool_name: str, tool_description: str = "") -> O
             r"remember", r"recall", r"knowledge.*base", r"delete.*fact", r"check.*health.*memory"
         ],
         "scraping": [
-            r"scrape", r"extract.*structured.*data", r"firecrawl", r"scrapezy",
+            r"scrape", r"extract.*structured.*data", r"scrapezy",
             r"parse.*html", r"crawl.*web", r"extract.*data"
         ],
         "weather": [
@@ -958,7 +958,7 @@ def _get_tool_category(tool_name: str, tool_description: str = "") -> Optional[s
                         "brave_search": "web_search",
                         "playwright": "browser",
                         "project_memory": "memory",
-                        "firecrawl_mcp": "scraping",
+
                         "scrapezy": "scraping",
                         "macos_automator": "automation",
                         "ollama": "ollama",
@@ -1002,11 +1002,7 @@ def _build_tool_category_map() -> Dict[str, str]:
         
         _tool_category_map = {
         # Web search tools
-        "mcp__exa__web_search_exa": "web_search",
-        "mcp__tavily_search__tavily_search": "web_search",
-        "mcp__perplexity__perplexity_research": "web_search",
-        "mcp__perplexity__perplexity_search": "web_search",
-        "mcp__perplexity__perplexity_ask": "web_search",
+
         "mcp__brave_search__brave_search": "web_search",
         # Filesystem tools
         "read_text": "filesystem",
@@ -1030,7 +1026,7 @@ def _build_tool_category_map() -> Dict[str, str]:
         "mcp__project_memory__delete_fact": "memory",
         "mcp__project_memory__check_health": "memory",
         # Scraping tools
-        "mcp__firecrawl_mcp__firecrawl_scrape": "scraping",
+
         "mcp__scrapezy__extract_structured_data": "scraping",
         # Automation tools
         "mcp__macos_automator__execute_script": "automation",
@@ -1322,10 +1318,8 @@ def get_model_from_analysis(
         return local_models[0]  # Use first available local model
     
     if analysis.complexity in ["complex", "very_complex"] and cloud_models:
-        # Prefer GPT-5.2 for very complex, GPT-4o for complex
-        if analysis.complexity == "very_complex" and "openai:gpt-5.2" in cloud_models:
-            return "openai:gpt-5.2"
-        return cloud_models[0]  # Use cloud for complex queries
+        # Use first available cloud model for complex queries (Grok-3/GPT-4o)
+        return cloud_models[0]
     
     return default_model
 

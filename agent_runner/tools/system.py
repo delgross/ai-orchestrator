@@ -151,3 +151,127 @@ async def tool_check_system_health(state: AgentState) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+async def tool_query_logs(state: AgentState, limit: int = 50, level: str = None, service: str = None, needs_review: bool = None) -> Dict[str, Any]:
+    """
+    Query the centralized 'diagnostic_log' table.
+    
+    Args:
+        limit: Max logs to retrieve (default 50)
+        level: Optional minimum log level (INFO, WARNING, ERROR, CRITICAL).
+        service: Optional service name to filter by.
+        needs_review: If True, only return logs flagged by Sorter as 'UNKNOWN' / needing review.
+    """
+    try:
+        import os
+        
+        where_clauses = []
+        if service:
+            where_clauses.append(f"service = '{service}'")
+        
+        if needs_review is not None:
+             val = "true" if needs_review else "false"
+             where_clauses.append(f"needs_review = {val}")
+
+        if level:
+            # Simple exact match or subset useful for now
+            if level == "ERROR":
+                where_clauses.append("(level = 'ERROR' OR level = 'CRITICAL')")
+            elif level == "WARNING":
+                where_clauses.append("(level = 'WARNING' OR level = 'ERROR' OR level = 'CRITICAL')")
+            else:
+                where_clauses.append(f"level = '{level}'")
+            
+        where_str = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+        query = f"USE NS {os.getenv('SURREAL_NS', 'orchestrator')}; USE DB {os.getenv('SURREAL_DB', 'memory')}; SELECT * FROM diagnostic_log {where_str} ORDER BY timestamp DESC LIMIT {limit};"
+        
+        # Use State's client
+        client = await state.get_http_client()
+        url = f"{state.config.get('surreal', {}).get('url', 'http://localhost:8000')}/sql"
+        
+        headers = {
+            "Accept": "application/json", 
+            "Content-Type": "text/plain",
+            # Fallback headers for older surreal versions if content-type isn't enough
+            "ns": os.getenv("SURREAL_NS", "orchestrator"),
+            "db": os.getenv("SURREAL_DB", "memory")
+        }
+        
+        auth = (os.getenv("SURREAL_USER", "root"), os.getenv("SURREAL_PASS", "root"))
+        
+        # We use a fresh request for DB to be safe on Auth/Headers
+        import httpx
+        async with httpx.AsyncClient() as db_client:
+            resp = await db_client.post(url, content=query, auth=auth, headers=headers, timeout=5.0)
+            
+        if resp.status_code != 200:
+             return {"ok": False, "error": f"DB Query failed: {resp.text}"}
+             
+        data = resp.json()
+        
+        # Parse Multi-Statement Result (USE; USE; SELECT)
+        results = []
+        for item in data:
+            if item.get("status") == "OK" and isinstance(item.get("result"), list):
+                 res_list = item.get("result", [])
+                 if res_list:
+                     results = res_list
+                     break
+        
+        return {
+            "ok": True,
+            "count": len(results),
+            "logs": results
+        }
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+async def tool_add_lexicon_entry(state: AgentState, pattern: str, label: str, severity: str = "WARNING") -> Dict[str, Any]:
+    """
+    Add a new learned error pattern to the system lexicon.
+    This allows the system to recognize this error in the future.
+    
+    Args:
+        pattern: Regex pattern to match the error (e.g. "Connection refused.*port 5432").
+        label: specialized classifier label (e.g. "DB_CONNECTION_FAILURE").
+        severity: INFO, WARNING, ERROR, or CRITICAL.
+    """
+    import yaml
+    from pathlib import Path
+    
+    # agent_fs_root is usually "agent_fs_root". Config is parallel to it.
+    lex_dir = state.agent_fs_root.parent / "config" / "lexicons"
+    lex_dir.mkdir(parents=True, exist_ok=True)
+    
+    target_file = lex_dir / "learned_patterns.yaml"
+    
+    entry = {
+        "pattern": pattern,
+        "label": label,
+        "severity": severity,
+        "source": "diagnostician_auto_learn",
+        "created_at": str(state.started_at) # simplistic timestamp, accurate enough
+    }
+    
+    try:
+        # Load existing
+        data = {"patterns": []}
+        if target_file.exists():
+            with open(target_file, "r") as f:
+                loaded = yaml.safe_load(f)
+                if loaded and "patterns" in loaded:
+                    data = loaded
+        
+        # Append
+        data["patterns"].append(entry)
+        
+        # Save
+        with open(target_file, "w") as f:
+            yaml.dump(data, f, sort_keys=False)
+            
+        logger.info(f"Learned new pattern: {label} -> {pattern}")
+        return {"ok": True, "message": f"Successfully learned pattern for {label}"}
+        
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

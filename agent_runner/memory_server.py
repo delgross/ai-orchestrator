@@ -417,6 +417,28 @@ class MemoryServer:
             log(f"Failed to store fact: {e}", "ERROR")
             return {"ok": False, "error": str(e)}
 
+    async def delete_fact(self, fact_id: str):
+        """Permanently remove a fact by its ID."""
+        await self.ensure_connected()
+        if not self.initialized: return {"ok": False, "error": "DB not connected"}
+        
+        try:
+            # Check if exists
+            check = await self._execute_query("SELECT id FROM fact WHERE id = type::thing('fact', $id)", {"id": fact_id})
+            if not check:
+                # Try raw ID if not typed
+                check = await self._execute_query("SELECT id FROM fact WHERE id = $id", {"id": fact_id})
+            
+            if not check:
+                return {"ok": False, "error": "Fact not found"}
+                
+            await self._execute_query("DELETE fact WHERE id = $id", {"id": check[0]["id"]})
+            log(f"Deleted fact: {fact_id}", "INFO")
+            return {"ok": True}
+        except Exception as e:
+            log(f"Failed to delete fact {fact_id}: {e}", "ERROR")
+            return {"ok": False, "error": str(e)}
+
     async def query_facts(self, entity: Optional[str] = None, relation: Optional[str] = None, limit: int = 1000):
         await self.ensure_connected()
         if not self.initialized: return {"ok": False, "error": "DB not connected"}
@@ -932,6 +954,7 @@ async def main():
     async def list_tools() -> list[Tool]:
         return [
             Tool(name="store_fact", description="Store a fact in long-term memory with an optional confidence score.", inputSchema={"type":"object","properties":{"entity":{"type":"string"},"relation":{"type":"string"},"target":{"type":"string"},"context":{"type":"object"},"confidence":{"type":"number", "description": "1.0 for user-confirmed ground truth, lower for agent-inferred guesses."}},"required":["entity","relation","target"]}),
+            Tool(name="delete_fact", description="Permanently delete a fact.", inputSchema={"type":"object","properties":{"fact_id":{"type":"string"}},"required":["fact_id"]}),
             Tool(name="query_facts", description="Search facts.", inputSchema={"type":"object","properties":{"entity":{"type":"string"},"relation":{"type":"string"}}}),
             Tool(name="semantic_search", description="Search by meaning.", inputSchema={"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}),
             Tool(name="record_tool_result", description="Record tool result.", inputSchema={"type":"object","properties":{"model":{"type":"string"},"tool":{"type":"string"},"success":{"type":"boolean"},"latency_ms":{"type":"number"}},"required":["model","tool","success","latency_ms"]}),
@@ -961,6 +984,7 @@ async def main():
             # Ensure connected before any tool call (lazy connection)
             await memory.ensure_connected()
             if name == "store_fact": res = await memory.store_fact(**args)
+            elif name == "delete_fact": res = await memory.delete_fact(**args)
             elif name == "query_facts": res = await memory.query_facts(**args)
             elif name == "semantic_search": res = await memory.semantic_search(**args)
             elif name == "record_tool_result": res = await memory.record_tool_result(**args)

@@ -1,91 +1,22 @@
 agent_runner:
-  circuit_breaker:
-    threshold: 5
-    timeout: 300.0
-  fallback:
-    enabled: true
-    model: ollama:llama3.3:70b-instruct-q8_0
-  host: 127.0.0.1
-  limits:
-    http_timeout: 300
-    max_list_entries: 10000
-    max_read_bytes: 100000000
-    max_tool_steps: 50
-  model: xai:grok-2-1212
   periodic_tasks:
-    time_update:
+    graph_optimizer:
+      type: module
+      module: agent_runner.maintenance_tasks
+      function: graph_optimization_task
+      schedule: '86400'
       enabled: true
-      interval: 60.0
-      local_model: ollama:llama3.1:latest
-      output_file: time/current_time.txt
-      priority: low
-      prompt: 'Get the current date and time and write it to {output_file}.
-
-        Include:
-
-        - Current date and time
-
-        - Timezone
-
-        - Day of week
-
-        - Day of year
-
-        - Week number
-
-        Format it nicely.
-
-        '
-      type: file
-    weather_update:
-      enabled: false
-      idle_only: false
-      interval: 300.0
-      local_model: ollama:llama3.1:latest
-      mcp_server: weather
-      output_file: weather/current_weather.txt
-      priority: low
-      prompt: 'Get the current weather using the weather MCP server tools and write
-        it to {output_file}.
-
-        Include:
-
-        - Timestamp of when weather was fetched
-
-        - Temperature (F and C)
-
-        - Current conditions (sunny, cloudy, rain, etc.)
-
-        - Humidity percentage
-
-        - Wind speed and direction
-
-        - Any relevant weather alerts
-
-        Format it nicely and make it readable.
-
-        '
-      type: mcp_file
-  persona_model_switching_enabled: true
-  port: 5460
-  retry:
-    attempts: 3
-    backoff_factor: 0.5
-  summarization:
-    max_result_chars: 200000
-    model: ollama:llama3.3:70b-instruct-q8_0
-    threshold_chars: 50000
-  tasks:
-    model: ollama:llama3.3:70b-instruct-q8_0
-  tools:
-    cache_enabled: true
-    cache_ttl: 300
-    command_timeout: 60
-    command_workdir: ~/Sync/Antigravity/ai
-    enable_command_execution: true
-    streaming_enabled: false
+      description: Nightly Graph Gardening (Llama 3.3)
+    stale_pruner:
+      type: module
+      module: agent_runner.maintenance_tasks
+      function: stale_memory_pruner_task
+      interval: 604800
+      enabled: true
+      description: Weekly Fact Pruning (Grok)
+  fallback:
+    model: ollama:mistral:latest
 mcp_servers: {}
-
 model_intelligence:
   agent:mcp:
     preferred_for:
@@ -110,10 +41,11 @@ model_intelligence:
     skills:
     - Fast Response
     - Clean Summarization
-  openai:gpt-4o:
+  ollama:llama3.3:70b-instruct-q8_0:
     preferred_for:
     - automator
     - pollinator
+    - architect
     skills:
     - Omni-modal Intelligence
     - Perfect Tool Following
@@ -212,14 +144,12 @@ router:
         mode: moderate
   port: 5455
   preferred_models:
-  - openai:gpt-5.1
-  - openai:gpt-5.2
-  - xai:grok-2-1212
+  - xai:grok-3
   - ollama:llama3.3:70b-instruct-q8_0
   - ollama:llama3.1:latest
   - openai:gpt-4o-mini
   - agent:mcp
-  - openai:o1
+
   - ollama:qwq:latest
   - ollama:mistral:latest
   - gemini-1.5-pro
@@ -232,7 +162,7 @@ router:
 system:
   alert_file_path: ~/Desktop/Antigravity_Alerts.md
   dev_mode: true
-  internet_check_interval: 60
+  internet_check_interval: 5
   location:
     city: Newark
     country: United States
@@ -243,4 +173,16 @@ system:
     timezone: America/New_York
   log_level: INFO
   persistence_dir: ~/ai/agent_data
-  profile: M3_ULTRA
+  agent_model: xai:grok-3
+  router_model: ollama:mistral:latest
+  vision_model: ollama:llama3.2-vision
+  task_model: xai:grok-3
+  summarization_model: ollama:mistral:latest
+  mcp_model: xai:grok-3
+  finalizer_model: ollama:mistral:latest
+  critic_model: ollama:llama3.3:70b-instruct-q8_0
+  healer_model: ollama:llama3.3:70b-instruct-q8_0
+  fallback_model: ollama:mistral:latest
+  intent_model: ollama:llama3.3:70b-instruct-q8_0
+  pruner_model: ollama:mistral:latest
+  embedding_model: ollama:mxbai-embed-large:latest

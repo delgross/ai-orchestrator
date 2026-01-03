@@ -15,8 +15,9 @@ from agent_runner.rag_helpers import _ingest_content, _process_locally
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("manual_ingest")
 
-# Define source file path (ensure this exists or create dummy)
-SRC_FILE = Path(os.path.abspath("memory_test_unique.md"))
+# Define source file path
+# SRC_FILE = Path(os.path.abspath("memory_test_unique.md"))
+SRC_FILE = Path("/Users/bee/.gemini/antigravity/brain/5e01b889-041c-46a1-9732-7a3c5e393120/system_lexicon.md")
 
 async def run_ingest():
     print("--- Manual Ingest Validation ---")

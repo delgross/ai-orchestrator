@@ -5,46 +5,14 @@ from common.unified_tracking import track_event, track_health_event, EventSeveri
 
 logger = logging.getLogger("agent_runner")
 
-async def internet_check_task(state: AgentState) -> None:
-    """Check internet availability."""
-    client = await state.get_http_client()
-    try:
-        resp = await client.get("https://www.google.com", timeout=2.0)
-        is_avail = resp.status_code < 400
-        if is_avail != state.internet_available:
-            if is_avail:
-                track_event(
-                    event="internet_restored",
-                    message="Internet connection restored",
-                    severity=EventSeverity.INFO,
-                    category=EventCategory.SYSTEM,
-                    component="internet_check"
-                )
-            else:
-                track_event(
-                    event="internet_lost",
-                    message="Internet connection lost",
-                    severity=EventSeverity.HIGH,
-                    category=EventCategory.SYSTEM,
-                    component="internet_check"
-                )
-        state.internet_available = is_avail
-    except Exception as e:
-        if state.internet_available:
-            track_event(
-                event="internet_lost_exception",
-                message=f"Internet connection lost: {e}",
-                severity=EventSeverity.HIGH,
-                category=EventCategory.SYSTEM,
-                component="internet_check",
-                error=e
-            )
-        state.internet_available = False
 
-async def health_check_task(state: AgentState) -> None:
-    """Update system health status."""
-    # Logic for comprehensive health check...
-    pass
+
+# Robust Health Check from Monitor
+from agent_runner.health_monitor import health_check_task as _robust_health_check
+
+async def health_check_task() -> None:
+    """Update system health status (Delegates to robust monitor)."""
+    await _robust_health_check()
 
 async def stdio_process_health_monitor(state: AgentState) -> None:
     """Monitor and restart dead stdio processes."""
