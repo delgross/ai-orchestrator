@@ -4,20 +4,50 @@ import logging
 import subprocess
 from typing import Dict, Any, List
 from agent_runner.state import AgentState
+from agent_runner.registry import SystemRegistry
 
 logger = logging.getLogger("agent_runner.tools.system")
 
-async def tool_run_command(state: AgentState, command: str, background: bool = False) -> Dict[str, Any]:
+async def tool_run_command(state: AgentState, command: str, background: bool = False, dry_run: bool = False) -> Dict[str, Any]:
     """
     Run a shell command in the agent's environment.
     
     Args:
         command: The shell command to execute.
         background: If true, run in background (fire and forget-ish).
+        dry_run: If true, simulates the execution and safety check without running logic.
     """
     if not state.config.get("agent_runner", {}).get("enable_command_execution", False):
         return {"ok": False, "error": "Command execution is disabled in configuration."}
+    
+    # [SENTINEL] Security Check
+    try:
+        from agent_runner.services.sentinel import Sentinel
+        # Light instantiation (loads very small JSON, handles caching internally)
+        sentinel = Sentinel(state)
+        # Evaluate
+        is_safe, reason = await sentinel.evaluate(command)
         
+        if dry_run:
+             return {
+                 "ok": True, 
+                 "dry_run": True,
+                 "is_safe": is_safe,
+                 "sentinel_reason": reason,
+                 "command": command,
+                 "message": f"[DRY RUN] Command would be {'ALLOWED' if is_safe else 'BLOCKED'}. Reason: {reason}"
+             }
+             
+        if not is_safe:
+            msg = f"SECURITY BLOCK (Sentinel): {reason}\nTo override and learn this pattern, reply with: 'Authorize: {command}'"
+            return {"ok": False, "error": msg}
+    except ImportError:
+        pass # Fallback if module missing during refactor
+    except Exception as e:
+        logger.error(f"Sentinel Check Failed: {e}")
+        # Fail safe? Or Fail Open? For dev mode, maybe warn. But strict security says fail closed.
+        return {"ok": False, "error": f"Security Audit Failed: {str(e)}"}
+
     cwd = state.agent_fs_root
     
     logger.info(f"Executing command: {command} (cwd={cwd})")
@@ -43,11 +73,51 @@ async def tool_run_command(state: AgentState, command: str, background: bool = F
             )
             stdout, stderr = await process.communicate()
             
+            # [ROBUSTNESS] Output Truncation
+            # Prevent context overflow from massive logs
+            MAX_OUTPUT_CHARS = 4000
+            
+            decoded_stdout = stdout.decode("utf-8", errors="replace")
+            decoded_stderr = stderr.decode("utf-8", errors="replace")
+            
+            full_output = decoded_stdout + "\n" + decoded_stderr
+            
+            if len(full_output) > MAX_OUTPUT_CHARS:
+                # Truncate and Save
+                import time
+                import hashlib
+                
+                # Ensure log dir exists
+                log_dir = state.agent_fs_root / "logs" / "outputs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Allow user to locate it easily
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                h = hashlib.md5(command.encode()).hexdigest()[:8]
+                filename = f"cmd_{ts}_{h}.txt"
+                log_path = log_dir / filename
+                
+                with open(log_path, "w") as f:
+                    f.write(f"Command: {command}\n\nSTDOUT:\n{decoded_stdout}\n\nSTDERR:\n{decoded_stderr}")
+                    
+                # Truncate for Chat
+                trunc_stdout = decoded_stdout[:2000] + f"\n... [TRUNCATED view file: logs/outputs/{filename}]" if len(decoded_stdout) > 2000 else decoded_stdout
+                trunc_stderr = decoded_stderr[:2000] + f"\n... [TRUNCATED view file: logs/outputs/{filename}]" if len(decoded_stderr) > 2000 else decoded_stderr
+                
+                return {
+                    "ok": process.returncode == 0,
+                    "returncode": process.returncode,
+                    "stdout": trunc_stdout,
+                    "stderr": trunc_stderr,
+                    "truncated": True,
+                    "full_log": str(log_path)
+                }
+
             return {
                 "ok": process.returncode == 0,
                 "returncode": process.returncode,
-                "stdout": stdout.decode("utf-8", errors="replace"),
-                "stderr": stderr.decode("utf-8", errors="replace"),
+                "stdout": decoded_stdout,
+                "stderr": decoded_stderr,
             }
             
     except Exception as e:
@@ -275,3 +345,71 @@ async def tool_add_lexicon_entry(state: AgentState, pattern: str, label: str, se
         
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+async def tool_get_system_config(state: AgentState, key: str) -> Dict[str, Any]:
+    """
+    Get a system configuration value (e.g. 'router_mode').
+    """
+    try:
+        base = state.gateway_base # e.g. http://127.0.0.1:5455
+        url = f"{base}/config/{key}"
+        
+        client = await state.get_http_client()
+        resp = await client.get(url, timeout=5.0)
+        
+        if resp.status_code != 200:
+             return {"ok": False, "error": f"API Error {resp.status_code}"}
+             
+        data = resp.json()
+        return {"ok": True, "value": data.get("value")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+async def tool_set_system_config(state: AgentState, key: str, value: str) -> Dict[str, Any]:
+    """
+    Set a system configuration key. Validates input against SystemRegistry.
+    persist=True always.
+    """
+    # 1. Validate Input via Registry
+    if not SystemRegistry.validate_toggle_value(key, value):
+        toggle = SystemRegistry.get_toggle(key)
+        valid_opts = toggle.options if toggle else "Unknown Key"
+        return {"ok": False, "error": f"Invalid value '{value}' for key '{key}'. Valid options: {valid_opts}"}
+
+    try:
+        base = state.gateway_base
+        client = await state.get_http_client()
+        url = f"{base}/config/{key}"
+        
+        # Determine if we need to call Agent config or Router config or Policy
+        # Currently we only really support Router/Surreal config via the Router API
+        
+        resp = await client.post(url, json={"value": value}, timeout=5.0)
+        
+        if resp.status_code == 200:
+            return {"ok": True, "result": f"Successfully set '{key}' to '{value}'"}
+        else:
+            return {"ok": False, "error": f"Router API error: {resp.status_code} - {resp.text}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+async def tool_sentinel_authorize(state: AgentState, command: str) -> Dict[str, Any]:
+    """
+    Explicitly authorize a command pattern that was previously blocked by Sentinel.
+    This 'teaches' the system that this pattern is safe for future use.
+    """
+    try:
+        from agent_runner.services.sentinel import Sentinel
+        sentinel = Sentinel(state)
+        # We handle the import re locally to avoid polluting top level
+        import re
+        # Convert to strict start match, wildcard end
+        safe_pattern = f"^{re.escape(command.strip())}.*"
+        
+        # [FIX] learn_pattern is now async for DB calls
+        await sentinel.learn_pattern(safe_pattern, True, "User Override via tool_sentinel_authorize")
+        
+        return {"ok": True, "message": f"Pattern learned. You may now execute: {command}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+

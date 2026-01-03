@@ -22,10 +22,13 @@ class LogSorterService:
         self.surreal_ns = os.getenv("SURREAL_NS", "orchestrator")
         self.surreal_db = os.getenv("SURREAL_DB", "memory")
         self.surreal_auth = (os.getenv("SURREAL_USER", "root"), os.getenv("SURREAL_PASS", "root"))
+        self.surreal_user = self.surreal_auth[0]
+        self.surreal_pass = self.surreal_auth[1]
         
         # Resilience State (Phase 3.5)
         self._seen_hashes = {}
         self._llm_semaphore = asyncio.Semaphore(2)
+        self._llm_queue = asyncio.Queue(maxsize=100) # [FIX] Added missing queue
         self._cb_open = False
         self._cb_failures = 0
         self._cb_last_failure = 0.0
@@ -54,61 +57,72 @@ class LogSorterService:
             await asyncio.sleep(self.interval)
 
     async def _process_batch(self):
+        # [BACKPRESSURE] Stop fetching if local queue is busy
+        # User requested cap to avoid 62k backlog situations turning into error floods.
+        if self._llm_queue.qsize() > 50:
+            # Queue is half full (max 100). Let it drain.
+            return
+
+        # [LOAD SHEDDING] Immediate Destruction Mode
+        shedding_load = self._llm_queue.qsize() > 1000
+        
         # 1. Fetch unhandled logs
         # Embed USE statement to ensure correct namespace
         query = f"USE NS {self.surreal_ns}; USE DB {self.surreal_db}; SELECT * FROM diagnostic_log WHERE handled IS NONE ORDER BY timestamp ASC LIMIT 50;"
         
-        async with httpx.AsyncClient() as client:
-            headers = {
-                "Accept": "application/json", 
-                "Content-Type": "text/plain"
-            }
-            
-            try:
+        try:
+            async with httpx.AsyncClient() as client:
                 resp = await client.post(
-                    f"{self.surreal_url}/sql",
+                    f"{self.surreal_url}/sql", 
                     content=query, 
-                    auth=self.surreal_auth,
-                    headers=headers,
-                    timeout=5.0
+                    auth=(self.surreal_user, self.surreal_pass),
+                    headers={"Accept": "application/json"}
                 )
-                if resp.status_code != 200: return
+                
+                if resp.status_code != 200:
+                    logger.error(f"Failed to fetch logs: {resp.text}")
+                    return
+
                 data = resp.json()
+                # Surreal returns array of results. Last one is SELECT.
+                if not data or not isinstance(data, list):
+                    return
                 
-                # Surreal returns one result object per statement. 
-                # We sent 3 statements (USE, USE, SELECT).
-                # We expect the 3rd result (index 2) to contain our logs.
-                # Use flexible logic to find 'diagnostic_log' results or just take the last one.
-                
-                results = []
                 # Find the result that has 'result' list
+                results = []
                 for item in data:
                     if item.get("status") == "OK" and isinstance(item.get("result"), list):
-                        # This works for SELECT. USE returns null or string?
                          res_list = item.get("result", [])
                          if res_list:
                              results = res_list
                              break
                 
                 if not results: return
-            except Exception as e:
-                logger.error(f"Fetch failed: {e}")
-                return
 
-            # 2. Process logs
-            updates = []
-            
-            # Stream File
-            stream_path = os.path.join(os.getcwd(), "logs", "live_stream.md")
-            os.makedirs(os.path.dirname(stream_path), exist_ok=True)
-            
-            with open(stream_path, "a") as sf:
+                updates = []
+                # Stream File
+                stream_path = os.path.join(os.getcwd(), "logs", "live_stream.md")
+                os.makedirs(os.path.dirname(stream_path), exist_ok=True)
+                
+                # Ensure we have a valid output file for stream
+                sf = open(stream_path, "a")
+
+                ids_to_shred = [] # For Immediate Destruction
+
                 for log_entry in results:
                     log_id = log_entry["id"]
                     msg = log_entry.get("message", "")
                     service = log_entry.get("service", "unknown")
                     timestamp = log_entry.get("timestamp", "")
                     
+                    if not log_id: continue
+
+                    if shedding_load:
+                        # [LOAD SHEDDING] Bitbucket (Immediate Destruction)
+                        # We collect IDs to DELETE them in one go.
+                        ids_to_shred.append(log_id)
+                        continue
+
                     # Classify
                     result = self.registry.classify(service, msg)
                     
@@ -134,32 +148,55 @@ class LogSorterService:
                         
                         # 3. Trigger Async Analysis (Throttle logic needed here, for now just fire)
                         # We only analyze unique unknowns to save cost.
-                        asyncio.create_task(self._analyze_unknown(log_id, msg))
+                        # QUEUE LLM ANALYSIS instead of firing async task
+                        try:
+                            self._llm_queue.put_nowait((log_id, msg, timestamp))
+                        except asyncio.QueueFull:
+                            # If even the queue is full (persistent overload), we drop.
+                            logger.warning(f"LogSorter Queue Full. Dropping analysis for {log_id}")
 
-            # 3. Execute DB Updates
-            if updates:
-                # Prepend USE statement
-                batch_query = f"USE NS {self.surreal_ns}; USE DB {self.surreal_db};\n" + "\n".join(updates)
-                try:
-                    await client.post(
-                        f"{self.surreal_url}/sql",
-                        content=batch_query,
-                        auth=self.surreal_auth,
-                        headers=headers, # Reuse headers (Content-Type: text/plain)
-                        timeout=5.0
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to update log status: {e}")
+                sf.close()
+                
+                # Execute Destruction Batch
+                if ids_to_shred:
+                    # Construct DELETE query
+                    # DELETE FROM diagnostic_log WHERE id IN ['diagnostic_log:1', 'diagnostic_log:2']
+                    # SurrealDB IDs need to be properly formatted/quoted if complex, but default output usually works.
+                    # Safest is update handled=true (archive) but user wants destruction.
+                    id_list = ", ".join([f"{uid}" for uid in ids_to_shred]) # IDs come as strings with colons usually
+                    delete_query = f"USE NS {self.surreal_ns}; USE DB {self.surreal_db}; DELETE {id_list};"
+                    
+                    async with httpx.AsyncClient() as client:
+                        await client.post(
+                            f"{self.surreal_url}/sql", 
+                            content=delete_query, 
+                            auth=(self.surreal_user, self.surreal_pass),
+                             headers={"Accept": "application/json"}
+                        )
+                    logger.warning(f"[LOAD SHEDDING] Vaporized {len(ids_to_shred)} logs due to overload.")
 
-    async def _capture_context(self, log_id: str):
-        """Placeholder for Snapshot Logic"""
-        pass
+                # Execute Update Batch
+                if updates:
+                    update_query = f"USE NS {self.surreal_ns}; USE DB {self.surreal_db}; " + " ".join(updates)
+                    async with httpx.AsyncClient() as client:
+                        await client.post(
+                            f"{self.surreal_url}/sql", 
+                            content=update_query, 
+                            auth=(self.surreal_user, self.surreal_pass),
+                            headers={"Accept": "application/json"}
+                        )
 
-    async def _analyze_unknown(self, log_id: str, msg: str):
-        """Async LLM Analysis for Unknowns (Resilient & Local Only)"""
+        except Exception as e:
+            logger.error(f"Failed processing LogSorter batch: {e}")
+            # The original code had `return []` here, but it's not needed as this is a void method.
+            # Keeping it as a void method.
+                
+
+    async def _perform_llm_analysis(self, log_id: str, msg: str):
+        """Performs LLM analysis for unknown logs, with resilience."""
         import hashlib
         
-        # 0. Deduplication (Phase 3.5)
+        # 0. Deduplication
         msg_hash = hashlib.md5(msg.encode()).hexdigest()
         curr_time = time.time()
         
@@ -171,7 +208,7 @@ class LogSorterService:
             return
         self._seen_hashes[msg_hash] = curr_time
 
-        # 1. Circuit Breaker Check (Phase 3.5)
+        # 1. Circuit Breaker Check
         if self._cb_open:
             if curr_time - self._cb_last_failure > 60.0:
                 logger.info("Circuit Breaker Half-Open: Retrying LLM...")
@@ -181,67 +218,73 @@ class LogSorterService:
                 logger.warning(f"Circuit Breaker OPEN. Skipping analysis for {log_id}.")
                 return
 
-        # 2. Concurrency Limit (Phase 3.5)
-        if self._llm_semaphore.locked():
-             logger.warning("LLM Busy (Concurrency Limit Reached). Dropping analysis.")
-             return
-
-        async with self._llm_semaphore:
-            # 3. Privacy / "Never Remote" Enforcement (Phase 3.6)
-            # We bypass the Gateway entirely to ensure NO billing risk.
-            target_url = "http://localhost:11434/v1/chat/completions" 
-            
-            # Use local model only (Prefer Env/DB < Config < Default)
+        # 2. Privacy / "Never Remote" Enforcement
+        # We bypass the Gateway entirely to ensure NO billing risk.
+        target_url = "http://localhost:11434/v1/chat/completions" 
+        
+        # DYNAMIC CONFIG LOOKUP:
+        model = "llama3.1:latest" # Default
+        
+        if self.state:
+            # Map 'Diagnostician' role to 'healer_model' as per Dashboard convention
+            model = getattr(self.state, "healer_model", None) or getattr(self.state, "fallback_model", "llama3.1:latest")
+        else:
+            # Fallback to static config if state not injected (tests)
             env_model = os.getenv("FALLBACK_MODEL")
             cfg_model = self.config.get("agent_runner", {}).get("fallback", {}).get("model")
-            
-            # Default to Mistral (7B) if nothing else is set, instead of 70B
-            model = env_model or cfg_model or "ollama:mistral:latest"
-            
-            if model.startswith("ollama:"): model = model.replace("ollama:", "")
-            
-            prompt = (
-                f"You are the System Diagnostician.\n"
-                f"A new anomaly occurred in the system.\n"
-                f"Log Message: {msg}\n\n"
-                f"Task: Explain the potential cause and suggest 1 command to fix or verify it. "
-                f"Be extremely concise (max 20 words)."
-            )
-            
-            payload = {
-                "model": model,
-                "messages": [{"role": "system", "content": prompt}],
-                "stream": False
-            }
-            
-            try:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.post(target_url, json=payload, timeout=45.0)
-                    
-                    if resp.status_code == 200:
-                        analysis = resp.json()['choices'][0]['message']['content'].strip()
-                        
-                        # Append to Stream
-                        stream_path = os.path.join(os.getcwd(), "logs", "live_stream.md")
-                        with open(stream_path, "a") as sf:
-                            sf.write(f"\n    ↳ 🧠 [AI Insight] {analysis}\n\n")
-                            
-                        logger.info(f"Analyzed Anomaly: {log_id} via Local Ollama")
-                        # Reset Circuit Breaker on Success
-                        self._cb_failures = 0
-                        
-                    else:
-                        logger.warning(f"Local LLM Failed: {resp.status_code} {resp.text}")
-                        self._cb_failures += 1
-                        
-            except Exception as e:
-                logger.error(f"Local LLM Connection Error: {e}")
-                self._cb_failures += 1
-                self._cb_last_failure = curr_time
-            
-            # Trip Circuit Breaker?
-            if self._cb_failures >= 5:
-                self._cb_open = True
-                self._cb_last_failure = time.time()
-                logger.critical("Circuit Breaker TRIPPED. Pausing LLM analysis for 60s.")
+            model = env_model or cfg_model or "llama3.1:latest"
 
+        if model.startswith("ollama:"): model = model.replace("ollama:", "")
+        
+        # Use a simpler prompt structure that Llama 3.1 tends to respect better via API
+        # Explicitly telling it NOT to solve math seems to backfire (negative prompting issues).
+        # Instead, we give it a persona and a single direct command.
+        prompt = (
+            f"Analyze this error log:\n{msg}\n\n"
+            f"1. OPTIMIZED EXPLANATION (10 words): "
+        )
+        
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a serious system administrator. You output only technical analysis."},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.0,
+                "top_p": 0.9
+            }
+        }
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(target_url, json=payload, timeout=45.0)
+                
+                if resp.status_code == 200:
+                    analysis = resp.json()['choices'][0]['message']['content'].strip()
+                    
+                    # Append to Stream
+                    stream_path = os.path.join(os.getcwd(), "logs", "live_stream.md")
+                    with open(stream_path, "a") as sf:
+                        sf.write(f"\n    ↳ 🧠 [AI Insight] {analysis}\n\n")
+                        
+                    logger.info(f"Analyzed Anomaly: {log_id} via Local Ollama")
+                    # Reset Circuit Breaker on Success
+                    self._cb_failures = 0
+                    
+                else:
+                    logger.warning(f"Local LLM Failed: {resp.status_code} {resp.text}")
+                    self._cb_failures += 1
+                    
+        except Exception as e:
+            logger.error(f"Local LLM Connection Error: {e}")
+            self._cb_failures += 1
+            self._cb_last_failure = curr_time
+        
+        # Trip Circuit Breaker?
+        if self._cb_failures >= 5:
+            self._cb_open = True
+            self._cb_last_failure = time.time()
+            self._cb_last_failure = time.time()
+            logger.critical("Circuit Breaker TRIPPED. Pausing LLM analysis for 60s.")

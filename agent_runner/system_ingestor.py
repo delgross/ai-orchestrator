@@ -18,6 +18,7 @@ class SystemIngestor:
         self.state = state
         self.memory = MemoryServer(state)
         self.fs_root = state.agent_fs_root or os.getcwd()
+        self.brain_dir = Path(os.getenv("BRAIN_DIR", "/Users/bee/Brain/Permanent_Memory")).resolve()
 
     async def run(self):
         """Main entry point: Ingests all system state into DB."""
@@ -40,6 +41,9 @@ class SystemIngestor:
             await self.ingest_system_profiler()
             await self.ingest_task_definitions()
             await self.ingest_mcp_servers()
+            # [PHASE 46] Universal Sovereign Memory Sync
+            # This ensures BRAIN_DIR files are mirrored to DB (Wipe & Replace)
+            await self.ingest_permanent_memory()
             
             logger.info("System State Ingestion Complete.")
             
@@ -314,3 +318,59 @@ class SystemIngestor:
              f"DELETE FROM mcp_server WHERE name = '{name}'; CREATE mcp_server CONTENT $data",
              {"data": record}
         )
+
+    async def ingest_permanent_memory(self):
+        """
+        Recursively scan BRAIN_DIR and sync all markdown files as sovereign memories.
+        """
+        if not self.brain_dir.exists():
+            logger.warning(f"BRAIN_DIR not found at {self.brain_dir}. Skipping Sovereign Sync.")
+            return
+
+        logger.info(f"Scanning Sovereign Memory in {self.brain_dir}...")
+        count = 0
+        
+        # Recursive glob
+        for md_file in self.brain_dir.rglob("*.md"):
+            try:
+                # Derive stable ID (relative path without extension)
+                # e.g. /Brain/Permanent_Memory/system/lexicon.md -> system/lexicon
+                rel_path = md_file.relative_to(self.brain_dir)
+                kb_id = str(rel_path.with_suffix('')) 
+                
+                # Check timestamps (Optimization: Only sync if changed)
+                try:
+                    stats = md_file.stat()
+                    disk_mtime = stats.st_mtime
+                    
+                    db_time_str = await self.memory.check_sovereign_state(kb_id)
+                    if db_time_str:
+                        # Parse DB time (ISO format) to timestamp
+                        # Using basic string comparison or proper parsing if needed.
+                        # Surreal returns ISO string. 
+                        # To be safe, if parse fails, we force sync.
+                        import datetime
+                        db_dt = datetime.datetime.fromisoformat(db_time_str.replace('Z', '+00:00'))
+                        db_ts = db_dt.timestamp()
+                        
+                        # If Disk is older or equal to DB, skip
+                        # Use a small buffer (e.g. 1s) for float variance
+                        if disk_mtime <= (db_ts + 1.0):
+                            # logger.debug(f"Skipping {kb_id}: Up to date.")
+                            continue
+                except Exception as te:
+                    logger.warning(f"Timestamp check failed for {kb_id}, forcing sync: {te}")
+
+                with open(md_file, "r") as f:
+                    content = f.read()
+                
+                if not content.strip(): continue
+
+                # Perform Atomic Sync (Wipe & Replace)
+                res = await self.memory.sync_sovereign_file(kb_id, content)
+                if res.get("ok"):
+                    count += 1
+            except Exception as e:
+                logger.error(f"Failed to sync sovereign file {md_file}: {e}")
+
+        logger.info(f"Sovereign Memory Sync Complete: {count} files synced.")

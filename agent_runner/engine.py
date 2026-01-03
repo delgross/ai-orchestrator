@@ -356,7 +356,13 @@ class AgentEngine:
             "MEMORY CONSTRAINT: You have access to retrieved memory/facts below. Do NOT mention them unless they are DIRECTLY relevant to answering the CURRENT question. Do not say 'Regarding X...' if the user didn't ask about X."
             f"{memory_facts}\n"
             f"{arch_ctx}"
-            f"{files_info}"
+            f"{files_info}\n"
+            "\n### SHELL SAFETY PROTOCOL (Command Execution)\n"
+            "You have full shell access (Developer Mode). This is a POWERFUL privilege.\n"
+            "1. CONFINEMENT: Favor executing commands within the workspace ('state.agent_fs_root').\n"
+            "2. DESTRUCTIVENESS: NEVER run destructive commands (rm -rf, mkfs) outside the workspace without explicit user confirmation.\n"
+            "3. PURPOSE: Only generate commands necessary for the requested task. Do not explore the user's system idly.\n"
+            "4. APPLESCRIPT: You MAY use 'osascript' if the user asks for macOS automation, but verify it is safe first.\n"
         )
         return prompt
 

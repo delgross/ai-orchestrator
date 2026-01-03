@@ -17,3 +17,6 @@ router.include_router(audio_router)
 router.include_router(files_router)
 router.include_router(misc_router)
 router.include_router(rag_proxy_router)
+
+from .config import router as config_router
+router.include_router(config_router)

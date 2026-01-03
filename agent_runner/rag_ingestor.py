@@ -80,9 +80,10 @@ def start_rag_watcher(rag_base_url: str, state: AgentState):
         event_handler = RAGFileEventHandler(rag_base_url, state, loop)
         observer = Observer()
         observer.schedule(event_handler, str(INGEST_DIR), recursive=False)
-        observer.schedule(event_handler, str(BRAIN_DIR), recursive=True) # Recursive for Brain subdirs
+        # [SOVEREIGNTY UPDATE] Brain Directory is now handled by System Ingestor only.
+        # observer.schedule(event_handler, str(BRAIN_DIR), recursive=True) 
         observer.start()
-        logger.info(f"RAG WATCHDOG: Started observer on {INGEST_DIR} and {BRAIN_DIR}")
+        logger.info(f"RAG WATCHDOG: Started observer on {INGEST_DIR}")
         return observer
     except Exception as e:
         logger.error(f"Failed to start RAG Watchdog: {e}")
@@ -301,8 +302,6 @@ async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None)
                             try: await aio_rename(file_path, REVIEW_DIR / file_path.name)
                             except: pass
                             continue
-
-                        logger.warning(f"AUTO-DISPOSE: Moving to rejected/.")
                         # [PHASE 15] Trash Bin Logic: Move to rejected and continue
                         try: await aio_rename(file_path, REJECTED_DIR / file_path.name)
                         except: pass

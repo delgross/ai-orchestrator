@@ -223,6 +223,7 @@ class MemoryServer:
         for query in schema_queries:
             try:
                 # [FIX] Raise errors so we can filter benign ones
+                log(f"Applying Schema: {query[:60]}", "INFO")
                 await self._execute_query(query, raise_on_error=True)
             except Exception as e:
                 msg = str(e)
@@ -416,6 +417,91 @@ class MemoryServer:
         except Exception as e:
             log(f"Failed to store fact: {e}", "ERROR")
             return {"ok": False, "error": str(e)}
+
+    async def sync_sovereign_file(self, kb_id: str, content: str):
+        """
+        Sovereign Mode Sync:
+        1. Deletes ALL facts associated with this kb_id (Wipe).
+        2. Ingests the new content as fresh facts (Replace).
+        This ensures the database remains a strict mirror of the file.
+        """
+        await self.ensure_connected()
+        if not self.initialized: return {"ok": False, "error": "DB not connected"}
+
+        logger.info(f"Syncing Sovereign File: {kb_id}")
+        
+        try:
+            # 1. Atomic Wipe
+            # We use a transaction to ensure we don't leave the DB in a partial state if insertion fails
+            # But since insertion is complex (many facts), we might wipe first.
+            # Ideally, we'd do it all in one transaction, but chunking makes that hard.
+            # Compromise: Wipe first. If ingestion fails, the file is effectively "empty" in DB, which is safer than "outdated/corrupt".
+            
+            await self._execute_query(f"DELETE fact WHERE kb_id = '{kb_id}';")
+            await self._execute_query(f"DELETE episode WHERE kb_id = '{kb_id}';")
+            
+            # 2. Ingest New Content
+            # We need to parse valid facts/chunks from the content.
+            # Ideally we'd use an LLM or specific parser.
+            # For now, we store the *Document* itself as a single "Fact" of content, 
+            # and potentially chunks if we had a chunker here.
+            # To be useful for RAG, we should likely chunk it.
+            # Relying on 'content' field in fact table.
+            
+            # Store the whole document as a primary "Sovereign Source" fact
+            await self.store_fact(
+                entity="SovereignFile", 
+                relation="has_content", 
+                target=f"{kb_id}", 
+                context={"kb_id": kb_id, "sovereign": True}, 
+                confidence=1.0
+            )
+
+            # Store the actual text in a way retrievable by semantic search.
+            # For now, simplistic: One big matching chunk if < 4k chars, else just reference?
+            # Better: We insert a "Content Block" fact.
+            
+            # Assuming 'chunks' logic is upstream or we do basic splitting here.
+            # Basic splitting (paragraph based)
+            chunks = [p for p in content.split('\n\n') if p.strip()]
+            
+            for i, chunk in enumerate(chunks):
+                if not chunk.strip(): continue
+                # We store these as facts where 'content' is the chunk
+                # Entity=File, Relation=contains_chunk, Target=Index
+                await self.store_fact(
+                    entity=kb_id, 
+                    relation="contains_chunk", 
+                    target=f"{i}", 
+                    context=chunk, # The text itself is the context/content for RAG
+                    confidence=1.0 
+                )
+                
+            logger.info(f"Sovereign Sync Complete for {kb_id}: {len(chunks)} chunks synced.")
+            return {"ok": True, "chunks": len(chunks)}
+
+        except Exception as e:
+            logger.error(f"Sovereign Sync Failed: {e}")
+            return {"ok": False, "error": str(e)}
+
+    async def check_sovereign_state(self, kb_id: str):
+        """
+        Check if a sovereign file exists and return its metadata (timestamp).
+        """
+        await self.ensure_connected()
+        if not self.initialized: return None
+        
+        try:
+            # Check the "SovereignFile" fact we stored
+            q = "SELECT created_at FROM fact WHERE entity = 'SovereignFile' AND relation = 'has_content' AND target = $kb_id LIMIT 1"
+            res = await self._execute_query(q, {"kb_id": kb_id})
+            
+            if res and len(res) > 0:
+                return res[0].get("created_at")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to check sovereign state: {e}")
+            return None
 
     async def delete_fact(self, fact_id: str):
         """Permanently remove a fact by its ID."""

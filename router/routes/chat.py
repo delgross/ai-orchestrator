@@ -3,8 +3,9 @@ import logging
 import time
 from typing import Any, Dict
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
+import asyncio
 
 from common.constants import (
     PREFIX_AGENT, PREFIX_OLLAMA, PREFIX_RAG,
@@ -55,9 +56,69 @@ async def chat_completions(request: Request):
     async with log_time(f"Chat Request [{request_id}]", level=logging.INFO):
         if state.semaphore:
             async with state.semaphore:
-                return await _handle_chat(request, body, prefix, model_id)
+                return await _dispatch_chat(request, body, prefix, model_id)
         else:
-            return await _handle_chat(request, body, prefix, model_id)
+            return await _dispatch_chat(request, body, prefix, model_id)
+
+async def _dispatch_chat(request: Request, body: Dict[str, Any], prefix: str, model_id: str):
+    """Decide whether to await response (Sync) or return 202 (Async) based on config."""
+    is_async_mode = getattr(state, "router_mode", "sync") == "async"
+    
+    # Force Sync if streaming is requested (Async stream makes no sense unless we return a ticket, but for now we follow mode)
+    # Actually, if streaming is requested, we MUST hold connection. Async mode skips streaming.
+    if body.get("stream"):
+        is_async_mode = False 
+        
+    if is_async_mode:
+        # Fire and Forget
+        # We need to run the handler in background.
+        # Note: Request object might be closed? No, we extract data needed.
+        # We launch a task that just hits the Agent Runner (ignoring response)
+        asyncio.create_task(_background_chat_handler(body, prefix, model_id, getattr(request.state, "request_id", "bg")))
+        return JSONResponse(
+            status_code=202, 
+            content={
+                "id": f"chatcmpl-{int(time.time()*1000)}",
+                "object": "chat.completion.async",
+                "created": int(time.time()),
+                "model": body.get("model"),
+                "status": "accepted", 
+                "message": "Request accepted for background processing."
+            }
+        )
+    else:
+        return await _handle_chat(request, body, prefix, model_id)
+
+async def _background_chat_handler(body: Dict[str, Any], prefix: str, model_id: str, request_id: str):
+    """Background task wrapper for Async Mode."""
+    try:
+        # We mock a request object? Or refactor _handle_chat to not need Request?
+        # _handle_chat uses `request.state.request_id` and `state.client`.
+        # Let's verify _handle_chat signature.
+        # It takes `request`. Passing None might break it.
+        # We should create a dummy request/state or refactor.
+        # Refactoring _handle_chat is cleaner but risky for big file.
+        # Let's just manually call the downstream logic since we know it's Agent Runner usually.
+        
+        # [Simulate Request]
+        from dataclasses import dataclass
+        @dataclass
+        class MockState:
+            request_id: str
+        @dataclass
+        class MockRequest:
+            state: MockState
+        
+        mock_req = MockRequest(state=MockState(request_id=request_id))
+        
+        # We await it, but nobody listens to result. The result is "lost" to HTTP, but Side Effects (Logs/DB) happen.
+        await _handle_chat(mock_req, body, prefix, model_id)
+        logger.info(f"Background Task [{request_id}] completed.")
+        
+    except Exception as e:
+        logger.error(f"Background Task [{request_id}] failed: {e}")
+
+
 
 async def _handle_chat(request: Request, body: Dict[str, Any], prefix: str, model_id: str):
     request_id = getattr(request.state, "request_id", "unknown")

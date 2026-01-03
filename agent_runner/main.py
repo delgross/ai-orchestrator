@@ -146,16 +146,31 @@ async def on_startup():
     from agent_runner.rag_ingestor import start_rag_watcher
     # Use config or default
     rag_url = state.config.get("mcp_servers", {}).get("rag", {}).get("url", f"http://127.0.0.1:{rag_port}")
-    start_rag_watcher(rag_url, state)
+    try:
+        start_rag_watcher(rag_url, state)
+    except Exception as e:
+        logger.error(f"Failed to start RAG Watchdog: {e}")
 
-    # [NEW] Log Sorter Service (Micro-batch Classifier)
-    from agent_runner.services.log_sorter import LogSorterService
-    sorter = LogSorterService(state.config)
-    await sorter.start()
-    state.log_sorter = sorter # Persist in state for shutdown or access
-    logger.info("Log Sorter Service started.")
+    try:
+        # [NEW] Log Sorter Service (Micro-batch Classifier)
+        from agent_runner.services.log_sorter import LogSorterService
+        # Fix: LogSorterService.__init__ only takes config, state helps if injected separately or if init changed.
+        # Checking definition: def __init__(self, config): ...
+        # So we should only pass config.
+        sorter = LogSorterService(state.config)
+        # If state injection is needed (it is used in _perform_llm_analysis for dynamic model), we set it after.
+        sorter.state = state
+        await sorter.start()
+        state.log_sorter = sorter # Persist in state for shutdown or access
+        logger.info("Log Sorter Service started.")
+    except Exception as e:
+        logger.critical(f"CRITICAL STARTUP FAILURE in LogSorter: {e}", exc_info=True)
+        # We don't want to kill the whole agent if Sorter fails, but we need to know.
 
-    logger.info("Agent Runner Lifecycle Initialized.")
+    try:
+        logger.info("Agent Runner Lifecycle Initialized.")
+    except Exception:
+        pass
 
 async def on_shutdown():
     """System shutdown routines."""

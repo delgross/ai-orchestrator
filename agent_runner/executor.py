@@ -10,6 +10,9 @@ from agent_runner.state import AgentState
 from agent_runner.tools import fs as fs_tools
 from agent_runner.tools import mcp as mcp_tools
 from agent_runner.tools import system as system_tools
+from agent_runner.tools import system as system_tools
+# [PHASE 54] Introspection
+from agent_runner.tools import introspection as introspection_tools
 from agent_runner.tools import memory_edit as memory_edit_tools
 # [PHASE 52]
 from agent_runner.tools import node as node_tools
@@ -71,6 +74,14 @@ class ToolExecutor:
             "registry_read": registry_tools.tool_registry_read,
             "registry_append": registry_tools.tool_registry_append,
             "registry_write": registry_tools.tool_registry_write,
+            # Introspection Tools
+            "get_service_status": introspection_tools.tool_get_service_status,
+            "get_component_map": introspection_tools.tool_get_component_map,
+            "get_active_configuration": introspection_tools.tool_get_active_configuration,
+            "list_system_toggles": introspection_tools.tool_list_system_toggles,
+            "get_system_config": system_tools.tool_get_system_config,
+            "set_system_config": system_tools.tool_set_system_config,
+            "sentinel_authorize": system_tools.tool_sentinel_authorize,
         }
 
     def _init_tool_definitions(self) -> List[Dict[str, Any]]:
@@ -222,7 +233,8 @@ class ToolExecutor:
                         "type": "object",
                         "properties": {
                             "command": {"type": "string", "description": "The shell command to run."},
-                            "background": {"type": "boolean", "description": "Run in background (async).", "default": False}
+                            "background": {"type": "boolean", "description": "Run in background (async).", "default": False},
+                            "dry_run": {"type": "boolean", "description": "Simulate safety checks without execution. Use for impact analysis.", "default": False}
                         },
                         "required": ["command"]
                     }
@@ -370,6 +382,82 @@ class ToolExecutor:
                         "required": ["raw_text"]
                     }
                 }
+            },
+            # --- INTROSPECTION TOOLS ---
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_service_status",
+                    "description": "Get a health report of all system services (Router, Agent, RAG, DB). Use for diagnosis.",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_component_map",
+                    "description": "List all system roles and their assigned models. Use to answer 'What model is the Router?'",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_active_configuration",
+                    "description": "Read the current system configuration and environment variables (secrets masked).",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_system_toggles",
+                    "description": "List all interactive system toggles (e.g. Router Mode, Internet) and their current values.",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_system_config",
+                    "description": "Get the value of a specific system setting (e.g. 'router_mode').",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "key": {"type": "string", "description": "The config key to fetch."}
+                        },
+                        "required": ["key"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_system_config",
+                    "description": "Update a system setting dynamically (e.g. switch 'router_mode' to 'async').",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "key": {"type": "string", "description": "The config key to update."},
+                            "value": {"type": "string", "description": "The new value."}
+                        },
+                        "required": ["key", "value"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "sentinel_authorize",
+                    "description": "Authorize a command pattern that was blocked by the Sentinel security system.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "string", "description": "The command string to whitelist (e.g. 'rm -rf ./temp')."}
+                        },
+                        "required": ["command"]
+                    }
+                }
             }
         ]
 
@@ -386,10 +474,23 @@ class ToolExecutor:
                 logger.info(f"Skipping disabled MCP server: {server_name}")
                 continue
 
+            # Skip Block Removed (Dynamic Timeout Handling Implemented)
+
             logger.info(f"Discovering tools for {server_name}. Config: {cfg}")
             try:
                 from agent_runner.tools.mcp import tool_mcp_proxy
-                res = await tool_mcp_proxy(self.state, server_name, "tools/list", {}, bypass_circuit_breaker=True)
+                # [Optimization] Shield discovery with a strict timeout (5 seconds)
+                # This prevents one bad MCP from hanging the entire agent startup.
+                try:
+                    res = await asyncio.wait_for(
+                        tool_mcp_proxy(self.state, server_name, "tools/list", {}, bypass_circuit_breaker=True),
+                        timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"MCP Discovery TIMEOUT for '{server_name}'. Marking as failed.")
+                    # [Fix] Can optionally disable it here to prevent future retries
+                    continue
+
                 if res.get("ok"):
                     data = res.get("result", res)
                     remote_tools = data.get("tools", [])

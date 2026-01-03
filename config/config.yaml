@@ -1,4 +1,5 @@
 agent_runner:
+  enable_command_execution: true
   periodic_tasks:
     graph_optimizer:
       type: module

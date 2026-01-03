@@ -13,8 +13,27 @@ from router.app import create_app
 from router.utils import log_time
 from common.observability import get_observability
 from common.anomaly_detection_task import run_anomaly_detection
+from router.routes.config import get_config # Re-use the fetcher logic
 
 logger = setup_logger("router")
+
+async def run_config_sync():
+    """Periodically sync system config from DB."""
+    logger.info("🔄 Starting Config Sync Task...")
+    while True:
+        try:
+            # Sync Router Mode
+            res = await get_config("router_mode")
+            val = res.get("value")
+            if val and val in ["sync", "async"]:
+                if state.router_mode != val:
+                    logger.info(f"Config Sync: Switched router_mode to '{val}'")
+                    state.router_mode = val
+        except Exception as e:
+            logger.debug(f"Config Sync failed (transient): {e}")
+        
+        await asyncio.sleep(5)
+
 
 async def run_environment_watchdog():
     """Continuously check critical dependencies."""
@@ -83,6 +102,7 @@ async def lifespan(app: FastAPI):
     # Start Background Tasks
     env_task = asyncio.create_task(run_environment_watchdog())
     anomaly_task = asyncio.create_task(run_anomaly_detection(check_interval=60.0))
+    conf_task = asyncio.create_task(run_config_sync())
     
     yield
     # Shutdown
@@ -90,9 +110,11 @@ async def lifespan(app: FastAPI):
     
     env_task.cancel()
     anomaly_task.cancel()
+    conf_task.cancel()
     try:
         await env_task
         await anomaly_task
+        await conf_task
     except asyncio.CancelledError:
         pass
     await state.client.aclose()

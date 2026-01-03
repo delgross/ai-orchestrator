@@ -42,6 +42,13 @@ elif AGENT_RUNNER_URL.endswith("/v1"):
     AGENT_RUNNER_URL = AGENT_RUNNER_URL[: -len("/v1")].rstrip("/")
 AGENT_RUNNER_CHAT_PATH = os.getenv("AGENT_RUNNER_CHAT_PATH", "/v1/chat/completions")
 
+# SurrealDB Config (for Router Config Persistence)
+SURREAL_URL = os.getenv("SURREAL_URL", "http://localhost:8000")
+SURREAL_USER = os.getenv("SURREAL_USER", "root")
+SURREAL_PASS = os.getenv("SURREAL_PASS", "root")
+SURREAL_NS = os.getenv("SURREAL_NS", "orchestrator")
+SURREAL_DB = os.getenv("SURREAL_DB", "memory")
+
 # Settings
 MODELS_CACHE_TTL_S = float(os.getenv("MODELS_CACHE_TTL_S", "600"))
 HTTP_TIMEOUT_S = float(os.getenv("HTTP_TIMEOUT_S", "120"))
@@ -146,7 +153,13 @@ class State:
         env_router = os.getenv("ROUTER_MODEL", "ollama:mistral:latest")
         if env_router.strip().lower() == "router":
             env_router = "ollama:mistral:latest"
+        env_router = os.getenv("ROUTER_MODEL", "ollama:mistral:latest")
+        if env_router.strip().lower() == "router":
+            env_router = "ollama:mistral:latest"
         self.system_router_model = env_router
+        
+        # System Toggles
+        self.router_mode = "sync" # 'sync' or 'async'
 
         # Default Embedding Model
         self.default_embedding_model = os.getenv("DEFAULT_EMBEDDING_MODEL", "ollama:mxbai-embed-large:latest")

@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Questionable Insight Dashboard</title>
+    <!-- Use version query param to force reload css -->
+    <link rel="stylesheet" href="styles.css?v=3.0.2">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
+        rel="stylesheet">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>❓</text></svg>">
+</head>
+
+<body class="space-theme">
+    <div class="app-container">
+
+        <!-- HEADER -->
+        <header class="app-header glass">
+            <div class="brand">
+                <div class="logo-text" style="font-size: 20px;">❓</div>
+                <div class="brand-logo">QUESTIONABLE INSIGHT</div>
+                <div id="clock" class="system-clock">00:00:00</div>
+            </div>
+
+            <div class="status-bar">
+                <div class="status-pill" id="status-router" title="Router Status">
+                    <span class="status-dot"></span> ROUTER
+                </div>
+                <div class="status-pill" id="status-mcp" title="Agent Core">
+                    <span class="status-dot"></span> AGENT
+                </div>
+                <div class="status-pill" id="status-ollama" title="Ollama (LLM)">
+                    <span class="status-dot"></span> LLM
+                </div>
+                <div class="status-pill" id="status-db" title="SurrealDB Memory">
+                    <span class="status-dot"></span> DB
+                </div>
+                <div class="status-pill" id="status-rag" title="RAG Query Engine">
+                    <span class="status-dot"></span> RAG
+                </div>
+                <div class="status-pill" id="status-data-ingest" title="Data Ingestion Pipeline">
+                    <span class="status-dot"></span> INGEST
+                </div>
+            </div>
+        </header>
+
+        <!-- SIDEBAR -->
+        <aside class="app-sidebar glass">
+            <nav class="flex-col" style="gap: var(--space-xs);">
+                <div class="nav-item active" data-tab="overview">
+                    <span class="nav-icon">📊</span> Overview
+                </div>
+                <div class="nav-item" data-tab="ollama">
+                    <span class="nav-icon">🦙</span> Local Models
+                </div>
+                <div class="nav-item" data-tab="tools">
+                    <span class="nav-icon">🔧</span> MCP Tools
+                </div>
+                <div class="nav-item" data-tab="chat">
+                    <span class="nav-icon">💬</span> Chat & Debug
+                </div>
+                <div class="nav-item" data-tab="logs">
+                    <span class="nav-icon">📝</span> Live Logs
+                </div>
+                <div class="nav-item" data-tab="breakers">
+                    <span class="nav-icon">⚡</span> Breakers
+                </div>
+                <div class="nav-item" data-tab="config">
+                    <span class="nav-icon">⚙️</span> Config
+                </div>
+                <div class="nav-item" data-tab="docs">
+                    <span class="nav-icon">📚</span> Docs
+                </div>
+            </nav>
+
+            <div class="flex-grow"></div>
+
+            <div class="card" style="padding: var(--space-md); background: hsla(0,0%,0%,0.2);">
+                <div class="text-muted" style="font-size: var(--text-xs); margin-bottom: 8px;">QUICK ACTIONS</div>
+                <button class="btn sm" onclick="location.reload()"
+                    style="width: 100%; justify-content: flex-start; margin-bottom: 5px;">
+                    <span class="icon">🔃</span> Refresh UI
+                </button>
+                <button class="btn sm" onclick="window.open('/v2/mcp_wizard.html', '_blank')"
+                    style="width: 100%; justify-content: flex-start;">
+                    <span class="icon">✨</span> Add Tool
+                </button>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT -->
+        <main class="app-content">
+
+            <!-- SENTINEL (Overlay Alert) -->
+            <div id="system-sentinel" class="sentinel-alert" style="display: none;">
+                <div class="flex-center" style="font-size: 24px;">⚠️</div>
+                <div class="flex-col flex-grow">
+                    <div style="font-weight: 700; color: hsl(var(--accent-danger));">SYSTEM ALERT</div>
+                    <div id="sentinel-msg" style="font-size: var(--text-sm);">Loading health context...</div>
+                </div>
+                <button class="btn sm primary"
+                    onclick="dismissAlert('system-sentinel', document.getElementById('sentinel-msg').innerText)">ACKNOWLEDGE</button>
+            </div>
+
+            <!-- OVERVIEW TAB -->
+            <section id="overview" class="view-section active">
+                <div class="grid-dashboard">
+                    <div class="card">
+                        <div class="flex-center flex-col" style="height: 400px;">
+                            <h2 style="color: var(--text-muted);">Overview V3</h2>
+                            <p style="color: var(--text-secondary);">Construction Zone</p>
+                            <p style="font-size: var(--text-xs); color: var(--text-tertiary); margin-top: 10px;">Ready
+                                for modular expansion.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- CHAT TAB -->
+            <section id="chat" class="view-section">
+                <div class="grid-dashboard" style="height: calc(100vh - 140px);"> <!-- Fill available height -->
+                    <div class="chat-window grid-col-3">
+                        <div class="card-header"
+                            style="background: rgba(0,0,0,0.3); padding: var(--space-sm) var(--space-md);">
+                            <div class="flex-center" style="gap: 10px;">
+                                <select id="chat-model-select" class="select" style="width: 200px; padding: 4px;">
+                                    <option value="agent:mcp">Orchestrator (Agent)</option>
+                                    <option value="router">Raw Router</option>
+                                </select>
+                                <span id="chat-status" class="badge blue">READY</span>
+                            </div>
+                            <div>
+                                <label style="font-size: var(--text-xs); color: var(--text-secondary);">
+                                    <input type="checkbox" id="chat-tts-toggle"> TTS
+                                </label>
+                            </div>
+                        </div>
+
+                        <div id="chat-messages" class="chat-messages">
+                            <div class="message system">System: Ready to connect.</div>
+                        </div>
+
+                        <div class="chat-input-bar">
+                            <button id="btn-chat-mic" class="btn">🎤</button>
+                            <textarea id="chat-input" class="textarea" rows="1"
+                                placeholder="Message... (Shift+Enter to send)"></textarea>
+                            <button id="btn-chat-send" class="btn primary">SEND</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- LOGS TAB -->
+            <section id="logs" class="view-section">
+                <div class="card" style="height: calc(100vh - 140px);">
+                    <div class="card-header">
+                        <span class="card-title">Live System Logs</span>
+                        <div class="flex-center" style="gap: 10px;">
+                            <button class="btn sm" id="btn-refresh-logs">Refresh Tail</button>
+                            <button class="btn sm" id="btn-clear-logs">Clear</button>
+                        </div>
+                    </div>
+                    <div id="log-container" class="log-container custom-scroll">
+                        <div class="log-line info">Initializing log stream...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- OLLAMA TAB -->
+            <section id="ollama" class="view-section">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Local Models</span>
+                    </div>
+                    <div id="ollama-models-grid" class="grid-dashboard">
+                        <!-- Injected by JS -->
+                        <div class="text-muted">Loading models...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TOOLS TAB -->
+            <section id="tools" class="view-section">
+                <div class="flex-col" style="gap: var(--space-lg);">
+
+                    <!-- Ingestion Control -->
+                    <div id="ingestion-controller" class="card"
+                        style="border: 1px solid hsla(var(--accent-success), 0.3);">
+                        <div class="flex-between">
+                            <div class="flex-col">
+                                <span class="card-title" id="ingest-status-title"
+                                    style="color: hsl(var(--accent-success));">INGESTION ACTIVE</span>
+                                <span class="text-muted" style="font-size: var(--text-xs);"
+                                    id="ingest-pause-reason">Monitoring 'ingest/' folder...</span>
+                            </div>
+                            <div style="display:flex; gap: 10px;">
+                                <button id="btn-pause-ingest" class="btn sm" onclick="pauseIngestion()">PAUSE</button>
+                                <button id="btn-resume-ingest" class="btn sm primary" style="display:none;"
+                                    onclick="resumeIngestion()">RESUME</button>
+                                <button id="btn-clear-resume" class="btn sm primary" style="display:none;"
+                                    onclick="clearAndResumeIngestion()">CLEAR & RESUME</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">MCP Servers</span>
+                            <button class="btn sm"
+                                onclick="fetch('/admin/reload-mcp', {method:'POST'}).then(()=>showNotification('MCP Reloaded'))">RELOAD</button>
+                        </div>
+                        <div id="mcp-servers-list" class="grid-dashboard"
+                            style="grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));">
+                            <!-- Injected by JS -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- BREAKERS TAB -->
+            <section id="breakers" class="view-section">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Circuit Breakers</span>
+                        <button class="btn sm primary"
+                            onclick="if(confirm('Reset ALL?')) fetch('/admin/circuit-breaker/reset-all', {method:'POST'}).then(() => fetchBreakerData())">RESET
+                            ALL</button>
+                    </div>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>SERVICE</th>
+                                <th>STATE</th>
+                                <th>FAILURES</th>
+                                <th>LAST ERROR</th>
+                                <th>ACTION</th>
+                            </tr>
+                        </thead>
+                        <tbody id="breaker-table-body">
+                            <tr>
+                                <td colspan="5">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- CONFIG TAB -->
+            <section id="config" class="view-section">
+                <div class="grid-dashboard">
+                    <!-- Smart Config -->
+                    <div class="card">
+                        <span class="card-title">Smart Config</span>
+                        <p class="text-muted" style="font-size: var(--text-xs);">Describe changes (e.g., "Set timeout to
+                            600"). Agent will edit safely.</p>
+                        <textarea id="config-instruction" class="textarea" rows="4"
+                            placeholder="Instructions..."></textarea>
+                        <button class="btn primary" onclick="runSmartConfig()">APPLY CHANGES</button>
+                        <div id="smart-config-log" class="terminal" style="height: 150px; margin-top: 10px;"></div>
+                    </div>
+
+                    <!-- File Editor -->
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">File Editor</span>
+                            <div class="flex-center" style="gap: 5px;">
+                                <select id="config-file-selector" class="select sm" style="width: 150px;"></select>
+                                <button class="btn sm" id="btn-save-config">SAVE</button>
+                            </div>
+                        </div>
+                        <textarea id="config-editor" class="textarea mono"
+                            style="height: 400px; font-size: 12px;"></textarea>
+                    </div>
+                </div>
+            </section>
+
+            <!-- DOCS TAB -->
+            <section id="docs" class="view-section">
+                <div class="grid-dashboard">
+                    <div class="card" style="max-height: 80vh; overflow-y: auto;">
+                        <span class="card-title">Documents</span>
+                        <div id="docs-list" class="flex-col" style="gap: 5px;"></div>
+                    </div>
+                    <div class="card grid-col-2" style="max-height: 80vh; overflow-y: auto;">
+                        <span class="card-title" id="doc-viewer-title">Viewer</span>
+                        <div id="doc-viewer-content" style="font-size: var(--text-sm); line-height: 1.6;">Select a doc.
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+
+        <!-- FOOTER -->
+        <footer class="app-footer glass">
+            <span class="text-muted" style="font-size: var(--text-xs); font-weight: 700;">SYSTEM MODE:</span>
+            <span
+                style="color: hsl(var(--accent-primary)); font-size: var(--text-xs); font-weight: 700;">PRODUCTION</span>
+            <div style="flex-grow: 1;"></div>
+            <button class="btn sm" onclick="fetch('/admin/system/process/router/restart', {method:'POST'})">RESTART
+                ROUTER</button>
+            <button class="btn sm" onclick="fetch('/admin/system/process/agent/restart', {method:'POST'})">RESTART
+                AGENT</button>
+        </footer>
+
+    </div>
+
+    <!-- MODALS -->
+    <div id="role-config-modal" class="modal-backdrop">
+        <div class="modal-content" style="width:800px;">
+            <div class="flex-between mb-2">
+                <h3>Configure Roles</h3>
+            </div>
+            <table class="data-table">
+                <tbody id="role-config-table-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- MCP Tool Modal -->
+    <div id="tool-modal" class="modal-backdrop">
+        <div class="modal-content" style="width:600px; display:flex; flex-direction:column;">
+            <div class="flex-between mb-2">
+                <h3 id="modal-title">Tool Details</h3>
+            </div>
+            <div id="modal-content" style="overflow-y:auto; flex-grow:1;"></div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="app.js?v=3.0.2"></script>
+</body>
+
+</html>
