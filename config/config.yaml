@@ -183,6 +183,6 @@ system:
   critic_model: ollama:llama3.3:70b-instruct-q8_0
   healer_model: ollama:llama3.3:70b-instruct-q8_0
   fallback_model: ollama:mistral:latest
-  intent_model: ollama:llama3.3:70b-instruct-q8_0
+  intent_model: ollama:mistral:latest
   pruner_model: ollama:mistral:latest
   embedding_model: ollama:mxbai-embed-large:latest

@@ -1,0 +1,106 @@
+---
+timestamp: 1767442228.616271
+datetime: '2026-01-03T07:10:28.616271'
+category: anomaly
+severity: critical
+title: 'Anomaly: avg_response_time_1min'
+source: anomaly_detector
+tags:
+- anomaly
+- avg_response_time_1min
+- critical
+resolution_status: open
+suggested_actions:
+- Investigate immediately - critical system issue detected
+metadata:
+  anomaly_id: avg_response_time_1min_1767442228.616271
+structured_data:
+  anomaly:
+    metric_name: avg_response_time_1min
+    current_value: 568.3584988660725
+    baseline_value: 534.8677211733007
+    deviation: 3.5087213373719517
+    severity: critical
+    percentage_change: 6.261506605652997
+  system_state:
+    active_requests: 7
+    completed_requests_1min: 658
+    error_rate_1min: 0.0
+    avg_response_time_1min: 568.3584988660725
+  metadata: {}
+  efficiency:
+    requests_per_second: 10.966666666666667
+    cache_hit_rate: 0.0
+    queue_depth: 7
+  resource_usage:
+    error: psutil not available
+---
+
+# Anomaly: avg_response_time_1min
+
+An anomaly was detected in the **avg_response_time_1min** metric.
+
+## Details
+
+- **Current Value**: 568.36
+- **Baseline Value**: 534.87
+- **Deviation**: 3.51 standard deviations
+- **Change**: +6.3%
+- **Severity**: CRITICAL
+
+**What this means**: Average response time over the last minute. High values indicate slow system performance.
+
+## System Context
+
+- **Active Requests**: 7
+- **Completed Requests (1min)**: 658
+- **Error Rate (1min)**: 0.00%
+- **Avg Response Time (1min)**: 568.36ms
+
+### Efficiency Metrics
+
+- **Requests/sec**: 10.97
+- **Cache Hit Rate**: 0.0%
+- **Queue Depth**: 7
+
+### Resource Usage
+
+
+## Suggested Actions
+
+1. Investigate immediately - critical system issue detected
+
+
+## Structured Data
+
+```json
+{
+  "anomaly": {
+    "metric_name": "avg_response_time_1min",
+    "current_value": 568.3584988660725,
+    "baseline_value": 534.8677211733007,
+    "deviation": 3.5087213373719517,
+    "severity": "critical",
+    "percentage_change": 6.261506605652997
+  },
+  "system_state": {
+    "active_requests": 7,
+    "completed_requests_1min": 658,
+    "error_rate_1min": 0.0,
+    "avg_response_time_1min": 568.3584988660725
+  },
+  "metadata": {},
+  "efficiency": {
+    "requests_per_second": 10.966666666666667,
+    "cache_hit_rate": 0.0,
+    "queue_depth": 7
+  },
+  "resource_usage": {
+    "error": "psutil not available"
+  }
+}
+```
+
+## Suggested Actions
+
+1. Investigate immediately - critical system issue detected
