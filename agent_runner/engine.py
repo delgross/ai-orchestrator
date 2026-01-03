@@ -347,12 +347,14 @@ class AgentEngine:
             "You are Antigravity, a powerful agentic AI assistant running inside the Orchestrator.\n"
             f"Current System Time: {current_time_str}\n"
             f"Current Location: {location_str}\n"
+            f"Active Mode: {self.state.active_mode.upper()}  <-- ADAPT YOUR BEHAVIOR TO THIS MODE.\n"
             f"{env_instructions}\n"
             f"{service_alerts}\n"
             "You are a helpful, intelligent assistant. Engage naturally with the user.\n"
             "When you use a tool, weave the result or confirmation naturally into your answer. Avoid robotic 'I have done X' statements unless necessary for clarity. Be concise.\n"
             "Use the tools provided to you to be the most helpful assistant possible.\n"
             "IMPORTANT: Focus on the user's LATEST message. Do not maintain context from unrelated previous topics.\n"
+            f"{'STYLE: Do NOT use ANY emojis in your response. Keep tone professional/dry.' if self.state.config.get('preferences', {}).get('suppress_emoji') else ''}\n"
             "MEMORY CONSTRAINT: You have access to retrieved memory/facts below. Do NOT mention them unless they are DIRECTLY relevant to answering the CURRENT question. Do not say 'Regarding X...' if the user didn't ask about X."
             f"{memory_facts}\n"
             f"{arch_ctx}"
@@ -367,6 +369,33 @@ class AgentEngine:
         return prompt
 
     async def agent_loop(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, request_id: Optional[str] = None, skip_refinement: bool = False) -> Dict[str, Any]:
+        
+        # [PHASE 55] Slash Commands (Meta-Control)
+        # Intercept local commands like /save or /clear before they hit the LLM
+        try:
+            from agent_runner.services.slash_commands import SlashCommandProcessor
+            processor = SlashCommandProcessor(self.state)
+            user_messages, immediate_resp = await processor.process_messages(user_messages)
+            
+            if immediate_resp:
+                logger.info(f"Slash Command Intercepted. Returning immediate response.")
+                # Return synthetic OpenAI-style response
+                return {
+                    "id": f"slash-{int(time.time())}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "choices": [{
+                        "index": 0,
+                        "message": immediate_resp,
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                }
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"Slash command processing failed: {e}")
+
         # Context Pruning: Prevent "Choking" on long histories
         PRUNE_LIMIT = 20
         if len(user_messages) > PRUNE_LIMIT:

@@ -82,6 +82,9 @@ class ToolExecutor:
             "get_system_config": system_tools.tool_get_system_config,
             "set_system_config": system_tools.tool_set_system_config,
             "sentinel_authorize": system_tools.tool_sentinel_authorize,
+            "register_trigger": system_tools.tool_register_trigger,
+            "remove_trigger": system_tools.tool_remove_trigger,
+            "list_triggers": system_tools.tool_list_triggers,
         }
 
     def _init_tool_definitions(self) -> List[Dict[str, Any]]:
@@ -457,6 +460,45 @@ class ToolExecutor:
                         },
                         "required": ["command"]
                     }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "register_trigger",
+                    "description": "Register a new dynamic trigger/keyword/slash-command. Add new modes on the fly.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {"type": "string", "description": "Keyword to listen for (e.g. 'verbose_mode')."},
+                            "action_type": {"type": "string", "description": "Action type: 'control_ui', 'menu', 'system_prompt'."},
+                            "action_data": {"type": "string", "description": "JSON string of parameters."},
+                            "description": {"type": "string", "description": "Human readable help text."}
+                        },
+                        "required": ["pattern", "action_type"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "remove_trigger",
+                    "description": "Remove a dynamic trigger/mode.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {"type": "string", "description": "The trigger keyword to remove."}
+                        },
+                        "required": ["pattern"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_triggers",
+                    "description": "List all active dynamic triggers and modes.",
+                    "parameters": {"type": "object", "properties": {}}
                 }
             }
         ]

@@ -1,39 +1,6 @@
 [
   {
     "metric_name": "avg_response_time_1min",
-    "current_value": 438.57781169204065,
-    "baseline_value": 432.8975931005808,
-    "deviation": 0.82429781717635,
-    "severity": "info",
-    "timestamp": 1767350526.206024,
-    "metadata": {},
-    "id": "1c667d60-479e-42cb-b403-3022a37b1c25",
-    "status": "new"
-  },
-  {
-    "metric_name": "requests_per_second",
-    "current_value": 13.783333333333333,
-    "baseline_value": 13.983333333333333,
-    "deviation": 0.7999999999999972,
-    "severity": "info",
-    "timestamp": 1767350526.212899,
-    "metadata": {},
-    "id": "b37529b6-8742-4d15-9ff4-2155210c7dac",
-    "status": "new"
-  },
-  {
-    "metric_name": "avg_response_time_1min",
-    "current_value": 447.86009317987947,
-    "baseline_value": 427.6054852397729,
-    "deviation": 8.144406007132758,
-    "severity": "critical",
-    "timestamp": 1767350706.23554,
-    "metadata": {},
-    "id": "cc3bd12d-21c2-4369-9491-792af0b4a470",
-    "status": "new"
-  },
-  {
-    "metric_name": "avg_response_time_1min",
     "current_value": 425.44528416224887,
     "baseline_value": 457.2595144663395,
     "deviation": 2.444455953346284,
@@ -10997,6 +10964,39 @@
     "timestamp": 1767473773.6642802,
     "metadata": {},
     "id": "be0f223c-e703-4ea5-82c5-be1d7912252e",
+    "status": "new"
+  },
+  {
+    "metric_name": "avg_response_time_1min",
+    "current_value": 4682.640218734741,
+    "baseline_value": 0.0,
+    "deviation": 2.466221012412156,
+    "severity": "info",
+    "timestamp": 1767477853.8288481,
+    "metadata": {},
+    "id": "49fa2b36-fb0a-468c-8892-e9e237927bc1",
+    "status": "new"
+  },
+  {
+    "metric_name": "avg_response_time_1min",
+    "current_value": 4713.168549537659,
+    "baseline_value": 0.0,
+    "deviation": 2.484350032416944,
+    "severity": "info",
+    "timestamp": 1767478273.8669062,
+    "metadata": {},
+    "id": "59e53e43-9506-433a-be02-6a875790e9bf",
+    "status": "new"
+  },
+  {
+    "metric_name": "avg_response_time_1min",
+    "current_value": 6294.35666402181,
+    "baseline_value": 0.0,
+    "deviation": 3.4233267207878812,
+    "severity": "info",
+    "timestamp": 1767478333.8973079,
+    "metadata": {},
+    "id": "b505c1d4-7d8e-4a6a-9e28-ba1724c1365e",
     "status": "new"
   }
 ]

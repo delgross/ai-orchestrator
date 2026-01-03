@@ -18,6 +18,13 @@ class RoleDefinition:
     description: str
     default_model: str
 
+@dataclass
+class TriggerDefinition:
+    pattern: str     # Trigger word/regex (e.g. "cwindow")
+    action_type: str # "control_ui", "system_prompt", "tool_call"
+    action_data: Dict[str, Any] # Parameters
+    description: str
+
 class SystemRegistry:
     """
     The Single Source of Truth for system capabilities, configuration toggles,
@@ -68,6 +75,41 @@ class SystemRegistry:
         RoleDefinition("finalizer", "Finalizer", "Formatting and final response polish.", "xai:grok-3")
     ]
 
+    # --- TRIGGERS (Mode System) ---
+    # These can be updated dynamically via tool_registry_append/write
+    _triggers: List[TriggerDefinition] = [
+        TriggerDefinition(
+            pattern="cwindow", 
+            action_type="control_ui", 
+            action_data={"action": "open_window", "target": "chat_secondary"},
+            description="Open a secondary chat window."
+        ),
+        TriggerDefinition(
+            pattern="debug_mode",
+            action_type="system_prompt",
+            action_data={"key": "preferences.debug", "value": True},
+            description="Enable verbose debug logging in chat."
+        ),
+        TriggerDefinition(
+            pattern="status",
+            action_type="tool_call",
+            action_data={"tool": "check_system_health", "args": {}},
+            description="Show System/Agent Health Report"
+        ),
+        TriggerDefinition(
+            pattern="qq",
+            action_type="menu",
+            action_data={},
+            description="Show the System Menu."
+        ),
+        TriggerDefinition(
+            pattern="restart",
+            action_type="tool_call",
+            action_data={"tool": "restart_agent"},
+            description="Reboot the Agent Runner (Graceful)."
+        )
+    ]
+
     @classmethod
     def get_all_toggles(cls) -> List[Dict[str, Any]]:
         """Return raw list of toggles for API/Tool consumption."""
@@ -115,6 +157,31 @@ class SystemRegistry:
             }
             for r in cls._roles
         ]
+
+    # --- TRIGGER MANAGEMENT ---
+
+    @classmethod
+    def get_all_triggers(cls) -> List[Dict[str, Any]]:
+        return [
+            {
+                "pattern": t.pattern,
+                "action_type": t.action_type,
+                "action_data": t.action_data,
+                "description": t.description
+            }
+            for t in cls._triggers
+        ]
+
+    @classmethod
+    def add_trigger(cls, pattern: str, action_type: str, action_data: Dict[str, Any], description: str) -> None:
+        """Register a new trigger dynamically (runtime only, unless persisted)."""
+        # Remove existing if any
+        cls._triggers = [t for t in cls._triggers if t.pattern != pattern]
+        cls._triggers.append(TriggerDefinition(pattern, action_type, action_data, description))
+
+    @classmethod
+    def remove_trigger(cls, pattern: str) -> None:
+        cls._triggers = [t for t in cls._triggers if t.pattern != pattern]
 
 # --- SERVICE REGISTRY SHIM (Restored) ---
 class ServiceRegistry:

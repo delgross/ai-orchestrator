@@ -1,90 +1,11 @@
 mcp_servers:
-  sequential-thinking:
-    type: stdio
-    command: npx
+  weather:
+    command: uvx
     args:
-    - -y
-    - '@modelcontextprotocol/server-sequential-thinking'
-    cmd:
-    - npx
-    - -y
-    - '@modelcontextprotocol/server-sequential-thinking'
-  fetch:
-    cmd:
-    - uvx
-    - mcp-server-fetch
-    type: stdio
-  ollama:
-    cmd:
-    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
-    - -u
-    - /Users/bee/Sync/Antigravity/ai/agent_runner/ollama_server.py
-    env:
-      OLLAMA_BASE: http://127.0.0.1:11434
-    type: stdio
-  project-memory:
-    cmd:
-    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
-    - -u
-    - /Users/bee/Sync/Antigravity/ai/agent_runner/memory_server.py
-    env:
-      EMBED_MODEL: ollama:mxbai-embed-large
-      GATEWAY_BASE: http://127.0.0.1:5455
-      SURREAL_DB: memory
-      SURREAL_NS: orchestrator
-      SURREAL_PASS: root
-      SURREAL_URL: ws://127.0.0.1:8000/rpc
-      SURREAL_USER: root
-    type: stdio
-  sonos-ts-mcp:
-    args:
-    - -y
-    - sonos-ts-mcp@latest
-    command: npx
-    enabled: true
+    - mcp-server-weather
     env: {}
-    requires_internet: true
+    enabled: true
     type: stdio
-    cmd:
-    - npx
-    - -y
-    - sonos-ts-mcp@latest
-  system-control:
-    cmd:
-    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
-    - -u
-    - /Users/bee/Sync/Antigravity/ai/agent_runner/system_control_server.py
-    env:
-      AGENT_URL: http://127.0.0.1:5460
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      PYTHONPATH: /Users/bee/Sync/Antigravity/ai
-      ROUTER_URL: http://127.0.0.1:5455
-    type: stdio
-  tavily-search:
-    cmd:
-    - npx
-    - -y
-    - tavily-mcp@0.1.3
-    env:
-      TAVILY_API_KEY: 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
-    requires_internet: true
-    type: stdio
-  thinking:
-    cmd:
-    - npx
-    - -y
-    - '@modelcontextprotocol/server-sequential-thinking'
-    type: stdio
-  time:
     cmd:
     - uvx
-    - mcp-server-time
-    type: stdio
-  git:
-    command: npx
-    args:
-    - -y
-    - '@cyanheads/git-mcp-server'
-    disabled: false
-    auto_upgrade: true
-    type: stdio
+    - mcp-server-weather

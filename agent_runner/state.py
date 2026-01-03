@@ -148,7 +148,13 @@ class AgentState:
         # Idle State Tracking
         self.active_requests = 0
         self.last_interaction_time = 0.0
+        self.active_requests = 0
+        self.last_interaction_time = 0.0
         self.is_initialized = False
+        
+        # --- STATEFUL MODE SYSTEM ---
+        # Tracks current interaction mode (e.g. 'chat', 'coding', 'writer')
+        self.active_mode: str = "chat"
         
     async def initialize(self):
         """Entry point for shared state initialization."""
@@ -174,12 +180,15 @@ class AgentState:
         # 1. Attempt Load from Memory (DB)
         loaded_from_db = await self._load_runtime_config_from_db()
         
-        # 2. If DB Empty (Fresh Boot), Bootstrap from Disk
-        if not loaded_from_db:
-             logger.info("Sovereign Memory Empty. Bootstrapping from Disk (config.yaml)...")
-             await self._bootstrap_from_disk()
+        # 2. Sovereign Sync Check (Timestamp Verification)
+        # Always check disk vs DB timestamps to capture offline edits.
+        logger.info("Performing Sovereign Sync Check...")
+        await self.config_manager.check_and_sync_all()
+
+        if loaded_from_db:
+             logger.info("Sovereign Boot Successful. Runtime config loaded from Memory.")
         else:
-             logger.info("Sovereign Boot Successful. Disk config ignored (DB is Truth).")
+             logger.info("Fresh Boot. Config populated from Disk.")
 
     async def _load_runtime_config_from_db(self) -> bool:
         """

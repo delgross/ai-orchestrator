@@ -214,6 +214,13 @@ async def tool_check_system_health(state: AgentState) -> Dict[str, Any]:
                   icon = "🟢" if state_str == "closed" else "🔴" if state_str == "open" else "🟡"
                   report += f"| {icon} {name} | {state_str.upper()} | {fails} | {rem}s |\n"
         
+        # --- AGENT LOCAL STATUS ---
+        report += "\n### AGENT STATE\n"
+        report += f"- **Mode**: `{state.active_mode.upper()}`\n"
+        report += f"- **Model**: `{state.agent_model}`\n"
+        report += f"- **Connection**: {'🟢 Online' if state.internet_available else '🔴 Offline'}\n"
+        report += f"- **Tools**: {len(state.executor.tool_definitions) if hasattr(state, 'executor') else '?'}\n"
+        
         return {
              "ok": True,
              "report": report,
@@ -412,4 +419,103 @@ async def tool_sentinel_authorize(state: AgentState, command: str) -> Dict[str, 
         return {"ok": True, "message": f"Pattern learned. You may now execute: {command}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+async def tool_register_trigger(state: AgentState, pattern: str, action_type: str, action_data: str, description: str) -> Dict[str, Any]:
+    """
+    Register a new dynamic trigger (Slash Command or Keyword) for the Agent.
+    
+    Args:
+        pattern: The keyword or phrase to listen for (e.g. 'cwindow', 'qq').
+        action_type: One of ['control_ui', 'menu', 'system_prompt'].
+        action_data: JSON string of parameters for the action.
+        description: Human readable description for the help menu.
+    """
+    try:
+        import json
+        data = {}
+        if action_data:
+            try:
+                data = json.loads(action_data)
+            except:
+                return {"ok": False, "error": "action_data must be valid JSON string"}
+
+        SystemRegistry.add_trigger(pattern, action_type, data, description)
+        return {"ok": True, "message": f"Trigger '{pattern}' registered successfully."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+async def tool_remove_trigger(state: AgentState, pattern: str) -> Dict[str, Any]:
+    """Remove a dynamic trigger by its pattern."""
+    try:
+        SystemRegistry.remove_trigger(pattern)
+        return {"ok": True, "message": f"Trigger '{pattern}' removed."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+async def tool_list_triggers(state: AgentState) -> Dict[str, Any]:
+    """List all active triggers in the registry."""
+    return {"ok": True, "triggers": SystemRegistry.get_all_triggers()}
+
+
+async def tool_restart_agent(state: AgentState, reason: str = "manual_triggered") -> Dict[str, Any]:
+    """
+    Gracefully restart the Agent Runner service.
+    Sets a flag in the DB so the Agent can notify the user upon successful boot.
+    
+    Args:
+        reason: Why the restart was triggered (for logging).
+    """
+    try:
+        logger.info(f"Initiating Graceful Restart. Reason: {reason}")
+        
+        # 1. Update DB Flag for "I am back online" notification
+        # We use strict SQL to ensure it persists
+        q = "UPDATE system_state SET details.pending_restart_notification = true WHERE item = 'agent_lifecycle'; "
+        q += "IF count(SELECT * FROM system_state WHERE item = 'agent_lifecycle') == 0 THEN CREATE system_state SET item = 'agent_lifecycle', details = {pending_restart_notification: true} END;"
+        
+        # Direct DB call via MemoryServer if available
+        if hasattr(state, "memory") and state.memory:
+             await state.memory._execute_query(q)
+        else:
+             logger.warning("Agent memory not ready, restart flag might not persist.")
+             
+        # 2. Trigger Restart Script
+        from agent_runner.config import PROJECT_ROOT
+        manage_script = PROJECT_ROOT / "bin" / "manage.sh"
+        
+        # We run this in background, detached, because we die immediately after.
+        subprocess.Popen([str(manage_script), "restart", "agent-runner"])
+        
+        return {"ok": True, "message": "Restart initiated. See you on the other side. 🫡"}
+        
+    except Exception as e:
+        logger.error(f"Restart failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+async def tool_get_boot_status(state: AgentState) -> Dict[str, Any]:
+    """
+    Check if a restart notification is pending. Used by Boot Scheduler.
+    Returns: {"pending": bool}
+    """
+    try:
+        q = "SELECT details.pending_restart_notification as pending FROM system_state WHERE item = 'agent_lifecycle'"
+        if hasattr(state, "memory") and state.memory:
+            res = await state.memory._execute_query(q)
+            if res and len(res) > 0:
+                 return {"ok": True, "pending": res[0].get("pending", False)}
+        return {"ok": True, "pending": False}
+    except Exception:
+        return {"ok": False, "pending": False}
+
+
+async def tool_clear_boot_status(state: AgentState) -> Dict[str, Any]:
+    """Clear the pending restart flag."""
+    try:
+        q = "UPDATE system_state SET details.pending_restart_notification = false WHERE item = 'agent_lifecycle'"
+        if hasattr(state, "memory") and state.memory:
+            await state.memory._execute_query(q)
+        return {"ok": True}
+    except Exception:
+        return {"ok": False}
 

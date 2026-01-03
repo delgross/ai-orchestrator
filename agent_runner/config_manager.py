@@ -23,8 +23,80 @@ class ConfigManager:
         self.state = state
         self.memory = MemoryServer(state)
         # We assume MemoryServer is already connected via state initialization
-    
-    async def set_secret(self, key: str, value: str) -> bool:
+    async def check_and_sync_all(self):
+        """
+        Boot-time check: Sync all config files if disk is newer than DB.
+        """
+        logger.info("Performing Sovereign File Sync Check...")
+        
+        # 1. config.yaml
+        await self._sync_if_newer(
+            self.state.agent_fs_root.parent / "config" / "config.yaml",
+            "config_yaml",
+            self.sync_base_config_from_disk
+        )
+
+        # 2. mcp.yaml
+        await self._sync_if_newer(
+            self.state.agent_fs_root.parent / "config" / "mcp.yaml",
+            "mcp_yaml",
+            self.sync_mcp_from_disk
+        )
+        
+        # 3. .env
+        await self._sync_if_newer(
+            self.state.agent_fs_root.parent / ".env",
+            "env_file",
+            self.sync_env_from_disk
+        )
+
+        # 4. system_config.json
+        await self._sync_if_newer(
+            self.state.agent_fs_root.parent / "system_config.json",
+            "system_config",
+            self.sync_from_disk
+        )
+        
+    async def _sync_if_newer(self, file_path: Path, meta_key: str, sync_method) -> bool:
+        """
+        Checks mtime of file vs 'meta:{meta_key}_mtime' in DB.
+        If file is newer, awaits sync_method() and updates DB timestamp.
+        """
+        if not file_path.exists():
+            return False
+            
+        try:
+            # 1. Get Disk mtime
+            disk_mtime = file_path.stat().st_mtime
+            
+            # 2. Get DB mtime
+            db_key = f"meta:{meta_key}_mtime"
+            q = "SELECT value FROM config_state WHERE key = $key"
+            res = await self.memory._execute_query(q, {"key": db_key})
+            
+            db_mtime = 0.0
+            if res and len(res) > 0:
+                try:
+                    db_mtime = float(res[0].get("value", 0.0))
+                except:
+                    pass
+            
+            # 3. Compare (Use a small epsilon for float equality or just strict greater)
+            # If disk is newer by at least 1 second (file systems vary)
+            if disk_mtime > db_mtime + 0.001:
+                logger.info(f"Sovereign Sync: {file_path.name} (Disk {disk_mtime}) > (DB {db_mtime}). Syncing...")
+                
+                # Execute specific sync logic
+                await sync_method()
+                
+                # Update DB Timestamp
+                await self._update_db_config(db_key, str(disk_mtime), "file_watcher")
+                return True
+                
+            return False
+        except Exception as e:
+            logger.error(f"Sovereign Sync Check failed for {file_path.name}: {e}")
+            return False
         """
         Update a Secret (API Key, Token).
         Target: .env (Backup), config_state (Master), os.environ (Runtime)
@@ -323,40 +395,43 @@ class ConfigManager:
             class ConfigHandler(FileSystemEventHandler):
                 def __init__(self, manager):
                     self.manager = manager
-                    self.config_path = str(manager.state.agent_fs_root.parent / "system_config.json")
-                    self.last_ts = 0
+                    # self.last_ts not needed, using mtime checks
 
                 def on_modified(self, event):
                     filename = Path(event.src_path).name
+                    # Using _sync_if_newer handles debouncing via timestamp comparison
                     
                     if filename == "system_config.json":
-                        import time
-                        # De-bounce
-                        if time.time() - self.last_ts < 1.0: return
-                        self.last_ts = time.time()
-                        logger.info(f"Config Watcher: Detected change in {filename}")
-                        asyncio.run_coroutine_threadsafe(self.manager.sync_from_disk(), self.manager.state.loop)
+                        asyncio.run_coroutine_threadsafe(
+                            self.manager._sync_if_newer(
+                                Path(event.src_path), "system_config", self.manager.sync_from_disk
+                            ), 
+                            self.manager.state.loop
+                        )
 
                     elif filename == ".env":
-                        import time
-                        if time.time() - self.last_ts < 1.0: return
-                        self.last_ts = time.time()
-                        logger.info(f"Config Watcher: Detected change in {filename}")
-                        asyncio.run_coroutine_threadsafe(self.manager.sync_env_from_disk(), self.manager.state.loop)
+                        asyncio.run_coroutine_threadsafe(
+                            self.manager._sync_if_newer(
+                                Path(event.src_path), "env_file", self.manager.sync_env_from_disk
+                            ),
+                            self.manager.state.loop
+                        )
 
                     elif filename == "config.yaml":
-                        import time
-                        if time.time() - self.last_ts < 1.0: return
-                        self.last_ts = time.time()
-                        logger.info(f"Config Watcher: Detected change in {filename}")
-                        asyncio.run_coroutine_threadsafe(self.manager.sync_base_config_from_disk(), self.manager.state.loop)
+                        asyncio.run_coroutine_threadsafe(
+                             self.manager._sync_if_newer(
+                                Path(event.src_path), "config_yaml", self.manager.sync_base_config_from_disk
+                             ),
+                             self.manager.state.loop
+                        )
 
                     elif filename == "mcp.yaml":
-                        import time
-                        if time.time() - self.last_ts < 1.0: return
-                        self.last_ts = time.time()
-                        logger.info(f"Config Watcher: Detected change in {filename}")
-                        asyncio.run_coroutine_threadsafe(self.manager.sync_mcp_from_disk(), self.manager.state.loop)
+                         asyncio.run_coroutine_threadsafe(
+                             self.manager._sync_if_newer(
+                                Path(event.src_path), "mcp_yaml", self.manager.sync_mcp_from_disk
+                             ),
+                             self.manager.state.loop
+                        )
 
             # Determine paths to watch
             root_dir = self.state.agent_fs_root.parent
