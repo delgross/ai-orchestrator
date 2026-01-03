@@ -435,9 +435,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- System Role Logic ---
     window.fetchSystemRoles = async function () {
         try {
+            const timestamp = Date.now();
             const [rolesResp, llmResp] = await Promise.all([
-                fetchWithRetry('/admin/llm/roles', {}, 3, 500),
-                fetchWithRetry('/admin/llm/status', {}, 3, 500)
+                fetchWithRetry(`/admin/llm/roles?t=${timestamp}`, {}, 3, 500),
+                fetchWithRetry(`/admin/llm/status?t=${timestamp}`, {}, 3, 500)
             ]);
 
             const rolesData = await rolesResp.json();
@@ -710,7 +711,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Global Modal Click Outside Listener (Robust)
 window.addEventListener('click', (e) => {
-    if (e.target.classList.contains('glass') && e.target.id.includes('modal')) {
+    if (e.target.classList.contains('modal-backdrop')) {
         e.target.style.display = 'none';
     }
 });
@@ -1765,7 +1766,7 @@ window.clearAndResumeIngestion = async () => {
         showNotification('Network error during cleanup.');
     }
 };
-});
+
 
 // --- Breaker Management ---
 window.fetchBreakerData = async function () {

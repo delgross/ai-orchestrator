@@ -381,23 +381,25 @@
     </div>
 
     <!-- MODALS -->
-    <div id="role-config-modal" class="glass"
-        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); padding:2rem; border-radius:12px; z-index:200; width:800px; max-width:90%;">
-        <div class="flex-between mb-2">
-            <h3>Configure Roles</h3>
+    <div id="role-config-modal" class="modal-backdrop">
+        <div class="modal-content" style="width:800px;">
+            <div class="flex-between mb-2">
+                <h3>Configure Roles</h3>
+            </div>
+            <table class="data-table">
+                <tbody id="role-config-table-body"></tbody>
+            </table>
         </div>
-        <table class="data-table">
-            <tbody id="role-config-table-body"></tbody>
-        </table>
     </div>
 
     <!-- MCP Tool Modal -->
-    <div id="tool-modal" class="glass"
-        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); padding:2rem; border-radius:12px; z-index:200; width:600px; max-width:90%; flex-direction:column; max-height:80vh;">
-        <div class="flex-between mb-2">
-            <h3 id="modal-title">Tool Details</h3>
+    <div id="tool-modal" class="modal-backdrop">
+        <div class="modal-content" style="width:600px; display:flex; flex-direction:column;">
+            <div class="flex-between mb-2">
+                <h3 id="modal-title">Tool Details</h3>
+            </div>
+            <div id="modal-content" style="overflow-y:auto; flex-grow:1;"></div>
         </div>
-        <div id="modal-content" style="overflow-y:auto; flex-grow:1;"></div>
     </div>
 
     <!-- Scripts -->
