@@ -45,8 +45,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- Tab Switching ---
-    const tabLinks = document.querySelectorAll('.tab-link');
-    const tabContents = document.querySelectorAll('.tab-content');
+    const tabLinks = document.querySelectorAll('.nav-item');
+    const tabContents = document.querySelectorAll('.view-section');
 
     tabLinks.forEach(link => {
         link.addEventListener('click', () => {
@@ -164,7 +164,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const currentCount = data.critical_count || 0;
 
         if (data.status === 'degraded' || currentCount > 0) {
-            sentinel.style.display = 'block';
+            // sentinel.style.display = 'block'; // DISABLED by User Request (Jan 3)
 
             let msg = "";
             let toastMsg = "";
@@ -244,13 +244,13 @@ document.addEventListener('DOMContentLoaded', () => {
         function setInd(bgId, ok, tooltip = '') {
             const el = document.getElementById(bgId);
             if (!el) return;
-            const ind = el.querySelector('.indicator');
+            const ind = el.querySelector('.status-dot');
             const val = el.querySelector('.value');
 
             if (ok === undefined) {
-                ind.className = 'indicator unknown';
+                ind.className = 'status-dot';
             } else {
-                ind.className = `indicator ${ok ? 'online' : 'offline'}`;
+                ind.className = `status-dot ${ok ? 'ok' : 'err'}`;
             }
 
             // if (val) val.textContent = ok ? 'ONLINE' : 'OFFLINE'; // Keep labels static
@@ -345,11 +345,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const val = el.querySelector('.value');
 
                 const pct = budget.percent_used || 0;
-                let statusClass = 'online'; // Green
-                if (pct >= 100) statusClass = 'offline'; // Red
-                else if (pct >= 80) statusClass = 'warning'; // Orange/Yellow
+                let statusClass = 'ok'; // Green
+                if (pct >= 100) statusClass = 'err'; // Red
+                else if (pct >= 80) statusClass = 'warn'; // Orange/Yellow
 
-                ind.className = `indicator ${statusClass}`;
+                ind.className = `status-dot ${statusClass}`;
                 // Display: $12 / $50 (24%)
                 const spend = (budget.current_spend || 0).toFixed(2);
                 const limit = (budget.daily_limit_usd || 50).toFixed(0);
@@ -374,27 +374,26 @@ document.addEventListener('DOMContentLoaded', () => {
             const miscTab = document.getElementById('misc');
             if (miscTab) {
                 miscTab.innerHTML = `
-                    <div class="card glass">
-                        <h3>LLM Provider Status</h3>
-                        <div style="margin-bottom:10px; font-size:0.9em; color:var(--text-secondary);">
-                            Real-time latency check and model discovery.
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">LLM Provider Status</span>
                         </div>
-                        <table class="status-table">
+                        <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th align="left">Provider</th>
-                                    <th align="left">Type</th>
-                                    <th align="left">Latency</th>
-                                    <th align="left">Available Models</th>
+                                    <th>PROVIDER</th>
+                                    <th>TYPE</th>
+                                    <th>LATENCY</th>
+                                    <th>MODELS</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 ${data.llms.map(p => `
                                     <tr>
-                                        <td style="font-weight:600; color:var(--text-main);">${p.id}</td>
+                                        <td style="font-weight:600; color:hsl(var(--text-primary));">${p.id}</td>
                                         <td><span class="badge ${p.type === 'local' ? 'green' : 'blue'}">${p.type}</span></td>
-                                        <td class="mono">${p.latency_ms !== null ? p.latency_ms + 'ms' : '<span style="color:var(--text-muted)">?</span>'}</td>
-                                        <td style="font-size:0.85em; color:var(--text-secondary); max-width: 400px; overflow:hidden; text-overflow:ellipsis;">
+                                        <td class="mono">${p.latency_ms !== null ? p.latency_ms + 'ms' : '<span class="text-muted">?</span>'}</td>
+                                        <td style="font-size:var(--text-xs); color:hsl(var(--text-secondary)); max-width: 400px; overflow:hidden; text-overflow:ellipsis;">
                                             ${(p.models || []).join(', ')}
                                         </td>
                                     </tr>
@@ -422,12 +421,12 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const resp = await fetch(url, { ...options, signal: controller.signal });
                 clearTimeout(id);
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status} `);
                 return resp;
             } catch (err) {
                 clearTimeout(id);
                 if (i === retries - 1) throw err;
-                console.warn(`Fetch failed for ${url} (${err.name}), retrying (${i + 1}/${retries})...`);
+                console.warn(`Fetch failed for ${url}(${err.name}), retrying(${i + 1}/${retries})...`);
                 await new Promise(r => setTimeout(r, delay * (i + 1)));
             }
         }
@@ -453,7 +452,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     models.forEach(m => allModels.push({ id: m, provider: provider.id }));
                 } else if (explicitModels.length > 0) {
                     explicitModels.forEach(m => {
-                        allModels.push({ id: `${provider.id}:${m}`, provider: provider.id });
+                        allModels.push({ id: `${provider.id}:${m} `, provider: provider.id });
                     });
                 } else {
                     allModels.push({ id: provider.id + ":*", provider: provider.id });
@@ -495,11 +494,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // 1. Sort models into groups
                 allModels.forEach(m => {
-                    let valToCheck = m.provider === 'local' || m.provider === 'ollama' ? `ollama:${m.id}` : m.id;
+                    let valToCheck = m.provider === 'local' || m.provider === 'ollama' ? `ollama:${m.id} ` : m.id;
                     let isSelected = (valToCheck === selectedVal);
                     if (isSelected) foundInCatalog = true;
 
-                    const optHtml = `<option value="${valToCheck}" ${isSelected ? 'selected' : ''}>${m.id} (${m.provider})</option>`;
+                    const optHtml = `< option value = "${valToCheck}" ${isSelected ? 'selected' : ''}> ${m.id} (${m.provider})</option > `;
 
                     if (m.provider === 'ollama' || m.provider === 'local') {
                         localOpts.push(optHtml);
@@ -510,14 +509,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // 2. Handle missing active model
                 if (!foundInCatalog && selectedVal) {
-                    activeButMissing = `<option value="${selectedVal}" selected style="color:#ffcc00; font-weight:bold;">${selectedVal} (Active - Not in Catalog)</option>`;
+                    activeButMissing = `< option value = "${selectedVal}" selected style = "color:#ffcc00; font-weight:bold;" > ${selectedVal} (Active - Not in Catalog)</option > `;
                 }
 
                 return `
                     ${activeButMissing || ''}
                     <optgroup label="Cloud / API">${cloudOpts.join('')}</optgroup>
                     <optgroup label="Local (Ollama)">${localOpts.join('')}</optgroup>
-                 `;
+`;
             };
 
             // 1. Populate Overview Table (Read-Only)
@@ -535,27 +534,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 let html = "";
                 categories.forEach(cat => {
-                    // Filter keys that exist in data
-                    const validKeys = cat.keys.filter(k => rolesData.roles[k] || k === "agent_model");
+                    html += `<tr><td colspan="2" style="background:hsla(var(--bg-surface-2), 0.5); font-size:10px; color:hsl(var(--text-secondary)); padding:6px 10px; font-weight:700; letter-spacing:1px; text-transform:uppercase;">${cat.name}</td></tr>`;
+                    cat.keys.forEach(key => {
+                        // Use Configured Value OR Default
+                        const configuredVal = rolesData.roles[key];
+                        const defVal = defaults[key];
+                        const displayVal = configuredVal || defVal || "Unknown";
+                        const isDefault = !configuredVal || configuredVal === defVal;
 
-                    if (validKeys.length > 0) {
-                        html += `<tr class="section-header"><td colspan="2" style="background:var(--bg-card); font-size:0.75rem; color:var(--text-muted); padding-top:10px; font-weight:bold; letter-spacing:0.5px;">${cat.name.toUpperCase()}</td></tr>`;
-                        validKeys.forEach(key => {
-                            const val = rolesData.roles[key];
-                            const defVal = defaults[key];
-                            const isDefault = !defVal || val === defVal;
-                            const defaultBadge = isDefault ?
-                                `<span style="opacity:0.5; font-size:0.7em;">(Default)</span>` :
-                                `<span style="color:var(--accent-warning); font-size:0.7em;">(Custom)</span>`;
+                        const defaultBadge = isDefault ?
+                            `<span style="opacity:0.5; font-size:0.7em;">(Default)</span>` :
+                            `<span style="color:hsl(var(--accent-warning)); font-size:0.7em;">(Custom)</span>`;
 
-                            html += `
-                                <tr>
-                                    <td style="padding-left:15px; font-weight:500;">${roleLabels[key]}</td>
-                                    <td class="mono" style="color:var(--accent-neon);">${val} ${defaultBadge}</td>
-                                </tr>
-                            `;
-                        });
-                    }
+                        html += `
+                            <tr>
+                                <td style="padding-left:15px; font-weight:500;">${roleLabels[key] || key}</td>
+                                <td class="mono" style="color:hsl(var(--accent-cyan));">${displayVal} ${defaultBadge}</td>
+                            </tr>
+                        `;
+                    });
                 });
                 tbodyOverview.innerHTML = html;
             }
@@ -573,38 +570,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 let html = "";
                 categories.forEach(cat => {
-                    const validKeys = cat.keys.filter(k => rolesData.roles[k]);
-                    if (validKeys.length > 0) {
-                        html += `<tr class="section-header"><td colspan="3" style="background:var(--bg-secondary); color:var(--text-main); font-weight:bold; padding:8px;">${cat.name}</td></tr>`;
-                        validKeys.forEach(key => {
-                            const val = rolesData.roles[key];
-                            const optionsHtml = generateOptions(val);
+                    html += `<tr><td colspan="3" style="background:hsla(var(--bg-surface-2), 0.5); font-weight:700; font-size:var(--text-xs); color:hsl(var(--text-secondary)); padding:8px;">${cat.name}</td></tr>`;
+                    cat.keys.forEach(key => {
+                        const configuredVal = rolesData.roles[key];
+                        const defVal = defaults[key];
+                        const currentVal = configuredVal || defVal; // Dropdown should select the effective model
 
-                            // Tooltip for embedding model
-                            let labelRaw = roleLabels[key];
-                            let tooltip = "";
-                            if (key === "embedding_model") {
-                                tooltip = `<br><span style="color:var(--accent-error); font-size:0.7em;">⚠️ CHANGING THIS requires re-indexing all memory & documents! Vector mismatch will cause data loss.</span>`;
-                            }
+                        const optionsHtml = generateOptions(currentVal);
 
-                            html += `
-                                <tr>
-                                    <td style="width:35%; vertical-align:middle;">
-                                        <div style="font-weight:600;">${labelRaw}</div>
-                                        ${tooltip}
-                                    </td>
-                                    <td style="width:45%;">
-                                        <select class="config-select" id="sel-${key}" style="width:100%">
+                        let labelRaw = roleLabels[key] || key;
+                        let tooltip = "";
+                        if (key === "embedding_model") {
+                            tooltip = `<br><span style="color:hsl(var(--accent-danger)); font-size:0.7em;">⚠️ CHANGING THIS requires re-indexing!</span>`;
+                        }
+
+                        html += `
+                            <tr>
+                                <td style="width:35%;">
+                                    <div style="font-weight:600;">${labelRaw}</div>
+                                    ${tooltip}
+                                </td>
+                                    <td style="width:65%;">
+                                        <select class="select sm" id="sel-${key}" style="width:100%" onchange="updateRole('${key}', this.value, this)">
+                                            <option value="" disabled>Select Model...</option>
                                             ${optionsHtml}
                                         </select>
                                     </td>
-                                    <td style="width:20%; text-align:right;">
-                                        <button class="action-btn sm primary" onclick="updateRole('${key}', document.getElementById('sel-${key}').value, this)">Apply</button>
-                                    </td>
                                 </tr>
                             `;
-                        });
-                    }
+                    });
                 });
                 tbodyModal.innerHTML = html;
             }
@@ -613,6 +607,41 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error("Failed to load roles", e);
             const tbody = document.getElementById('roles-table-body');
             if (tbody) tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--accent-err);">Error: ${e.message}</td></tr>`;
+        }
+    };
+
+    window.updateRole = async (role, model, selectEl) => {
+        const originalBg = selectEl.style.backgroundColor;
+        selectEl.disabled = true;
+        selectEl.style.opacity = "0.7";
+
+        try {
+            const resp = await fetch('/admin/llm/update-role', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ role, model })
+            });
+
+            if (resp.ok) {
+                showNotification(`Role '${role}' updated to '${model}'`);
+                // Visual feedback of success
+                selectEl.style.borderColor = "var(--accent-success)";
+                setTimeout(() => {
+                    selectEl.style.borderColor = "";
+                    fetchSystemRoles(); // Refresh UI to sync everything
+                }, 1000);
+            } else {
+                const err = await resp.text();
+                showNotification(`Failed to update role: ${err}`);
+                selectEl.style.borderColor = "var(--accent-danger)";
+            }
+        } catch (e) {
+            showNotification(`Error: ${e.message}`);
+            selectEl.style.borderColor = "var(--accent-danger)";
+        } finally {
+            selectEl.disabled = false;
+            selectEl.style.opacity = "1";
+            selectEl.focus();
         }
     };
 
@@ -643,13 +672,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const title = document.getElementById('modal-title');
         const container = document.getElementById('modal-content');
 
-        if (title) title.textContent = `Tools: ${name}`;
+        if (title) title.textContent = `Tools: ${name} `;
         if (container) {
             container.innerHTML = tools.length
                 ? tools.map(t => {
                     const args = t.inputSchema || t.args || {};
                     return `
-                        <div style="margin-bottom:1rem; padding-bottom:1rem; border-bottom:1px solid rgba(255,255,255,0.1);">
+    < div style = "margin-bottom:1rem; padding-bottom:1rem; border-bottom:1px solid rgba(255,255,255,0.1);" >
                             <div style="font-weight:600; color:var(--accent-blue); display:flex; justify-content:space-between;">
                                 ${t.name}
                             </div>
@@ -657,10 +686,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             <div style="background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; font-family:'JetBrains Mono', monospace; font-size:0.75rem; color:#aaa; overflow-x:auto;">
                                 ARGS: ${JSON.stringify(args)}
                             </div>
-                        </div>
-                    `;
+                        </div >
+    `;
                 }).join('')
-                : '<div style="padding:2rem; text-align:center; color:#888;">No tools exposed by this server.</div>';
+                : '<div style="padding:2rem; text-align:center; color:hsl(var(--text-tertiary));">No tools exposed by this server.</div>';
         }
         const modal = document.getElementById('tool-modal');
         if (modal) modal.style.display = 'flex';
@@ -677,402 +706,372 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Attach listeners after functions are defined
-    document.addEventListener('click', (e) => {
-        if (e.target.classList.contains('close-modal')) {
-            window.closeToolsModal();
-            if (window.closeRoleConfigModal) window.closeRoleConfigModal();
-        }
-        if (e.target.classList.contains('modal-overlay')) {
-            window.closeToolsModal();
-            if (window.closeRoleConfigModal) window.closeRoleConfigModal();
-        }
-    });
+});
 
-    window.dismissAlert = async (id, msg) => {
-        const el = document.getElementById(id);
-        if (el) {
-            el.style.opacity = '0';
-            setTimeout(() => el.remove(), 500);
-        }
-        // Persist Acknowledgement
-        localStorage.setItem('sentinel_ack_msg', msg);
+// Global Modal Click Outside Listener (Robust)
+window.addEventListener('click', (e) => {
+    if (e.target.classList.contains('glass') && e.target.id.includes('modal')) {
+        e.target.style.display = 'none';
+    }
+});
 
-        // Report to Orchestrator Logic
-        console.log("Reporting Alert Dismissal:", msg);
-        // Best effort log
-        try {
-            await fetch('/admin/mcp/tool', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    server: 'project-memory',
-                    tool: 'ingest_knowledge',
-                    arguments: {
-                        text: `[USER FEEDBACK] User dismissed alert: "${msg}". This implies the alert was acknowledged or false positive.`,
-                        kb_id: 'system_feedback'
-                    }
-                })
-            });
-        } catch (e) { console.warn("Failed to report dismissal", e); }
-    };
+window.dismissAlert = async (id, msg) => {
+    const el = document.getElementById(id);
+    if (el) {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 500);
+    }
+    // Persist Acknowledgement
+    localStorage.setItem('sentinel_ack_msg', msg);
 
-    window.updateRole = async (roleKey, newValue, btn) => {
-        if (btn) {
-            btn.textContent = '...';
-            btn.disabled = true;
-        }
-
-        const body = { updates: {} };
-        body.updates[roleKey] = newValue;
-
-        try {
-            const resp = await fetch('/admin/llm/roles', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-
-            if (resp.ok) {
-                showNotification(`Updated ${roleKey}`);
-                await fetchSystemRoles();
-            } else {
-                showNotification('Failed to update role');
-            }
-        } catch (e) {
-            console.error(e);
-            showNotification('Error updating role');
-        } finally {
-            if (btn) {
-                btn.textContent = 'Apply';
-                btn.disabled = false;
-            }
-        }
-    };
-
-    // ... (fetchMCPData, etc. remain the same, ensure they are not cut off)
-
-    // --- MCP / Tools Logic ---
-    let mcpRetryCount = 0;
-    async function fetchMCPData() {
-        const list = document.getElementById('mcp-servers-list');
-        const retryLimit = 3;
-
-        if (!list) return;
-
-        try {
-            // Robust Parallel Fetch: Tools (Content) + Breakers (Status) + Server Status
-            const [toolsResult, breakersResult, serverStatusResult] = await Promise.allSettled([
-                fetchWithRetry('/admin/mcp/tools', {}, 2, 500, 5000),
-                fetch('/admin/circuit-breaker/status'),
-                fetch('/admin/mcp/server/status')
-            ]);
-
-            // Handle Tools (Primary Content)
-            let toolMap = {};
-            let serverMeta = {};
-            if (toolsResult.status === 'fulfilled' && toolsResult.value.ok) {
-                const data = await toolsResult.value.json();
-                if (data.ok) {
-                    toolMap = data.tools || {};
-                    serverMeta = data.servers || {}; // Get status map
-                    // Cache tools globally for Modal access
-                    window.mcpToolsCache = toolMap;
+    // Report to Orchestrator Logic
+    console.log("Reporting Alert Dismissal:", msg);
+    // Best effort log
+    try {
+        await fetch('/admin/mcp/tool', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                server: 'project-memory',
+                tool: 'ingest_knowledge',
+                arguments: {
+                    text: `[USER FEEDBACK] User dismissed alert: "${msg}".This implies the alert was acknowledged or false positive.`,
+                    kb_id: 'system_feedback'
                 }
-            } else {
-                const err = toolsResult.status === 'rejected' ? toolsResult.reason : new Error("Tools endpoint returned non-OK");
-                throw err;
+            })
+        });
+    } catch (e) { console.warn("Failed to report dismissal", e); }
+};
+
+
+// ... (fetchMCPData, etc. remain the same, ensure they are not cut off)
+
+// --- MCP / Tools Logic ---
+let mcpRetryCount = 0;
+async function fetchMCPData() {
+    const list = document.getElementById('mcp-servers-list');
+    const retryLimit = 3;
+
+    if (!list) return;
+
+    try {
+        // Robust Parallel Fetch: Tools (Content) + Breakers (Status) + Server Status
+        const [toolsResult, breakersResult, serverStatusResult] = await Promise.allSettled([
+            fetchWithRetry('/admin/mcp/tools', {}, 2, 500, 5000),
+            fetch('/admin/circuit-breaker/status'),
+            fetch('/admin/mcp/server/status')
+        ]);
+
+        // Handle Tools (Primary Content)
+        let toolMap = {};
+        let serverMeta = {};
+        if (toolsResult.status === 'fulfilled' && toolsResult.value.ok) {
+            const data = await toolsResult.value.json();
+            if (data.ok) {
+                toolMap = data.tools || {};
+                serverMeta = data.servers || {}; // Get status map
+                // Cache tools globally for Modal access
+                window.mcpToolsCache = toolMap;
             }
+        } else {
+            const err = toolsResult.status === 'rejected' ? toolsResult.reason : new Error("Tools endpoint returned non-OK");
+            throw err;
+        }
 
-            // Handle Breakers (Status Decoration)
-            let breakerMap = {};
-            if (breakersResult.status === 'fulfilled' && breakersResult.value.ok) {
-                try {
-                    const bData = await breakersResult.value.json();
-                    breakerMap = bData.breakers || {};
-                } catch (e) { console.warn("Failed to parse breaker data", e); }
-            }
+        // Handle Breakers (Status Decoration)
+        let breakerMap = {};
+        if (breakersResult.status === 'fulfilled' && breakersResult.value.ok) {
+            try {
+                const bData = await breakersResult.value.json();
+                breakerMap = bData.breakers || {};
+            } catch (e) { console.warn("Failed to parse breaker data", e); }
+        }
 
-            // Handle Server Status
-            if (serverStatusResult.status === 'fulfilled' && serverStatusResult.value.ok) {
-                try {
-                    const sData = await serverStatusResult.value.json();
-                    const statusCard = document.getElementById('mcp-server-status-card');
-                    const clientsEl = document.getElementById('mcp-connected-clients');
+        // Handle Server Status
+        if (serverStatusResult.status === 'fulfilled' && serverStatusResult.value.ok) {
+            try {
+                const sData = await serverStatusResult.value.json();
+                const statusCard = document.getElementById('mcp-server-status-card');
+                const clientsEl = document.getElementById('mcp-connected-clients');
 
-                    if (statusCard) {
-                        statusCard.style.display = 'block';
-                        const clientCount = (sData.clients || []).length;
-                        if (clientCount > 0) {
-                            const names = sData.clients.map(c => `<span class="badge blue">${c.name}</span>`).join(' ');
-                            clientsEl.innerHTML = `Connected: ${names}`;
-                        } else {
-                            clientsEl.innerHTML = `<span style="color:var(--text-muted)">Waiting for connections...</span>`;
-                        }
+                if (statusCard) {
+                    statusCard.style.display = 'block';
+                    const clientCount = (sData.clients || []).length;
+                    if (clientCount > 0) {
+                        const names = sData.clients.map(c => `< span class="badge blue" > ${c.name}</span > `).join(' ');
+                        clientsEl.innerHTML = `Connected: ${names} `;
+                    } else {
+                        clientsEl.innerHTML = `< span style = "color:var(--text-muted)" > Waiting for connections...</span > `;
                     }
-                } catch (e) { console.warn("Failed to parse server status", e); }
-            }
-
-            // Use info from Server Meta to get ALL servers (even disabled ones)
-            let serverNames = Object.keys(serverMeta).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-            if (serverNames.length === 0) serverNames = Object.keys(toolMap).sort(); // Fallback
-
-            if (serverNames.length === 0) {
-                if (mcpRetryCount < retryLimit) {
-                    list.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-secondary);">Initializing MCP Servers... (Attempt ${mcpRetryCount + 1})<br><small>Waiting for backend to populate tools cache...</small></div>`;
-                    mcpRetryCount++;
-                    setTimeout(fetchMCPData, 2000);
-                    return;
-                } else {
-                    list.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-muted);">No MCP Servers Detected.<br><small>Check your configuration or logs.</small></div>`;
-                    return;
                 }
+            } catch (e) { console.warn("Failed to parse server status", e); }
+        }
+
+        // Use info from Server Meta to get ALL servers (even disabled ones)
+        let serverNames = Object.keys(serverMeta).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+        if (serverNames.length === 0) serverNames = Object.keys(toolMap).sort(); // Fallback
+
+        if (serverNames.length === 0) {
+            if (mcpRetryCount < retryLimit) {
+                list.innerHTML = `< div style = "text-align:center; padding:20px; color:var(--text-secondary);" > Initializing MCP Servers... (Attempt ${mcpRetryCount + 1}) <br><small>Waiting for backend to populate tools cache...</small></div>`;
+                mcpRetryCount++;
+                setTimeout(fetchMCPData, 2000);
+                return;
+            } else {
+                list.innerHTML = `< div style = "text-align:center; padding:20px; color:var(--text-muted);" > No MCP Servers Detected.< br > <small>Check your configuration or logs.</small></div > `;
+                return;
             }
+        }
 
-            mcpRetryCount = 0; // Success, reset counter
+        mcpRetryCount = 0; // Success, reset counter
 
-            // Render
-            // Render Lists
-            const activeServerNames = serverNames.filter(n => serverMeta[n]?.enabled !== false);
-            const disabledServerNames = serverNames.filter(n => serverMeta[n]?.enabled === false);
+        // Render
+        // Render Lists
+        const activeServerNames = serverNames.filter(n => serverMeta[n]?.enabled !== false);
+        const disabledServerNames = serverNames.filter(n => serverMeta[n]?.enabled === false);
 
-            const activeHTML = activeServerNames.map(name => {
-                const tools = toolMap[name] || [];
-                const breaker = breakerMap[name] || { state: 'UNKNOWN', total_successes: 0, total_failures: 0 };
-                const stateClass = breaker.state ? breaker.state.toLowerCase() : 'unknown';
+        const activeHTML = activeServerNames.map(name => {
+            const tools = toolMap[name] || [];
+            const breaker = breakerMap[name] || { state: 'UNKNOWN', total_successes: 0, total_failures: 0 };
+            const stateClass = breaker.state ? breaker.state.toLowerCase() : 'unknown';
 
-                // Ingestion Info Injection for Memory Server
-                let ingestionInfo = "";
-                if (name === 'project-memory' && window.lastIngestionState) {
-                    const ing = window.lastIngestionState;
-                    const statusText = ing.paused ? `PAUSED: ${ing.reason}` : "HEALTHY";
-                    const statusColor = ing.paused ? "var(--accent-error)" : "var(--accent-neon)";
-                    ingestionInfo = `
-                        <div style="margin-top: 8px; font-size: 0.7rem; padding: 4px 8px; background: rgba(0,0,0,0.2); border-radius: 4px; border-left: 2px solid ${statusColor}">
-                            <div style="font-weight: 600; color: ${statusColor}">INGESTION: ${statusText}</div>
+            // Ingestion Info Injection for Memory Server
+            let ingestionInfo = "";
+            if (name === 'project-memory' && window.lastIngestionState) {
+                const ing = window.lastIngestionState;
+                const statusText = ing.paused ? `PAUSED: ${ing.reason} ` : "HEALTHY";
+                const statusColor = ing.paused ? "var(--accent-error)" : "var(--accent-neon)";
+                ingestionInfo = `
+    <div style="margin-top: 8px; font-size: 0.7rem; padding: 4px 8px; background: rgba(0,0,0,0.2); border-radius: 4px; border-left: 2px solid ${statusColor}">
+        <div style="font-weight: 600; color: ${statusColor}">INGESTION: ${statusText}</div>
                         </div>
-                    `;
-                }
+    `;
+            }
 
-                return `
-                    <div class="server-card">
-                        <div style="display:flex; justify-content:space-between; align-items:center; gap: 8px; margin-bottom: 6px;">
-                            <h4 style="margin:0; font-size: 0.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-grow: 1;" title="${name}">
+            return `
+    <div class="card" style="padding: var(--space-md); gap: 8px;">
+                        <div class="flex-between">
+                            <h4 style="margin:0; font-size: var(--text-sm); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-grow: 1;" title="${name}">
                                 ${name}
                             </h4>
-                            <span class="indicator ${stateClass}" title="State: ${stateClass.toUpperCase()}"></span>
-                            <div style="display:flex; gap:4px;">
-                                ${breaker.state === 'OPEN' ? `<button class="action-btn sm primary" style="padding:2px 6px; font-size:0.7rem;" onclick="resetBreaker('${name}')">Reset</button>` : ''}
-                                <button class="action-btn sm" style="padding:2px 8px; font-size:0.75rem;" onclick="toggleMCP('${name}', false)">Disable</button>
-                            </div>
+                            <span class="status-dot ${stateClass === 'closed' ? 'ok' : 'err'}" title="State: ${stateClass.toUpperCase()}"></span>
                         </div>
-                        <div class="tool-meta" style="font-size: 0.75rem; color:var(--text-muted); display:flex; justify-content:space-between; margin-bottom: 6px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                             <button class="btn sm" style="font-size: 10px; padding: 2px 6px;" onclick="toggleMCP('${name}', false)">DISABLE</button>
+                             ${breaker.state === 'OPEN' ? `<button class="btn sm primary" style="font-size:10px; padding:2px 6px;" onclick="resetBreaker('${name}')">RESET</button>` : ''}
+                        </div>
+                        <div class="flex-between" style="font-size: 10px; color:hsl(var(--text-tertiary)); margin-top: 4px;">
                             <span>Tools: ${tools.length}</span>
                             <span>S:${breaker.total_successes} F:${breaker.total_failures}</span>
                         </div>
                         ${ingestionInfo}
-                        <button class="action-btn sm" style="width:100%; text-align:center; margin-top:8px;" onclick="showToolsModal('${name}')">
-                            View Tools
-                        </button>
+<button class="btn sm" style="width:100%; justify-content:center; margin-top:4px;" onclick="showToolsModal('${name}')">
+    VIEW TOOLS
+</button>
                     </div>
-                `;
-            }).join('');
+    `;
+        }).join('');
 
-            const disabledHTML = disabledServerNames.length > 0 ? `
-                <div style="grid-column: 1 / -1; margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem; color: var(--text-muted); font-size: 0.8rem; display: flex; flex-wrap: wrap; gap: 8px;">
-                    <div style="width:100%; margin-bottom:0.5rem; font-weight:600;">Disabled Servers</div>
+        const disabledHTML = disabledServerNames.length > 0 ? `
+    <div style="grid-column: 1 / -1; margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem; color: var(--text-muted); font-size: 0.8rem; display: flex; flex-wrap: wrap; gap: 8px;">
+        <div style="width:100%; margin-bottom:0.5rem; font-weight:600;">Disabled Servers</div>
                     ${disabledServerNames.map(name => `
                         <div style="background:rgba(0,0,0,0.3); padding:4px 8px; border-radius:4px; display:flex; align-items:center; gap:8px; border:1px solid var(--glass-border);">
                             <span style="color:#666;">${name}</span>
                             <button class="action-btn sm primary" style="padding:2px 6px; font-size:0.7rem;" onclick="toggleMCP('${name}', true)">Enable</button>
                         </div>
-                    `).join('')}
-                </div>
-            ` : '';
-
-            list.innerHTML = activeHTML + disabledHTML;
-
-        } catch (e) {
-            console.warn("MCP Fetch Loop Error", e);
-            if (mcpRetryCount < retryLimit) {
-                list.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-secondary);">Connecting to Agent Runner... (${mcpRetryCount + 1})<br><small>${e.message}</small></div>`;
-                mcpRetryCount++;
-                setTimeout(fetchMCPData, 2000);
-            } else {
-                list.innerHTML = `<div style="text-align:center; padding:20px; color:var(--accent-err);">Connection Failed.<br><small>${e.message}</small><br><button class="action-btn sm" onclick="fetchMCPData()">Retry</button></div>`;
+                    `).join('')
             }
+                </div>
+    ` : '';
+
+        list.innerHTML = activeHTML + disabledHTML;
+
+    } catch (e) {
+        console.warn("MCP Fetch Loop Error", e);
+        if (mcpRetryCount < retryLimit) {
+            list.innerHTML = `<div style="text-align:center; padding:20px; color:hsl(var(--text-secondary));">Connecting to Agent Runner... (${mcpRetryCount + 1}) <br><small>${e.message}</small></div>`;
+            mcpRetryCount++;
+            setTimeout(fetchMCPData, 2000);
+        } else {
+            list.innerHTML = `<div style="text-align:center; padding:20px; color:hsl(var(--accent-danger));">Connection Failed.<br><small>${e.message}</small><br><button class="btn sm" onclick="fetchMCPData()">Retry</button></div>`;
         }
     }
+}
 
-    // --- MCP Toggle Logic ---
-    window.toggleMCP = async (name, enable) => {
-        const action = enable ? "Enabling" : "Disabling";
-        if (!enable && !confirm(`Are you sure you want to DISABLE '${name}'?\n\nThis will stop the process but RETAIN your configuration.\n\nYou can re-enable it at any time.`)) return;
+// --- MCP Toggle Logic ---
+window.toggleMCP = async (name, enable) => {
+    const action = enable ? "Enabling" : "Disabling";
+    if (!enable && !confirm(`Are you sure you want to DISABLE '${name}' ?\n\nThis will stop the process but RETAIN your configuration.\n\nYou can re - enable it at any time.`)) return;
 
-        try {
-            const resp = await fetch('/admin/mcp/toggle', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name, enabled: enable })
-            });
-            const d = await resp.json();
-            if (d.ok) {
-                const msg = enable ? `ENABLED '${name}'. Starting process...` : `DISABLED '${name}'. Config Retained. Process Stopped.`;
-                showNotification(msg);
-                console.log(`MCP Toggle Success: ${name} -> ${enable}. Config saved to mcp.yaml.`);
-                setTimeout(fetchMCPData, 1000); // Wait for discovery/termination
-            } else {
-                showNotification(`Failed: ${d.error}`, 'error');
-            }
-        } catch (e) { console.error(e); }
-    };
+    try {
+        const resp = await fetch('/admin/mcp/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, enabled: enable })
+        });
+        const d = await resp.json();
+        if (d.ok) {
+            const msg = enable ? `ENABLED '${name}'.Starting process...` : `DISABLED '${name}'.Config Retained.Process Stopped.`;
+            showNotification(msg);
+            console.log(`MCP Toggle Success: ${name} -> ${enable}. Config saved to mcp.yaml.`);
+            setTimeout(fetchMCPData, 1000); // Wait for discovery/termination
+        } else {
+            showNotification(`Failed: ${d.error} `, 'error');
+        }
+    } catch (e) { console.error(e); }
+};
 
-    // ... (Rest of Ollama Logic)
+// ... (Rest of Ollama Logic)
 
-    // --- Ollama Manager ---
-    async function fetchOllamaModels() {
-        const grid = document.getElementById('ollama-models-grid');
-        if (!grid) return;
+// --- Ollama Manager ---
+async function fetchOllamaModels() {
+    const grid = document.getElementById('ollama-models-grid');
+    if (!grid) return;
 
-        grid.innerHTML = `
-            <div class="card glass full-width" style="grid-column: 1 / -1; margin-bottom: 20px;">
-                <h3>Manage Ollama Models</h3>
-                <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 10px;">
-                    <div style="flex: 1; min-width: 300px;">
-                         <label class="label">Pull New Model</label>
-                         <div style="display: flex; gap: 10px;">
-                            <input type="text" id="pull-model-name" placeholder="e.g. llama3, mistral..." class="input-text" style="flex-grow:1;">
-                            <button class="action-btn" onclick="startModelPull()">Pull</button>
+    grid.innerHTML = `
+    <div class="card grid-col-3" style="width: 100%;">
+                <div class="card-header">
+                    <span class="card-title">Manage Ollama Models</span>
+                </div>
+                <div class="flex-col" style="gap: var(--space-md);">
+                    <div class="flex-col" style="gap: 5px;">
+                         <label class="text-muted" style="font-size: var(--text-xs);">Pull New Model</label>
+                         <div class="flex-center" style="gap: 10px;">
+                            <input type="text" id="pull-model-name" placeholder="e.g. llama3, mistral..." class="input" style="flex-grow:1;">
+                            <button class="btn" onclick="startModelPull()">PULL</button>
                          </div>
-                         <div id="pull-status" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;"></div>
+                         <div id="pull-status" style="font-size: 10px; color: hsl(var(--text-tertiary));"></div>
                     </div>
-                    <div style="flex: 1; min-width: 300px;">
-                        <label class="label">Runtime Parameters (Global)</label>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                            <div>
-                                <span style="font-size: 0.8rem;">Temperature</span>
-                                <input type="number" step="0.1" min="0" max="1" value="0.7" class="input-text">
+                    <div class="flex-col" style="gap: 5px;">
+                        <label class="text-muted" style="font-size: var(--text-xs);">Runtime Parameters (Global)</label>
+                        <div class="grid-dashboard" style="grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div class="flex-col">
+                                <span style="font-size: 10px;">Temperature</span>
+                                <input type="number" step="0.1" min="0" max="1" value="0.7" class="input">
                             </div>
-                             <div>
-                                <span style="font-size: 0.8rem;">Context Window</span>
-                                <input type="number" step="1024" value="8192" class="input-text">
+                             <div class="flex-col">
+                                <span style="font-size: 10px;">Context Window</span>
+                                <input type="number" step="1024" value="8192" class="input">
                             </div>
                         </div>
-                        <button class="action-btn sm" style="margin-top: 10px;" onclick="alert('Params Updated')">Apply Params</button>
+                        <button class="btn sm" style="margin-top: 10px;" onclick="alert('Params Updated')">APPLY PARAMS</button>
                     </div>
                 </div>
             </div>
-        `;
+    `;
+}
+
+window.startModelPull = async () => {
+    const name = document.getElementById('pull-model-name').value;
+    if (!name) return;
+    const status = document.getElementById('pull-status');
+    status.textContent = `Requesting pull for ${name}...`;
+    setTimeout(() => {
+        status.textContent = `Pulling ${name}: 10 %... (Simulation)`;
+        showNotification(`Pull started for ${name}`);
+    }, 500);
+};
+
+// --- Config Logic ---
+async function fetchConfigFiles() {
+    const sel = document.getElementById('config-file-selector');
+    if (!sel) return;
+    sel.innerHTML = '<option value="" disabled selected>Select a file...</option>';
+
+    const resp = await fetch('/admin/config/files');
+    if (resp.ok) {
+        const data = await resp.json();
+        data.files.forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.path;
+            opt.textContent = f.name + (f.exists ? '' : ' (New)');
+            if (f.name === 'providers.yaml') opt.selected = true;
+            sel.appendChild(opt);
+        });
+        if (sel.value) sel.dispatchEvent(new Event('change'));
     }
 
-    window.startModelPull = async () => {
-        const name = document.getElementById('pull-model-name').value;
-        if (!name) return;
-        const status = document.getElementById('pull-status');
-        status.textContent = `Requesting pull for ${name}...`;
-        setTimeout(() => {
-            status.textContent = `Pulling ${name}: 10%... (Simulation)`;
-            showNotification(`Pull started for ${name}`);
-        }, 500);
-    };
-
-    // --- Config Logic ---
-    async function fetchConfigFiles() {
-        const sel = document.getElementById('config-file-selector');
-        if (!sel) return;
-        sel.innerHTML = '<option value="" disabled selected>Select a file...</option>';
-
-        const resp = await fetch('/admin/config/files');
-        if (resp.ok) {
-            const data = await resp.json();
-            data.files.forEach(f => {
-                const opt = document.createElement('option');
-                opt.value = f.path;
-                opt.textContent = f.name + (f.exists ? '' : ' (New)');
-                if (f.name === 'providers.yaml') opt.selected = true;
-                sel.appendChild(opt);
-            });
-            if (sel.value) sel.dispatchEvent(new Event('change'));
-        }
-
-        sel.addEventListener('change', async (e) => {
-            const path = e.target.value;
-            state.editorPath = path;
-            const r = await fetch(`/admin/config/read?path=${encodeURIComponent(path)}`);
-            if (r.ok) {
-                const d = await r.json();
-                document.getElementById('config-editor').value = d.content;
-                const help = document.querySelector('.tip-text');
-                if (path.includes('providers.yaml')) {
-                    help.innerHTML = `<strong>Tip:</strong> Define MCP servers here. Restart required after saving.`;
-                } else {
-                    help.innerHTML = `Editing <strong>${path.split('/').pop()}</strong>`;
-                }
+    sel.addEventListener('change', async (e) => {
+        const path = e.target.value;
+        state.editorPath = path;
+        const r = await fetch(`/ admin / config / read ? path = ${encodeURIComponent(path)}`);
+        if (r.ok) {
+            const d = await r.json();
+            document.getElementById('config-editor').value = d.content;
+            const help = document.querySelector('.tip-text');
+            if (path.includes('providers.yaml')) {
+                help.innerHTML = `< strong > Tip:</strong > Define MCP servers here.Restart required after saving.`;
+            } else {
+                help.innerHTML = `Editing < strong > ${path.split('/').pop()}</strong > `;
             }
-        });
-    }
-
-    document.getElementById('btn-save-config')?.addEventListener('click', async () => {
-        if (!state.editorPath) return;
-        const resp = await fetch('/admin/config/write', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: state.editorPath, content: document.getElementById('config-editor').value })
-        });
-        if (resp.ok) {
-            showNotification('Config saved. Reloading MCPs...');
-            await fetch('/admin/reload-mcp', { method: 'POST' });
         }
     });
+}
 
-    document.getElementById('btn-add-mcp-stub')?.addEventListener('click', () => {
-        const stub = `
-# --- NEW SERVER TEMPLATE ---
+document.getElementById('btn-save-config')?.addEventListener('click', async () => {
+    if (!state.editorPath) return;
+    const resp = await fetch('/admin/config/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: state.editorPath, content: document.getElementById('config-editor').value })
+    });
+    if (resp.ok) {
+        showNotification('Config saved. Reloading MCPs...');
+        await fetch('/admin/reload-mcp', { method: 'POST' });
+    }
+});
+
+document.getElementById('btn-add-mcp-stub')?.addEventListener('click', () => {
+    const stub = `
+# -- - NEW SERVER TEMPLATE-- -
 # 1. Replace 'my-server-name' with your tool's name
 # 2. Check 'args' for the correct package
 # 3. Add env vars if needed
-my-server-name:
-  command: npx
-  args:
-    - "-y"
+my - server - name:
+command: npx
+args:
+- "-y"
     - "@modelcontextprotocol/server-name"
-  env:
-    MY_API_KEY: "your-key-here"
-`;
-        const editor = document.getElementById('config-editor');
-        editor.value += stub;
-        showNotification('Added MCP server template.');
-    });
+env:
+MY_API_KEY: "your-key-here"
+    `;
+    const editor = document.getElementById('config-editor');
+    editor.value += stub;
+    showNotification('Added MCP server template.');
+});
 
-    function showNotification(msg) {
-        const toast = document.createElement('div');
-        toast.className = 'toast glass';
-        toast.textContent = msg;
-        document.body.appendChild(toast);
-        setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 500); }, 3000);
-    }
+function showNotification(msg, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = 'toast glass';
+    if (type === 'error') toast.style.color = 'hsl(var(--accent-danger))';
+    toast.innerHTML = msg; // Support HTML
+    document.body.appendChild(toast);
+    setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 500); }, 3000);
+}
 
-    // --- Memory Browser Logic ---
-    window.fetchMemoryFacts = async () => {
-        const input = document.getElementById('memory-search-input');
-        const query = input ? input.value : '';
-        const container = document.getElementById('memory-results');
-        container.innerHTML = '<div class="placeholder-box">Searching Neural Memory...</div>';
+// --- Memory Browser Logic ---
+window.fetchMemoryFacts = async () => {
+    const input = document.getElementById('memory-search-input');
+    const query = input ? input.value : '';
+    const container = document.getElementById('memory-results');
+    container.innerHTML = '<div class="placeholder-box">Searching Neural Memory...</div>';
 
-        try {
-            const resp = await fetch(`/admin/memory/facts?query=${encodeURIComponent(query)}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                if (data.facts && data.facts.length > 0) {
-                    const rows = data.facts.map(f => `
-                        <tr>
+    try {
+        const resp = await fetch(`/ admin / memory / facts ? query = ${encodeURIComponent(query)} `);
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.facts && data.facts.length > 0) {
+                const rows = data.facts.map(f => `
+    < tr >
                             <td><span class="badge fact">FACT</span></td>
                             <td>${f.entity || '?'}</td>
                             <td>${f.relation || '-'}</td>
                             <td>${f.target || ''}</td>
-                        </tr>
-                    `).join('');
-                    container.innerHTML = `
-                        <table class="memory-table">
+                        </tr >
+    `).join('');
+                container.innerHTML = `
+    < table class="memory-table" >
                             <thead>
                                 <tr>
                                     <th width="80">Type</th>
@@ -1082,603 +1081,603 @@ my-server-name:
                                 </tr>
                             </thead>
                             <tbody>${rows}</tbody>
-                        </table>
-                    `;
-                } else {
-                    container.innerHTML = '<div style="padding:1rem; color:var(--text-muted)">No facts found matching query.</div>';
-                }
+                        </table >
+    `;
             } else {
-                container.innerHTML = '<div style="color:var(--accent-error)">Error fetching memory. Agent might be busy.</div>';
+                container.innerHTML = '<div style="padding:1rem; color:var(--text-muted)">No facts found matching query.</div>';
             }
-        } catch (e) {
-            container.innerHTML = `<div style="color:var(--accent-error)">Network Error: ${e.message}</div>`;
-        }
-    };
-
-    document.getElementById('memory-search-input')?.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') window.fetchMemoryFacts();
-    });
-
-    // --- SSE Log Streaming ---
-    let logEventSource = null;
-    function startLogStream() {
-        if (logEventSource) logEventSource.close();
-
-        const logContainer = document.querySelector('.log-viewer');
-        if (!logContainer) return;
-
-        logEventSource = new EventSource('/admin/logs/stream?services=agent_runner,router');
-
-        logEventSource.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                const entry = document.createElement('div');
-                entry.className = `log-entry ${data.service}`;
-
-                // Colorize based on content
-                let type = 'info';
-                if (data.line.includes('ERROR') || data.line.includes('Critical')) type = 'error';
-                else if (data.line.includes('WARN')) type = 'warn';
-                entry.classList.add(type);
-
-                entry.innerHTML = `<small style="opacity:0.5; margin-right:8px;">[${data.service.toUpperCase()}]</small> ${data.line}`;
-                logContainer.appendChild(entry);
-
-                // Keep last 200 lines
-                if (logContainer.children.length > 200) {
-                    logContainer.removeChild(logContainer.firstChild);
-                }
-
-                // Auto-scroll if at bottom
-                const isAtBottom = logContainer.scrollHeight - logContainer.clientHeight <= logContainer.scrollTop + 50;
-                if (isAtBottom) {
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-            } catch (e) { console.error("Log Stream Error:", e); }
-        };
-
-        logEventSource.onerror = (e) => {
-            console.warn("Log Stream Disconnected, reconnecting in 5s...");
-            logEventSource.close();
-            setTimeout(startLogStream, 5000);
-        };
-    }
-
-
-    // Auto Toggle & Backup Buttons
-    document.getElementById('btn-toggle-auto-top')?.addEventListener('click', () => {
-        const lbl = document.getElementById('lbl-auto');
-        if (lbl.textContent === 'ON') {
-            lbl.textContent = 'OFF';
-            lbl.style.color = 'var(--text-muted)';
-            showNotification('Auto-Mode Disabled');
         } else {
-            lbl.textContent = 'ON';
-            lbl.style.color = 'var(--accent-neon)';
-            showNotification('Auto-Mode Enabled');
+            container.innerHTML = '<div style="color:var(--accent-error)">Error fetching memory. Agent might be busy.</div>';
         }
-    });
-
-    document.getElementById('btn-trigger-backup-top')?.addEventListener('click', async () => {
-        showNotification('Backup started...');
-    });
-
-    async function fetchDocsList() {
-        const listEl = document.getElementById('docs-list');
-        listEl.innerHTML = '<div class="placeholder-box">Loading...</div>';
-        const resp = await fetch('/admin/docs/list');
-        if (resp.ok) {
-            const data = await resp.json();
-            if (data.files && data.files.length > 0) {
-                listEl.innerHTML = data.files.map(f => `
-                    <div class="task-item" style="cursor:pointer;" onclick="loadDoc('${f.path}', '${f.name}')">
-                        <span class="task-name">📄 ${f.name}</span>
-                    </div>
-                `).join('');
-            } else {
-                listEl.innerHTML = '<div style="padding:1rem; color:var(--text-muted)">No documentation files found in ai/docs.</div>';
-            }
-        }
+    } catch (e) {
+        container.innerHTML = `< div style = "color:var(--accent-error)" > Network Error: ${e.message}</div > `;
     }
-    window.loadDoc = async (path, name) => {
-        const resp = await fetch(`/admin/docs/read?path=${encodeURIComponent(path)}`);
-        if (resp.ok) {
-            const data = await resp.json();
-            document.getElementById('doc-viewer-title').textContent = name;
-            document.getElementById('doc-viewer-content').innerHTML = marked.parse(data.content);
-        }
+};
+
+document.getElementById('memory-search-input')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') window.fetchMemoryFacts();
+});
+
+// --- SSE Log Streaming ---
+let logEventSource = null;
+function startLogStream() {
+    if (logEventSource) logEventSource.close();
+
+    const logContainer = document.querySelector('.log-viewer');
+    if (!logContainer) return;
+
+    logEventSource = new EventSource('/admin/logs/stream?services=agent_runner,router');
+
+    logEventSource.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            const entry = document.createElement('div');
+            entry.className = `log - entry ${data.service} `;
+
+            // Colorize based on content
+            let type = 'info';
+            if (data.line.includes('ERROR') || data.line.includes('Critical')) type = 'error';
+            else if (data.line.includes('WARN')) type = 'warn';
+            entry.classList.add(type);
+
+            entry.innerHTML = `< small style = "opacity:0.5; margin-right:8px;" > [${data.service.toUpperCase()}]</small > ${data.line} `;
+            logContainer.appendChild(entry);
+
+            // Keep last 200 lines
+            if (logContainer.children.length > 200) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
+
+            // Auto-scroll if at bottom
+            const isAtBottom = logContainer.scrollHeight - logContainer.clientHeight <= logContainer.scrollTop + 50;
+            if (isAtBottom) {
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        } catch (e) { console.error("Log Stream Error:", e); }
     };
 
-    async function fetchLogTail() {
+    logEventSource.onerror = (e) => {
+        console.warn("Log Stream Disconnected, reconnecting in 5s...");
+        logEventSource.close();
+        setTimeout(startLogStream, 5000);
+    };
+}
+
+
+// Auto Toggle & Backup Buttons
+document.getElementById('btn-toggle-auto-top')?.addEventListener('click', () => {
+    const lbl = document.getElementById('lbl-auto');
+    if (lbl.textContent === 'ON') {
+        lbl.textContent = 'OFF';
+        lbl.style.color = 'var(--text-muted)';
+        showNotification('Auto-Mode Disabled');
+    } else {
+        lbl.textContent = 'ON';
+        lbl.style.color = 'var(--accent-neon)';
+        showNotification('Auto-Mode Enabled');
+    }
+});
+
+document.getElementById('btn-trigger-backup-top')?.addEventListener('click', async () => {
+    showNotification('Backup started...');
+});
+
+async function fetchDocsList() {
+    const listEl = document.getElementById('docs-list');
+    listEl.innerHTML = '<div class="placeholder-box">Loading...</div>';
+    const resp = await fetch('/admin/docs/list');
+    if (resp.ok) {
+        const data = await resp.json();
+        if (data.files && data.files.length > 0) {
+            listEl.innerHTML = data.files.map(f => `
+    < div class="task-item" style = "cursor:pointer;" onclick = "loadDoc('${f.path}', '${f.name}')" >
+        <span class="task-name">📄 ${f.name}</span>
+                    </div >
+    `).join('');
+        } else {
+            listEl.innerHTML = '<div style="padding:1rem; color:var(--text-muted)">No documentation files found in ai/docs.</div>';
+        }
+    }
+}
+window.loadDoc = async (path, name) => {
+    const resp = await fetch(`/ admin / docs / read ? path = ${encodeURIComponent(path)} `);
+    if (resp.ok) {
+        const data = await resp.json();
+        document.getElementById('doc-viewer-title').textContent = name;
+        document.getElementById('doc-viewer-content').innerHTML = marked.parse(data.content);
+    }
+};
+
+async function fetchLogTail() {
+    const container = document.getElementById('log-container');
+
+
+    const resp = await fetch('/admin/logs/tail?lines=50');
+    if (resp.ok) {
+        const data = await resp.json();
         const container = document.getElementById('log-container');
+        container.innerHTML = data.logs.map(line => {
+            // Formatting safety: Skip massive lines or dump-lines that break rendering
+            if (line.length > 2000) return `< div class="log-entry info" style = "color:var(--text-muted)" > [Large Log Entry Skipped: ${line.length} chars]</div > `;
 
+            const updated = line.replace(/</g, '&lt;');
+            let cls = 'info';
+            if (updated.includes('ERROR')) cls = 'error';
+            if (updated.includes('WARNING')) cls = 'warn';
+            return `< div class="log-entry ${cls}" > ${updated}</div > `;
+        }).join('');
+        container.scrollTop = container.scrollHeight;
+    }
+}
+document.getElementById('btn-refresh-logs')?.addEventListener('click', fetchLogTail);
 
-        const resp = await fetch('/admin/logs/tail?lines=50');
+window.resetBreaker = async (name) => {
+    await fetch(`/ admin / circuit - breakers / ${name}/reset`, { method: 'POST' });
+    showNotification(`Breaker ${name} reset.`);
+    fetchMCPData();
+};
+
+fetchSystemData();
+fetchSystemRoles();
+
+// --- Cloud Uplink Logic ---
+async function fetchCloudLogs() {
+    const terminal = document.getElementById('cloud-terminal');
+    if (!terminal) return;
+
+    try {
+        const resp = await fetch('/admin/logs/cloud_uplink?lines=15'); // Fetch last 15 lines
         if (resp.ok) {
             const data = await resp.json();
-            const container = document.getElementById('log-container');
-            container.innerHTML = data.logs.map(line => {
-                // Formatting safety: Skip massive lines or dump-lines that break rendering
-                if (line.length > 2000) return `<div class="log-entry info" style="color:var(--text-muted)">[Large Log Entry Skipped: ${line.length} chars]</div>`;
+            if (data.logs && data.logs.length > 0) {
+                // Update terminal content
+                terminal.innerHTML = data.logs.map(line => `> ${line}`).join('<br>');
+                terminal.scrollTop = terminal.scrollHeight; // Auto-scroll
 
-                const updated = line.replace(/</g, '&lt;');
-                let cls = 'info';
-                if (updated.includes('ERROR')) cls = 'error';
-                if (updated.includes('WARNING')) cls = 'warn';
-                return `<div class="log-entry ${cls}">${updated}</div>`;
-            }).join('');
-            container.scrollTop = container.scrollHeight;
-        }
-    }
-    document.getElementById('btn-refresh-logs')?.addEventListener('click', fetchLogTail);
-
-    window.resetBreaker = async (name) => {
-        await fetch(`/admin/circuit-breakers/${name}/reset`, { method: 'POST' });
-        showNotification(`Breaker ${name} reset.`);
-        fetchMCPData();
-    };
-
-    fetchSystemData();
-    fetchSystemRoles();
-
-    // --- Cloud Uplink Logic ---
-    async function fetchCloudLogs() {
-        const terminal = document.getElementById('cloud-terminal');
-        if (!terminal) return;
-
-        try {
-            const resp = await fetch('/admin/logs/cloud_uplink?lines=15'); // Fetch last 15 lines
-            if (resp.ok) {
-                const data = await resp.json();
-                if (data.logs && data.logs.length > 0) {
-                    // Update terminal content
-                    terminal.innerHTML = data.logs.map(line => `> ${line}`).join('<br>');
-                    terminal.scrollTop = terminal.scrollHeight; // Auto-scroll
-
-                    // Update Status Badge based on content
-                    const lastLine = data.logs[data.logs.length - 1];
-                    const badge = document.getElementById('cloud-status-badge');
-                    if (lastLine.includes('Processing')) {
-                        badge.textContent = 'ACTIVE';
-                        badge.className = 'badge bg-success';
-                    } else if (lastLine.includes('Error')) {
-                        badge.textContent = 'ERROR';
-                        badge.className = 'badge bg-danger';
-                    } else {
-                        badge.textContent = 'IDLE';
-                        badge.className = 'badge bg-secondary';
-                    }
-                }
-            }
-        } catch (e) {
-            // terminal.innerHTML = '> Uplink Disconnected.';
-        }
-    }
-
-    // Start Polling Loop
-    setInterval(fetchSystemData, state.pollingInterval);
-    setInterval(fetchCloudLogs, 2000); // Poll cloud logs every 2s
-
-    document.getElementById('btn-reload-mcp-top')?.addEventListener('click', async () => {
-        await fetch('/admin/reload-mcp', { method: 'POST' });
-        showNotification('MCP Servers Reloaded');
-    });
-
-    // --- Notification Polling & Local Health ---
-    let notificationsApiAvailable = true;
-    let lastInternetStatus = 'Connected';
-
-    async function fetchNotifications() {
-        if (!notificationsApiAvailable) return;
-
-        try {
-            const resp = await fetch('/admin/notifications?unread=true');
-            if (resp.status === 404) {
-                console.log("Notification API not available (backend update pending). Switching to local checks.");
-                notificationsApiAvailable = false;
-                return;
-            }
-            if (resp.ok) {
-                const data = await resp.json();
-                if (data.notifications && data.notifications.length > 0) {
-                    data.notifications.forEach(n => {
-                        showNotification(n.level === 'critical' || n.level === 'high' ?
-                            `⚠️ [${n.level.toUpperCase()}] ${n.title}` :
-                            `ℹ️ ${n.title}`);
-                    });
-                    await fetch('/admin/notifications/acknowledge', { method: 'POST' });
-                }
-            }
-        } catch (e) {
-            // Silent fail for polling errors
-        }
-    }
-
-    // Enhance fetchSystemData with local notification triggers
-    const originalFetchSystemData = fetchSystemData;
-    fetchSystemData = async function () {
-        // Call original
-        const result = await originalFetchSystemData(); // Assuming original returns data or we intercept state
-        // Since originalFetchSystemData doesn't return data (it updates UI), we read 'state' global or we can't.
-        // Wait, fetchSystemData updates 'state' variable? 
-        // Let's check the files... state is global in app.js? 
-        // No, 'state' is defined at top of app.js. 
-        // We can access 'state'.
-
-        if (state.systemStatus) {
-            // Check Internet
-            if (state.systemStatus.internet === 'Offline' && lastInternetStatus === 'Connected') {
-                showNotification('⚠️ Internet Connection Lost');
-                lastInternetStatus = 'Offline';
-            } else if (state.systemStatus.internet === 'Connected' && lastInternetStatus === 'Offline') {
-                showNotification('✅ Internet Restored');
-                lastInternetStatus = 'Connected';
-            }
-        }
-        return result;
-    };
-
-    // --- Integrated Chat Logic ---
-    function setupChat() {
-        const chatInput = document.getElementById('chat-input');
-        const sendBtn = document.getElementById('btn-chat-send');
-        const historyDiv = document.getElementById('chat-messages');
-        const modelSelect = document.getElementById('chat-model-select');
-        const statusSpan = document.getElementById('chat-status');
-
-        if (!chatInput || !sendBtn) return;
-
-        function appendMessage(role, text) {
-            const div = document.createElement('div');
-            div.className = `chat-message ${role}`;
-            div.textContent = text;
-            historyDiv.appendChild(div);
-            historyDiv.scrollTop = historyDiv.scrollHeight;
-            return div;
-        }
-
-        async function sendMessage() {
-            const text = chatInput.value.trim();
-            if (!text) return;
-
-            // UI State
-            appendMessage('user', text);
-            chatInput.value = '';
-            chatInput.disabled = true;
-            sendBtn.disabled = true;
-            statusSpan.textContent = "Connecting...";
-            statusSpan.className = "status-indicator warning";
-
-            const model = modelSelect.value;
-            const assistantDiv = appendMessage('assistant', '');
-
-            // Thinking UI State
-            let thinkingContainer = null;
-            let thinkingBody = null;
-            let currentStepDiv = null;
-
-            try {
-                const response = await fetch('/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`
-                    },
-                    body: JSON.stringify({
-                        model: model,
-                        messages: [{ role: "user", content: text }],
-                        stream: true
-                    })
-                });
-
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                statusSpan.textContent = "Receiving...";
-                statusSpan.className = "status-indicator ok";
-
-                let buffer = "";
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n\n');
-                    buffer = lines.pop(); // Keep partial line
-
-                    for (const line of lines) {
-                        const trimmed = line.trim();
-                        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-                        const dataStr = trimmed.slice(6);
-                        if (dataStr === '[DONE]') break;
-
-                        try {
-                            const chunk = JSON.parse(dataStr);
-                            let event = chunk;
-                            if (chunk.choices && chunk.choices.length > 0) {
-                                event = chunk.choices[0].delta || {};
-                            }
-                            if (!event.type && event.content) {
-                                event = { type: 'token', content: event.content };
-                            }
-                            if (event.role) continue;
-                            if (chunk.error) {
-                                assistantDiv.textContent += `\n[Error: ${chunk.error.message}]`;
-                                statusSpan.className = "status-indicator error";
-                            }
-
-                            // 1. TOKEN
-                            if (event.type === 'token') {
-                                assistantDiv.textContent += event.content;
-                                historyDiv.scrollTop = historyDiv.scrollHeight;
-                            }
-
-                            // 2. THINKING START
-                            else if (event.type === 'thinking_start') {
-                                thinkingContainer = document.createElement('div');
-                                thinkingContainer.className = 'chat-thinking';
-
-                                const header = document.createElement('div');
-                                header.className = 'chat-thinking-header';
-                                header.innerHTML = `<span class="icon spin">⚙️</span> <span>Planning ${event.count} Step(s)...</span>`;
-                                header.onclick = () => {
-                                    thinkingBody.style.display = thinkingBody.style.display === 'none' ? 'flex' : 'none';
-                                };
-
-                                thinkingBody = document.createElement('div');
-                                thinkingBody.className = 'chat-thinking-body';
-
-                                thinkingContainer.appendChild(header);
-                                thinkingContainer.appendChild(thinkingBody);
-                                assistantDiv.appendChild(thinkingContainer);
-                            }
-
-                            // 3. TOOL START
-                            else if (event.type === 'tool_start') {
-                                const step = document.createElement('div');
-                                step.className = 'thinking-step running';
-                                step.innerHTML = `
-                                    <div class="thinking-step-icon">🔄</div>
-                                    <div class="thinking-step-content">
-                                        <div class="thinking-step-name">${event.tool}</div>
-                                        <div class="thinking-step-details">${JSON.stringify(event.input).substring(0, 100)}...</div>
-                                    </div>
-                                `;
-                                thinkingBody.appendChild(step);
-                                currentStepDiv = step;
-                            }
-
-                            // 4. TOOL END
-                            else if (event.type === 'tool_end') {
-                                const steps = thinkingBody.querySelectorAll('.thinking-step.running');
-                                const step = Array.from(steps).find(s => s.querySelector('.thinking-step-name').textContent === event.tool);
-
-                                if (step) {
-                                    step.className = 'thinking-step done';
-                                    step.querySelector('.thinking-step-icon').textContent = '✅';
-                                    step.classList.remove('running');
-                                    const outLen = event.output ? event.output.length : 0;
-                                    step.querySelector('.thinking-step-details').textContent += ` -> Done (${outLen} chars)`;
-                                }
-                            }
-
-                            // 5. ERROR
-                            else if (event.type === 'error') {
-                                assistantDiv.textContent += `\n[System Error: ${event.error}]`;
-                            }
-
-                        } catch (e) { }
-                    }
-                }
-
-                statusSpan.textContent = "Ready";
-                statusSpan.className = "status-indicator";
-
-            } catch (e) {
-                assistantDiv.textContent += `\n[Failed: ${e.message}]`;
-                statusSpan.textContent = "Error";
-                statusSpan.className = "status-indicator error";
-            } finally {
-                chatInput.disabled = false;
-                sendBtn.disabled = false;
-                chatInput.focus();
-            }
-        }
-
-        // --- Audio Logic ---
-        const micBtn = document.getElementById('btn-chat-mic');
-        const ttsToggle = document.getElementById('chat-tts-toggle');
-        let recognition;
-
-        if ('webkitSpeechRecognition' in window) {
-            recognition = new webkitSpeechRecognition();
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            recognition.lang = 'en-US';
-
-            recognition.onstart = () => {
-                micBtn.style.background = '#dd2222';
-                statusSpan.textContent = "Listening...";
-                statusSpan.className = "status-indicator warning";
-            };
-            recognition.onend = () => {
-                micBtn.style.background = '#333';
-                if (statusSpan.textContent === "Listening...") {
-                    statusSpan.textContent = "Ready";
-                    statusSpan.className = "status-indicator";
-                }
-            };
-            recognition.onresult = (event) => {
-                const transcript = event.results[0][0].transcript;
-                chatInput.value = transcript;
-                setTimeout(sendMessage, 200);
-            };
-        } else {
-            console.warn("Speech Recognition not supported.");
-            if (micBtn) micBtn.style.display = 'none';
-        }
-
-        function toggleRecording() {
-            if (!recognition) return showNotification("Browser does not support Speech API.");
-            try { recognition.start(); } catch (e) { recognition.stop(); }
-        }
-
-        function speak(text) {
-            if (!ttsToggle || !ttsToggle.checked || !text) return;
-            window.speechSynthesis.cancel();
-            const cleanText = text.replace(/[*#`_\[\]]/g, '').replace(/https?:\/\/\S+/g, 'link');
-            const u = new SpeechSynthesisUtterance(cleanText);
-            u.rate = 1.1;
-            window.speechSynthesis.speak(u);
-        }
-
-        // Paste-to-Upload Handler
-        chatInput.addEventListener('paste', async (e) => {
-            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-            let hasFile = false;
-
-            // 1. Check for files (images, docs, etc.)
-            for (let index in items) {
-                const item = items[index];
-                if (item.kind === 'file') {
-                    e.preventDefault();
-                    hasFile = true;
-                    const blob = item.getAsFile();
-                    await handleFileUpload(blob);
-                }
-            }
-
-            // 2. If no file, check for massive text that should be a file
-            if (!hasFile) {
-                const text = e.clipboardData.getData('text');
-                if (text.length > 5000) { // Large content threshold
-                    if (confirm("This text is very long. Do you want to upload it as a file to 'uploads/' so I can digest it properly?")) {
-                        e.preventDefault();
-                        await handleFileUpload(new Blob([text], { type: 'text/plain' }), `pasted_text_${Date.now()}.txt`);
-                    }
-                }
-            }
-        });
-
-        async function handleFileUpload(fileArg, textFilename = null) {
-            // Show uploading state
-            chatInput.value = `[Uploading ${textFilename || fileArg.name}...]`;
-            chatInput.disabled = true;
-
-            const formData = new FormData();
-            if (textFilename) {
-                formData.append('content', await fileArg.text());
-                formData.append('filename', textFilename);
-            } else {
-                formData.append('file', fileArg);
-            }
-
-            try {
-                const resp = await fetch('/admin/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await resp.json();
-
-                if (data.ok) {
-                    // Auto-inject system prompt
-                    chatInput.value = `Read the file '${data.filename}' from uploads and digest it to memory.`;
-                    chatInput.disabled = false;
-                    showNotification(`Uploaded: ${data.filename}`);
-                    // Optional: Auto-send? Let's let the user verify first.
-                    // sendMessage(); 
+                // Update Status Badge based on content
+                const lastLine = data.logs[data.logs.length - 1];
+                const badge = document.getElementById('cloud-status-badge');
+                if (lastLine.includes('Processing')) {
+                    badge.textContent = 'ACTIVE';
+                    badge.className = 'badge bg-success';
+                } else if (lastLine.includes('Error')) {
+                    badge.textContent = 'ERROR';
+                    badge.className = 'badge bg-danger';
                 } else {
-                    chatInput.value = "";
-                    chatInput.disabled = false;
-                    showNotification(`Upload Failed: ${data.error}`, 'error');
+                    badge.textContent = 'IDLE';
+                    badge.className = 'badge bg-secondary';
                 }
-            } catch (e) {
-                console.error("Upload Loop Error", e);
-                chatInput.value = "";
-                chatInput.disabled = false;
-                showNotification("Connection failed during upload", 'error');
             }
         }
-
-        sendBtn.addEventListener('click', sendMessage);
-        if (micBtn) micBtn.addEventListener('click', toggleRecording);
-
-        chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
+    } catch (e) {
+        // terminal.innerHTML = '> Uplink Disconnected.';
     }
+}
 
-    setupChat();
-    setInterval(fetchNotifications, 5000);
+// Start Polling Loop
+setInterval(fetchSystemData, state.pollingInterval);
+setInterval(fetchCloudLogs, 2000); // Poll cloud logs every 2s
 
-    // --- Cost Tab Logic ---
-    async function refreshCost() {
-        try {
-            const response = await fetch('/admin/budget', { headers: { 'Authorization': getAuthToken() } });
-            const data = await response.json();
+document.getElementById('btn-reload-mcp-top')?.addEventListener('click', async () => {
+    await fetch('/admin/reload-mcp', { method: 'POST' });
+    showNotification('MCP Servers Reloaded');
+});
 
-            if (data.ok) {
-                const spend = data.current_spend.toFixed(4);
-                const limit = data.daily_limit_usd.toFixed(2);
-                const percent = data.percent_used.toFixed(1);
+// --- Notification Polling & Local Health ---
+let notificationsApiAvailable = true;
+let lastInternetStatus = 'Connected';
 
-                document.getElementById('costDisplay').innerText = '$' + spend;
-                document.getElementById('limitDisplay').innerText = 'Limit: $' + limit;
-                document.getElementById('percentDisplay').innerText = percent + '%';
+async function fetchNotifications() {
+    if (!notificationsApiAvailable) return;
 
-                const bar = document.getElementById('costBar');
-                bar.style.width = Math.min(100, data.percent_used) + '%';
-
-                if (data.percent_used > 90) bar.style.background = 'var(--accent-warn)';
-                else if (data.percent_used > 100) bar.style.background = 'var(--accent-error)';
-                else bar.style.background = 'var(--success)';
+    try {
+        const resp = await fetch('/admin/notifications?unread=true');
+        if (resp.status === 404) {
+            console.log("Notification API not available (backend update pending). Switching to local checks.");
+            notificationsApiAvailable = false;
+            return;
+        }
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.notifications && data.notifications.length > 0) {
+                data.notifications.forEach(n => {
+                    showNotification(n.level === 'critical' || n.level === 'high' ?
+                        `⚠️ [${n.level.toUpperCase()}] ${n.title}` :
+                        `ℹ️ ${n.title}`);
+                });
+                await fetch('/admin/notifications/acknowledge', { method: 'POST' });
             }
-        } catch (e) {
-            console.error("Failed to fetch cost", e);
+        }
+    } catch (e) {
+        // Silent fail for polling errors
+    }
+}
+
+// Enhance fetchSystemData with local notification triggers
+const originalFetchSystemData = fetchSystemData;
+fetchSystemData = async function () {
+    // Call original
+    const result = await originalFetchSystemData(); // Assuming original returns data or we intercept state
+    // Since originalFetchSystemData doesn't return data (it updates UI), we read 'state' global or we can't.
+    // Wait, fetchSystemData updates 'state' variable? 
+    // Let's check the files... state is global in app.js? 
+    // No, 'state' is defined at top of app.js. 
+    // We can access 'state'.
+
+    if (state.systemStatus) {
+        // Check Internet
+        if (state.systemStatus.internet === 'Offline' && lastInternetStatus === 'Connected') {
+            showNotification('⚠️ Internet Connection Lost');
+            lastInternetStatus = 'Offline';
+        } else if (state.systemStatus.internet === 'Connected' && lastInternetStatus === 'Offline') {
+            showNotification('✅ Internet Restored');
+            lastInternetStatus = 'Connected';
         }
     }
+    return result;
+};
 
-    // Auto-refresh when tab is shown
-    document.querySelectorAll('.tab-link[data-tab="cost"]').forEach(btn => {
-        btn.addEventListener('click', () => setTimeout(refreshCost, 100)); // Small delay for DOM
-    });
+// --- Integrated Chat Logic ---
+function setupChat() {
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('btn-chat-send');
+    const historyDiv = document.getElementById('chat-messages');
+    const modelSelect = document.getElementById('chat-model-select');
+    const statusSpan = document.getElementById('chat-status');
 
-    // Helper for auth if not defined globally (it likely is or hardcoded, but let's be safe)
-    function getAuthToken() {
-        return `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`;
+    if (!chatInput || !sendBtn) return;
+
+    function appendMessage(role, text) {
+        const div = document.createElement('div');
+        div.className = `chat-message ${role}`;
+        div.textContent = text;
+        historyDiv.appendChild(div);
+        historyDiv.scrollTop = historyDiv.scrollHeight;
+        return div;
     }
 
-    // --- Smart Config Logic ---
-    async function runSmartConfig() {
-        const input = document.getElementById('config-instruction').value;
-        if (!input.trim()) return;
+    async function sendMessage() {
+        const text = chatInput.value.trim();
+        if (!text) return;
 
-        const btn = document.getElementById('btn-smart-config');
-        const log = document.getElementById('smart-config-log');
+        // UI State
+        appendMessage('user', text);
+        chatInput.value = '';
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+        statusSpan.textContent = "Connecting...";
+        statusSpan.className = "status-indicator warning";
 
-        btn.disabled = true;
-        btn.innerHTML = "🤖 Processing...";
-        log.innerText = "🚀 Asking Agent to edit config... (This takes ~30s)\n";
+        const model = modelSelect.value;
+        const assistantDiv = appendMessage('assistant', '');
+
+        // Thinking UI State
+        let thinkingContainer = null;
+        let thinkingBody = null;
+        let currentStepDiv = null;
 
         try {
             const response = await fetch('/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': getAuthToken()
+                    'Authorization': `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`
                 },
                 body: JSON.stringify({
-                    model: "agent:mcp",
-                    messages: [
-                        {
-                            role: "system",
-                            content: `You are the Antigravity Config Manager. You must edit 'ai/config/config.yaml'.
+                    model: model,
+                    messages: [{ role: "user", content: text }],
+                    stream: true
+                })
+            });
+
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            statusSpan.textContent = "Receiving...";
+            statusSpan.className = "status-indicator ok";
+
+            let buffer = "";
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n\n');
+                buffer = lines.pop(); // Keep partial line
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+                    const dataStr = trimmed.slice(6);
+                    if (dataStr === '[DONE]') break;
+
+                    try {
+                        const chunk = JSON.parse(dataStr);
+                        let event = chunk;
+                        if (chunk.choices && chunk.choices.length > 0) {
+                            event = chunk.choices[0].delta || {};
+                        }
+                        if (!event.type && event.content) {
+                            event = { type: 'token', content: event.content };
+                        }
+                        if (event.role) continue;
+                        if (chunk.error) {
+                            assistantDiv.textContent += `\n[Error: ${chunk.error.message}]`;
+                            statusSpan.className = "status-indicator error";
+                        }
+
+                        // 1. TOKEN
+                        if (event.type === 'token') {
+                            assistantDiv.textContent += event.content;
+                            historyDiv.scrollTop = historyDiv.scrollHeight;
+                        }
+
+                        // 2. THINKING START
+                        else if (event.type === 'thinking_start') {
+                            thinkingContainer = document.createElement('div');
+                            thinkingContainer.className = 'chat-thinking';
+
+                            const header = document.createElement('div');
+                            header.className = 'chat-thinking-header';
+                            header.innerHTML = `<span class="icon spin">⚙️</span> <span>Planning ${event.count} Step(s)...</span>`;
+                            header.onclick = () => {
+                                thinkingBody.style.display = thinkingBody.style.display === 'none' ? 'flex' : 'none';
+                            };
+
+                            thinkingBody = document.createElement('div');
+                            thinkingBody.className = 'chat-thinking-body';
+
+                            thinkingContainer.appendChild(header);
+                            thinkingContainer.appendChild(thinkingBody);
+                            assistantDiv.appendChild(thinkingContainer);
+                        }
+
+                        // 3. TOOL START
+                        else if (event.type === 'tool_start') {
+                            const step = document.createElement('div');
+                            step.className = 'thinking-step running';
+                            step.innerHTML = `
+                                    <div class="thinking-step-icon">🔄</div>
+                                    <div class="thinking-step-content">
+                                        <div class="thinking-step-name">${event.tool}</div>
+                                        <div class="thinking-step-details">${JSON.stringify(event.input).substring(0, 100)}...</div>
+                                    </div>
+                                `;
+                            thinkingBody.appendChild(step);
+                            currentStepDiv = step;
+                        }
+
+                        // 4. TOOL END
+                        else if (event.type === 'tool_end') {
+                            const steps = thinkingBody.querySelectorAll('.thinking-step.running');
+                            const step = Array.from(steps).find(s => s.querySelector('.thinking-step-name').textContent === event.tool);
+
+                            if (step) {
+                                step.className = 'thinking-step done';
+                                step.querySelector('.thinking-step-icon').textContent = '✅';
+                                step.classList.remove('running');
+                                const outLen = event.output ? event.output.length : 0;
+                                step.querySelector('.thinking-step-details').textContent += ` -> Done (${outLen} chars)`;
+                            }
+                        }
+
+                        // 5. ERROR
+                        else if (event.type === 'error') {
+                            assistantDiv.textContent += `\n[System Error: ${event.error}]`;
+                        }
+
+                    } catch (e) { }
+                }
+            }
+
+            statusSpan.textContent = "Ready";
+            statusSpan.className = "status-indicator";
+
+        } catch (e) {
+            assistantDiv.textContent += `\n[Failed: ${e.message}]`;
+            statusSpan.textContent = "Error";
+            statusSpan.className = "status-indicator error";
+        } finally {
+            chatInput.disabled = false;
+            sendBtn.disabled = false;
+            chatInput.focus();
+        }
+    }
+
+    // --- Audio Logic ---
+    const micBtn = document.getElementById('btn-chat-mic');
+    const ttsToggle = document.getElementById('chat-tts-toggle');
+    let recognition;
+
+    if ('webkitSpeechRecognition' in window) {
+        recognition = new webkitSpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => {
+            micBtn.style.background = '#dd2222';
+            statusSpan.textContent = "Listening...";
+            statusSpan.className = "status-indicator warning";
+        };
+        recognition.onend = () => {
+            micBtn.style.background = '#333';
+            if (statusSpan.textContent === "Listening...") {
+                statusSpan.textContent = "Ready";
+                statusSpan.className = "status-indicator";
+            }
+        };
+        recognition.onresult = (event) => {
+            const transcript = event.results[0][0].transcript;
+            chatInput.value = transcript;
+            setTimeout(sendMessage, 200);
+        };
+    } else {
+        console.warn("Speech Recognition not supported.");
+        if (micBtn) micBtn.style.display = 'none';
+    }
+
+    function toggleRecording() {
+        if (!recognition) return showNotification("Browser does not support Speech API.");
+        try { recognition.start(); } catch (e) { recognition.stop(); }
+    }
+
+    function speak(text) {
+        if (!ttsToggle || !ttsToggle.checked || !text) return;
+        window.speechSynthesis.cancel();
+        const cleanText = text.replace(/[*#`_\[\]]/g, '').replace(/https?:\/\/\S+/g, 'link');
+        const u = new SpeechSynthesisUtterance(cleanText);
+        u.rate = 1.1;
+        window.speechSynthesis.speak(u);
+    }
+
+    // Paste-to-Upload Handler
+    chatInput.addEventListener('paste', async (e) => {
+        const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+        let hasFile = false;
+
+        // 1. Check for files (images, docs, etc.)
+        for (let index in items) {
+            const item = items[index];
+            if (item.kind === 'file') {
+                e.preventDefault();
+                hasFile = true;
+                const blob = item.getAsFile();
+                await handleFileUpload(blob);
+            }
+        }
+
+        // 2. If no file, check for massive text that should be a file
+        if (!hasFile) {
+            const text = e.clipboardData.getData('text');
+            if (text.length > 5000) { // Large content threshold
+                if (confirm("This text is very long. Do you want to upload it as a file to 'uploads/' so I can digest it properly?")) {
+                    e.preventDefault();
+                    await handleFileUpload(new Blob([text], { type: 'text/plain' }), `pasted_text_${Date.now()}.txt`);
+                }
+            }
+        }
+    });
+
+    async function handleFileUpload(fileArg, textFilename = null) {
+        // Show uploading state
+        chatInput.value = `[Uploading ${textFilename || fileArg.name}...]`;
+        chatInput.disabled = true;
+
+        const formData = new FormData();
+        if (textFilename) {
+            formData.append('content', await fileArg.text());
+            formData.append('filename', textFilename);
+        } else {
+            formData.append('file', fileArg);
+        }
+
+        try {
+            const resp = await fetch('/admin/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await resp.json();
+
+            if (data.ok) {
+                // Auto-inject system prompt
+                chatInput.value = `Read the file '${data.filename}' from uploads and digest it to memory.`;
+                chatInput.disabled = false;
+                showNotification(`Uploaded: ${data.filename}`);
+                // Optional: Auto-send? Let's let the user verify first.
+                // sendMessage(); 
+            } else {
+                chatInput.value = "";
+                chatInput.disabled = false;
+                showNotification(`Upload Failed: ${data.error}`, 'error');
+            }
+        } catch (e) {
+            console.error("Upload Loop Error", e);
+            chatInput.value = "";
+            chatInput.disabled = false;
+            showNotification("Connection failed during upload", 'error');
+        }
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    if (micBtn) micBtn.addEventListener('click', toggleRecording);
+
+    chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+}
+
+setupChat();
+setInterval(fetchNotifications, 5000);
+
+// --- Cost Tab Logic ---
+async function refreshCost() {
+    try {
+        const response = await fetch('/admin/budget', { headers: { 'Authorization': getAuthToken() } });
+        const data = await response.json();
+
+        if (data.ok) {
+            const spend = data.current_spend.toFixed(4);
+            const limit = data.daily_limit_usd.toFixed(2);
+            const percent = data.percent_used.toFixed(1);
+
+            document.getElementById('costDisplay').innerText = '$' + spend;
+            document.getElementById('limitDisplay').innerText = 'Limit: $' + limit;
+            document.getElementById('percentDisplay').innerText = percent + '%';
+
+            const bar = document.getElementById('costBar');
+            bar.style.width = Math.min(100, data.percent_used) + '%';
+
+            if (data.percent_used > 90) bar.style.background = 'var(--accent-warn)';
+            else if (data.percent_used > 100) bar.style.background = 'var(--accent-error)';
+            else bar.style.background = 'var(--success)';
+        }
+    } catch (e) {
+        console.error("Failed to fetch cost", e);
+    }
+}
+
+// Auto-refresh when tab is shown
+document.querySelectorAll('.tab-link[data-tab="cost"]').forEach(btn => {
+    btn.addEventListener('click', () => setTimeout(refreshCost, 100)); // Small delay for DOM
+});
+
+// Helper for auth if not defined globally (it likely is or hardcoded, but let's be safe)
+function getAuthToken() {
+    return `Bearer ${localStorage.getItem('router_auth_token') || prompt("🔐 Auth Token Required:") || ""}`;
+}
+
+// --- Smart Config Logic ---
+async function runSmartConfig() {
+    const input = document.getElementById('config-instruction').value;
+    if (!input.trim()) return;
+
+    const btn = document.getElementById('btn-smart-config');
+    const log = document.getElementById('smart-config-log');
+
+    btn.disabled = true;
+    btn.innerHTML = "🤖 Processing...";
+    log.innerText = "🚀 Asking Agent to edit config... (This takes ~30s)\n";
+
+    try {
+        const response = await fetch('/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': getAuthToken()
+            },
+            body: JSON.stringify({
+                model: "agent:mcp",
+                messages: [
+                    {
+                        role: "system",
+                        content: `You are the Antigravity Config Manager. You must edit 'ai/config/config.yaml'.
                         
                         SAFETY RULES:
                         1. NEVER use 'write_to_file' to overwrite the file. It causes data loss.
@@ -1688,84 +1687,84 @@ my-server-name:
                            b. Identify the exact block to change.
                            c. Use 'replace_file_content' to swap ONLY that block.
                            d. Run './manage.sh restart-agent'.`
-                        },
-                        { role: "user", content: "Instruction: " + input }
-                    ]
-                })
-            });
+                    },
+                    { role: "user", content: "Instruction: " + input }
+                ]
+            })
+        });
 
-            const data = await response.json();
-            if (data.choices && data.choices[0]) {
-                log.innerText += "\n✅ Done! Agent says:\n" + data.choices[0].message.content;
-                loadConfigFile(); // Refresh view
-            } else {
-                log.innerText += "\n❌ Error: " + JSON.stringify(data);
-            }
-        } catch (e) {
-            log.innerText += "\n❌ Network Error: " + e.message;
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = "✨ Run Smart Config";
+        const data = await response.json();
+        if (data.choices && data.choices[0]) {
+            log.innerText += "\n✅ Done! Agent says:\n" + data.choices[0].message.content;
+            loadConfigFile(); // Refresh view
+        } else {
+            log.innerText += "\n❌ Error: " + JSON.stringify(data);
         }
+    } catch (e) {
+        log.innerText += "\n❌ Network Error: " + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = "✨ Run Smart Config";
     }
+}
 
-    async function loadConfigFile() {
-        editor.value = "Loading...";
-        try {
-            const res = await fetch('/admin/config/yaml', { headers: { 'Authorization': getAuthToken() } });
-            const data = await res.json();
-            if (data.ok) {
-                editor.value = data.content;
-            } else {
-                editor.value = "Error loading config: " + data.error;
-            }
-        } catch (e) {
-            editor.value = "Failed to fetch config: " + e.message;
+async function loadConfigFile() {
+    editor.value = "Loading...";
+    try {
+        const res = await fetch('/admin/config/yaml', { headers: { 'Authorization': getAuthToken() } });
+        const data = await res.json();
+        if (data.ok) {
+            editor.value = data.content;
+        } else {
+            editor.value = "Error loading config: " + data.error;
         }
+    } catch (e) {
+        editor.value = "Failed to fetch config: " + e.message;
     }
+}
 
-    window.resumeIngestion = async () => {
-        try {
-            const resp = await fetch('/admin/ingestion/resume', { method: 'POST' });
-            if (resp.ok) {
-                showNotification('Resuming ingestion...');
-                fetchSystemData();
-            } else {
-                showNotification('Failed to resume: ' + (await resp.text()));
-            }
-        } catch (e) {
-            showNotification('Network error while resuming.');
+window.resumeIngestion = async () => {
+    try {
+        const resp = await fetch('/admin/ingestion/resume', { method: 'POST' });
+        if (resp.ok) {
+            showNotification('Resuming ingestion...');
+            fetchSystemData();
+        } else {
+            showNotification('Failed to resume: ' + (await resp.text()));
         }
-    };
+    } catch (e) {
+        showNotification('Network error while resuming.');
+    }
+};
 
-    window.pauseIngestion = async () => {
-        try {
-            const resp = await fetch('/admin/ingestion/pause', { method: 'POST' });
-            if (resp.ok) {
-                showNotification('Pausing ingestion...');
-                fetchSystemData();
-            } else {
-                showNotification('Failed to pause: ' + (await resp.text()));
-            }
-        } catch (e) {
-            showNotification('Network error while pausing.');
+window.pauseIngestion = async () => {
+    try {
+        const resp = await fetch('/admin/ingestion/pause', { method: 'POST' });
+        if (resp.ok) {
+            showNotification('Pausing ingestion...');
+            fetchSystemData();
+        } else {
+            showNotification('Failed to pause: ' + (await resp.text()));
         }
-    };
+    } catch (e) {
+        showNotification('Network error while pausing.');
+    }
+};
 
-    window.clearAndResumeIngestion = async () => {
-        try {
-            const resp = await fetch('/admin/ingestion/clear-and-resume', { method: 'POST' });
-            const data = await resp.json();
-            if (data.ok) {
-                showNotification('Problem file cleared. Resuming...');
-                fetchSystemData();
-            } else {
-                showNotification('Failed: ' + (data.error || data.message));
-            }
-        } catch (e) {
-            showNotification('Network error during cleanup.');
+window.clearAndResumeIngestion = async () => {
+    try {
+        const resp = await fetch('/admin/ingestion/clear-and-resume', { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+            showNotification('Problem file cleared. Resuming...');
+            fetchSystemData();
+        } else {
+            showNotification('Failed: ' + (data.error || data.message));
         }
-    };
+    } catch (e) {
+        showNotification('Network error during cleanup.');
+    }
+};
 });
 
 // --- Breaker Management ---
