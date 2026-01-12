@@ -43,7 +43,9 @@ start_app() {
   cd "$ROOT_DIR"
   load_env
   ensure_path
+  
   RELOAD="--reload --reload-exclude 'logs/*' --reload-exclude '.gemini/*'" # in development (set DEV_MODE=1 to enable)
+  
   if [ "${DEV_MODE:-0}" = "1" ]; then
     exec "$VENV_PYTHON" -m uvicorn $RELOAD "${UVICORN_ARGS[@]}"
   else
@@ -56,9 +58,20 @@ case "${1:-start}" in
     start_app
     ;;
   restart)
-    # naive restart: kill existing uvicorn on 5460 if present, then start
-    if lsof -i :5460 -sTCP:LISTEN >/dev/null 2>&1; then
-      kill -9 "$(lsof -t -i :5460 -sTCP:LISTEN)" >/dev/null 2>&1 || true
+    # Clean up zombies and existing processes before restart
+    ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+    if [ -f "$ROOT_DIR/bin/kill_zombies.sh" ]; then
+      "$ROOT_DIR/bin/kill_zombies.sh"
+      sleep 1
+    else
+      # Fallback: just kill processes on port 5460
+      if lsof -i :5460 -sTCP:LISTEN >/dev/null 2>&1; then
+        kill -9 "$(lsof -t -i :5460 -sTCP:LISTEN)" >/dev/null 2>&1 || true
+      fi
+      # Also kill by process name
+      pkill -9 -f "python3 -m agent_runner.main" 2>/dev/null || true
+      pkill -9 -f "uvicorn agent_runner.main" 2>/dev/null || true
+      sleep 1
     fi
     start_app
     ;;

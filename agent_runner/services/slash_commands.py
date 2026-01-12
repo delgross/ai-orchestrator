@@ -47,8 +47,8 @@ class SlashCommandProcessor:
         response_content = None
         
         # --- DYNAMIC TRIGGER REGISTRY (The New Control Plane) ---
-        from agent_runner.registry import SystemRegistry
-        triggers = SystemRegistry.get_all_triggers()
+        from common.sovereign import get_sovereign_triggers
+        triggers = get_sovereign_triggers()
         
         words_in_msg = content.split()
         
@@ -172,15 +172,21 @@ class SlashCommandProcessor:
                 
                 elif act_type == "switch_mode":
                     # --- STATE TRANSITION ---
-                    # action_data: {"mode": "coding"}
+                    # action_data: {"mode": "coding", "clear_context": true}
                     tgt_mode = act_data.get("mode") if isinstance(act_data, dict) else str(act_data)
+                    clear_context = act_data.get("clear_context", False) if isinstance(act_data, dict) else False
+                    
                     if tgt_mode:
                         self.state.active_mode = tgt_mode
-                        # TODO: We might want to clear context or load a new prompt?
-                        # For now, just setting the state flag is enough for the Trigger System.
+                        
+                        # Clear context if requested
+                        if clear_context:
+                            messages = []  # Clear conversation history
+                            logger.info(f"Context cleared for mode switch to {tgt_mode}")
+                        
                         return messages, {
                             "role": "assistant",
-                            "content": f"🔄 Switched to **{tgt_mode.upper()}** Mode."
+                            "content": f"🔄 Switched to **{tgt_mode.upper()}** Mode." + (" (Context cleared)" if clear_context else "")
                         }
                     else:
                         return messages, {"role": "assistant", "content": "❌ Invalid Mode Transition: No mode specified."}
@@ -212,6 +218,39 @@ class SlashCommandProcessor:
             # Actually, we can return a special signal, but returning a response is safer.
             # Ideally the caller handles filtering.
             response_content = "🧹 Context Cleared (Simulated). Start a new topic."
+        elif cmd == "/registry":
+            # /registry <action> <target> <value>
+            # e.g. /registry list models
+            # e.g. /registry get policy:internet
+            # e.g. /registry set policy:internet local_only
+            
+            sub_parts = args.split(" ", 2)
+            action = sub_parts[0] if len(sub_parts) > 0 else "list"
+            target = sub_parts[1] if len(sub_parts) > 1 else None
+            val = sub_parts[2] if len(sub_parts) > 2 else None
+            
+            from agent_runner.tools.registry_tool import tool_registry_manage
+            res = await tool_registry_manage(self.state, action, target, val)
+            
+            if res.get("ok"):
+                if action == "list":
+                    # Pretty Print
+                    data = res.get("data", {})
+                    sec = res.get("section", "unknown")
+                    count = res.get("count", 0)
+                    response_content = f"### 🗂️ Registry: {sec.upper()} ({count})\n"
+                    response_content += "| Key | Value |\n|---|---|\n"
+                    for k, v in data.items():
+                         response_content += f"| `{k}` | `{v}` |\n"
+                elif action == "get":
+                    response_content = f"✅ **{res.get('key')}** = `{res.get('value')}`\n*(Source: {res.get('source')})*"
+                elif action == "set":
+                    response_content = f"✏️ {res.get('message')}"
+                else:
+                    response_content = str(res)
+            else:
+                response_content = f"❌ Registry Error: {res.get('error')}"
+
         else:
             # Unknown command -> Pass through to LLM? Or Warn?
             # User expectation: If I type /foo and it's not handled, maybe I meant it for the AI?
@@ -286,7 +325,6 @@ class SlashCommandProcessor:
         try:
             with open(target_path, "w") as f:
                 f.write(last_assist.get("content", ""))
-            return f"💾 Last reply saved to: `saved_chats/{filename}`"
             return f"💾 Last reply saved to: `saved_chats/{filename}`"
 
     async def _cmd_shell_passthrough(self, command: str) -> str:

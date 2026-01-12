@@ -206,7 +206,7 @@ async def handle_mcp_message(session_id: str, message: Dict[str, Any], headers: 
             
             try:
                 # Execute
-                result_raw = await engine.execute_tool_call(tool_call)
+                result_raw = await engine.execute_tool_call(tool_call, user_query="")
                 
                 # Extract Result Content
                 # Engine returns: { result: ... } or { error ... } or raw value

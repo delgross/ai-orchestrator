@@ -1,3 +1,0 @@
-Starting Test...
-MOCK MEMORY: Storing (TestDog, has_owner, VerifyUser)
-SUCCESS

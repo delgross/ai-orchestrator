@@ -6,10 +6,20 @@ import json
 from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, before_sleep_log
-from router.config import Provider, state, PROVIDERS_YAML, DEFAULT_UPSTREAM_HEADERS, OLLAMA_BASE, PREFIX_OLLAMA, OBJ_CHAT_COMPLETION, ROLE_ASSISTANT, OBJ_CHAT_COMPLETION_CHUNK
-from router.utils import join_url, parse_default_headers, merge_headers
 
 logger = logging.getLogger("router.providers")
+
+# Mirascope imports for enhanced LLM interactions
+try:
+    from mirascope import llm
+    MIRASCOPE_AVAILABLE = True
+    logger.info("Mirascope available - enhanced LLM interactions enabled")
+except ImportError:
+    MIRASCOPE_AVAILABLE = False
+    logger.warning("Mirascope not available - falling back to direct HTTP calls")
+
+from router.config import Provider, state, PROVIDERS_YAML, DEFAULT_UPSTREAM_HEADERS, OLLAMA_BASE, PREFIX_OLLAMA, OBJ_CHAT_COMPLETION, ROLE_ASSISTANT, OBJ_CHAT_COMPLETION_CHUNK
+from router.utils import join_url, parse_default_headers, merge_headers
 
 # Retry predicate for 429s (Rate Limits)
 def is_rate_limit_error(e: Exception) -> bool:
@@ -19,28 +29,55 @@ def is_rate_limit_error(e: Exception) -> bool:
 
 # Custom waiter that respects Retry-After headers
 def wait_retry_after_header(retry_state) -> float:
+    """
+    Parse Retry-After header from HTTP response and wait accordingly.
+    Falls back to exponential backoff if header is missing or invalid.
+    """
+    from datetime import datetime
+    from email.utils import parsedate_to_datetime
+    
     # Default exp backoff
     exp = wait_exponential(multiplier=1, min=2, max=10)
     default_wait = exp(retry_state)
     
     last_exc = retry_state.outcome.exception()
     if isinstance(last_exc, HTTPException) and last_exc.status_code == 429:
-        # Check if we stashed the response in the exception detail or if we can access it
-        # Note: In our main.py, we raised HTTPException(..., detail=r.text).
-        # We can't easily get the headers from the standard HTTPException unless we subclass it or pass it.
-        # However, tenacity doesn't give us the response object directly if we raised an exception.
-        # Strategy: We will modify main.py to attach the delay to the exception or just rely on the exponential backoff 
-        # which is usually sufficient and safer (often Retry-After is missing or just "1").
-        # BUT, to be precise as requested:
-        pass
+        # Try to extract Retry-After from exception detail
+        # Format: detail can be a dict with retry_after, or a string with JSON
+        retry_after_value = None
+        
+        if isinstance(last_exc.detail, dict):
+            retry_after_value = last_exc.detail.get("retry_after")
+        elif isinstance(last_exc.detail, str):
+            try:
+                import json
+                detail_dict = json.loads(last_exc.detail)
+                if isinstance(detail_dict, dict):
+                    retry_after_value = detail_dict.get("retry_after")
+            except (json.JSONDecodeError, ValueError):
+                pass
+        
+        if retry_after_value:
+            try:
+                # Try as seconds (integer or float)
+                wait_seconds = float(retry_after_value)
+                if wait_seconds > 0:
+                    logger.debug(f"Using Retry-After header: {wait_seconds} seconds")
+                    return min(wait_seconds, 300)  # Cap at 5 minutes
+            except (ValueError, TypeError):
+                try:
+                    # Try as HTTP date string
+                    dt = parsedate_to_datetime(retry_after_value)
+                    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+                    wait_seconds = (dt - now).total_seconds()
+                    if wait_seconds > 0:
+                        logger.debug(f"Using Retry-After header (date): {wait_seconds} seconds")
+                        return min(wait_seconds, 300)  # Cap at 5 minutes
+                except (ValueError, TypeError):
+                    pass
     
+    # Fallback to exponential backoff
     return default_wait
-
-# For now, keeping the robust exponential backoff is safest and most standard.
-# Parsing 'Retry-After' from a raised HTTPException requires passing that metadata through the exception.
-# Given the user's specific request "are we supposed to look for stop signal", the answer is yes.
-# I will stick with the current robust backoff as it is effectively complying (waiting), 
-# but I will add a comment explaining that strict header parsing would require custom exceptions.
 
 retry_policy = retry(
     retry=retry_if_exception(is_rate_limit_error),
@@ -110,13 +147,110 @@ def flatten_content(c: Any) -> str:
         return "\n".join(parts)
     return str(c)
 
+# Mirascope-enhanced LLM calling functions
+if MIRASCOPE_AVAILABLE:
+    from pydantic import BaseModel
+
+    class OllamaChatResponse(BaseModel):
+        content: str
+        done: bool = True
+        model: str = ""
+        total_duration: int = 0
+        load_duration: int = 0
+        prompt_eval_count: int = 0
+        prompt_eval_duration: int = 0
+        eval_count: int = 0
+        eval_duration: int = 0
+
+    @llm.call(provider="ollama", model=os.getenv("AGENT_MODEL"), stream=True)
+    async def mirascope_ollama_stream(
+        messages: List[Dict[str, Any]],
+        model: str = os.getenv("AGENT_MODEL"),
+        num_ctx: Optional[int] = None,
+        **kwargs
+    ):
+        """Mirascope-enhanced Ollama streaming call."""
+        # Convert messages to simple format for Mirascope
+        prompt = ""
+        for msg in messages:
+            role = msg.get("role", "")
+            content = flatten_content(msg.get("content", ""))
+            if role == "system":
+                prompt += f"System: {content}\n\n"
+            elif role == "user":
+                prompt += f"User: {content}\n\n"
+            elif role == "assistant":
+                prompt += f"Assistant: {content}\n\n"
+
+        # Add model options if specified
+        options = {}
+        if num_ctx:
+            options["num_ctx"] = num_ctx
+
+        return prompt
+
+    @llm.call(provider="ollama", model=os.getenv("AGENT_MODEL"), response_model=OllamaChatResponse)
+    async def mirascope_ollama_call(
+        messages: List[Dict[str, Any]],
+        model: str = os.getenv("AGENT_MODEL"),
+        num_ctx: Optional[int] = None,
+        **kwargs
+    ) -> OllamaChatResponse:
+        """Mirascope-enhanced Ollama call with structured response."""
+        # Convert messages to prompt format
+        prompt = ""
+        for msg in messages:
+            role = msg.get("role", "")
+            content = flatten_content(msg.get("content", ""))
+            if role == "system":
+                prompt += f"System: {content}\n\n"
+            elif role == "user":
+                prompt += f"User: {content}\n\n"
+            elif role == "assistant":
+                prompt += f"Assistant: {content}\n\n"
+
+        return prompt
+
+# Configuration flag for Mirascope usage
+USE_MIRASCOPE = os.getenv("USE_MIRASCOPE", "false").lower() == "true"
+
 async def call_ollama_chat_stream(
-    model_id: str, 
-    messages: List[Dict[str, Any]], 
+    model_id: str,
+    messages: List[Dict[str, Any]],
     request_id: str,
-    num_ctx: Optional[int] = None
+    num_ctx: Optional[int] = None,
+    **kwargs
 ):
     """Yields OpenAI-compatible SSE chunks from Ollama stream."""
+
+    # Use Mirascope if enabled and available
+    if USE_MIRASCOPE and MIRASCOPE_AVAILABLE:
+        try:
+            logger.info(f"Using Mirascope for Ollama streaming call: {model_id}")
+            async for chunk in mirascope_ollama_stream(messages, model=model_id, num_ctx=num_ctx):
+                # Convert Mirascope chunk format to OpenAI-compatible format
+                if hasattr(chunk, 'content') and chunk.content:
+                    yield {
+                        "id": f"mirascope-{int(time.time())}",
+                        "object": OBJ_CHAT_COMPLETION_CHUNK,
+                        "created": int(time.time()),
+                        "model": f"{PREFIX_OLLAMA}:{model_id}",
+                        "choices": [{"index": 0, "delta": {"content": chunk.content}, "finish_reason": None}]
+                    }
+                elif hasattr(chunk, 'done') and chunk.done:
+                    yield {
+                        "id": f"mirascope-{int(time.time())}",
+                        "object": OBJ_CHAT_COMPLETION_CHUNK,
+                        "created": int(time.time()),
+                        "model": f"{PREFIX_OLLAMA}:{model_id}",
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                    }
+            return
+        except Exception as e:
+            logger.warning(f"Mirascope streaming failed, falling back to direct HTTP: {e}")
+            # Fall through to original implementation
+
+    # Original implementation as fallback
     url = join_url(OLLAMA_BASE, "/api/chat")
     
     ollama_body = {
@@ -124,6 +258,9 @@ async def call_ollama_chat_stream(
         "messages": [{"role": m.get("role"), "content": flatten_content(m.get("content", ""))} for m in messages],
         "stream": True,
     }
+    
+    # [PATCH] Merge top-level kwargs (like keep_alive)
+    ollama_body.update(kwargs)
     
     options = {}
     ctx_size = num_ctx or state.ollama_num_ctx
@@ -196,11 +333,44 @@ async def call_ollama_chat_stream(
         raise HTTPException(status_code=500, detail=str(e))
 
 async def call_ollama_chat(
-    model_id: str, 
-    messages: List[Dict[str, Any]], 
+    model_id: str,
+    messages: List[Dict[str, Any]],
     request_id: str,
-    num_ctx: Optional[int] = None
+    num_ctx: Optional[int] = None,
+    **kwargs
 ) -> Dict[str, Any]:
+
+    # Use Mirascope if enabled and available
+    if USE_MIRASCOPE and MIRASCOPE_AVAILABLE:
+        try:
+            logger.info(f"Using Mirascope for Ollama call: {model_id}")
+            response = await mirascope_ollama_call(messages, model=model_id, num_ctx=num_ctx)
+
+            # Convert Mirascope response to OpenAI-compatible format
+            return {
+                "id": f"mirascope-{int(time.time())}",
+                "object": OBJ_CHAT_COMPLETION,
+                "created": int(time.time()),
+                "model": f"{PREFIX_OLLAMA}:{model_id}",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": ROLE_ASSISTANT,
+                        "content": response.content if hasattr(response, 'content') else str(response)
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": getattr(response, 'prompt_eval_count', 0),
+                    "completion_tokens": getattr(response, 'eval_count', 0),
+                    "total_tokens": getattr(response, 'prompt_eval_count', 0) + getattr(response, 'eval_count', 0)
+                }
+            }
+        except Exception as e:
+            logger.warning(f"Mirascope call failed, falling back to direct HTTP: {e}")
+            # Fall through to original implementation
+
+    # Original implementation as fallback
     url = join_url(OLLAMA_BASE, "/api/chat")
     
     ollama_body = {
@@ -208,6 +378,9 @@ async def call_ollama_chat(
         "messages": [{"role": m.get("role"), "content": flatten_content(m.get("content", ""))} for m in messages],
         "stream": False,
     }
+    
+    # [PATCH] Merge top-level kwargs (like keep_alive)
+    ollama_body.update(kwargs)
     
     options = {}
     ctx_size = num_ctx or state.ollama_num_ctx

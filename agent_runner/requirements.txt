@@ -8,6 +8,10 @@ httpx>=0.25.0
 
 # Configuration
 pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Async file I/O
+aiofiles>=23.0.0
 
 # Optional but recommended
 websockets>=12.0  # For WebSocket MCP server support

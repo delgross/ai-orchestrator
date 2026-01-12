@@ -27,6 +27,7 @@ class TaskType(Enum):
     PERIODIC = "periodic"  # Run every N seconds
     SCHEDULED = "scheduled"  # Cron-like scheduling
     ONCE = "once"  # Run once after delay
+    MONITOR = "monitor"  # Health monitoring tasks
 
 
 class TaskPriority(Enum):
@@ -65,6 +66,7 @@ class Task:
     last_duration: Optional[float] = None  # Actual duration of last run
     running: bool = False  # Whether task is currently executing
     min_tempo: Optional[Any] = None # Minimum Tempo required to run (e.g. Tempo.REFLECTIVE)
+    time_of_day: Optional[str] = None  # Time-of-day requirement: "NIGHT" or None
 
 
 class BackgroundTaskManager:
@@ -137,6 +139,7 @@ class BackgroundTaskManager:
         max_retries: int = 3,
         retry_delay: float = 60.0,
         min_tempo: Optional[Any] = None,
+        time_of_day: Optional[str] = None,
     ) -> None:
         """
         Register a background task.
@@ -151,6 +154,7 @@ class BackgroundTaskManager:
             idle_only: Whether to only run when system is idle (Deprecated: use min_tempo)
             priority: Task priority (critical, high, medium, low, background)
             min_tempo: Minimum Tempo required (default: None)
+            time_of_day: Time-of-day requirement: "NIGHT" or None (default: None)
             estimated_duration: Estimated duration in seconds
             dependencies: List of task names that must complete first
             description: Human-readable description
@@ -158,7 +162,8 @@ class BackgroundTaskManager:
             retry_delay: Seconds to wait before retry (default: 60)
         """
         if name in self.tasks:
-            logger.warning(f"Task '{name}' already registered, overwriting")
+            # Benign overwrite in development/restart
+            logger.debug(f"Task '{name}' already registered, overwriting")
         
         # Determine task type
         if interval is not None:
@@ -186,15 +191,18 @@ class BackgroundTaskManager:
             max_retries=max_retries,
             retry_delay=retry_delay,
             min_tempo=min_tempo,
+            time_of_day=time_of_day,
         )
         # Apply extra kwargs if we didn't add to init yet (safe approach) or update object
         # Actually better to just update the object after init since we don't want to break signature of register unless we fully updated it
         # But we can update signature of register above, let's just do it cleanly.
         
         self.tasks[name] = task
+        tt_val = task_type.value if hasattr(task_type, "value") else str(task_type)
+        p_val = priority.value if hasattr(priority, "value") else str(priority)
         logger.info(
             f"Registered background task: {name} "
-            f"({task_type.value}, priority={priority.value}, idle_only={idle_only})"
+            f"({tt_val}, priority={p_val}, idle_only={idle_only})"
         )
         
         # If manager is already running, start the task immediately
@@ -340,15 +348,11 @@ class BackgroundTaskManager:
             logger.debug(f"Skipping idle-only task '{task.name}': System not idle")
             return
 
-        # Check Tempo (New Platform Feature)
+        # Check Tempo (Idle-based requirement)
         if task.min_tempo:
             from agent_runner.agent_runner import get_shared_state
-            # Map Tempo Enum to integer for comparison if needed, or assume Ordered Enum
-            # But Python Enums aren't ordered by default unless IntEnum.
-            # Let's map explicitly for safety: FOCUSED=0, ALERT=1, REFLECTIVE=2, DEEP=3
-            
             state = get_shared_state()
-            current_tempo = state.get_current_tempo()
+            current_tempo = await state.get_current_tempo()
             
             tempo_values = {
                 "FOCUSED": 0,
@@ -357,7 +361,7 @@ class BackgroundTaskManager:
                 "DEEP": 3
             }
             
-            # handle if min_tempo is string or enum
+            # Handle if min_tempo is string or enum
             req_val = -1
             if hasattr(task.min_tempo, "name"):
                 req_val = tempo_values.get(task.min_tempo.name, 99)
@@ -371,6 +375,18 @@ class BackgroundTaskManager:
                 if task.priority != TaskPriority.BACKGROUND:
                      logger.debug(f"Skipping task '{task.name}': Current Tempo {current_tempo.name} < Min Tempo {task.min_tempo}")
                 return
+        
+        # Check time of day (e.g., NIGHT)
+        if task.time_of_day:
+            from agent_runner.agent_runner import get_shared_state
+            state = get_shared_state()
+            
+            if task.time_of_day == "NIGHT":
+                if not state.is_nighttime():
+                    if task.priority != TaskPriority.BACKGROUND:
+                        logger.debug(f"Skipping task '{task.name}': Not nighttime")
+                    return
+            # Can add more time_of_day options here (e.g., "DAY", "MORNING", etc.)
         
         start_time = time.time()
         try:
@@ -475,8 +491,9 @@ class BackgroundTaskManager:
                                 "category": "task"
                             }
                         )
-                except Exception:
-                    pass  # Don't let notification errors break task execution
+                except Exception as notify_err:
+                    logger.warning(f"Failed to send task failure notification: {notify_err}", exc_info=True)
+                    # Don't let notification errors break task execution, but log them
             
             logger.error(f"Task '{task.name}' failed: {e}", exc_info=True)
             
@@ -577,8 +594,11 @@ class BackgroundTaskManager:
                 # 2. Load each file as a potential task
                 for file_path in current_files:
                     try:
-                        with open(file_path, "r") as f:
-                            task_config = yaml.safe_load(f)
+                        # Use async file I/O
+                        import aiofiles
+                        async with aiofiles.open(file_path, "r") as f:
+                            content = await f.read()
+                            task_config = yaml.safe_load(content)
                             
                         if not task_config:
                             continue
@@ -616,7 +636,8 @@ class BackgroundTaskManager:
                 logger.error(f"Task scanner loop error: {e}")
             
             # Scan every 60 seconds
-            await asyncio.sleep(60)
+            from agent_runner.constants import SLEEP_WATCHDOG
+            await asyncio.sleep(SLEEP_WATCHDOG)
 
     async def start(self) -> None:
         """Start all registered tasks."""
@@ -742,7 +763,7 @@ class BackgroundTaskManager:
 _task_manager: Optional[BackgroundTaskManager] = None
 
 
-from agent_runner.registry import ServiceRegistry
+from agent_runner.service_registry import ServiceRegistry
 
 def get_task_manager() -> BackgroundTaskManager:
     """Get the global task manager instance."""
@@ -756,3 +777,173 @@ def get_task_manager() -> BackgroundTaskManager:
     return _task_manager
 
 
+# MEMORY HEALTH MONITORING TASK
+async def memory_health_monitor():
+    """
+    Background task to monitor memory server health and stability.
+    Attempts recovery if instability is detected.
+    """
+    try:
+        from agent_runner.agent_runner import get_shared_state
+        from agent_runner.service_registry import ServiceRegistry
+
+        state = get_shared_state()
+        if not state or not hasattr(state, 'memory') or not state.memory:
+            logger.debug("Memory health monitor: No memory server to monitor")
+            return
+
+        memory = state.memory
+        was_unstable = getattr(state, 'memory_unstable', False)
+
+        # Quick connectivity test
+        try:
+            test_result = await memory._execute_query("INFO FOR DB;")
+            connection_healthy = test_result is not None
+
+            if connection_healthy and was_unstable:
+                # Memory has recovered from instability
+                logger.info("Memory health monitor: Connection restored, clearing instability flag")
+                state.memory_unstable = False
+                # Could trigger MCP reload here if needed
+            elif not connection_healthy and not was_unstable:
+                # Memory has become unstable
+                logger.warning("Memory health monitor: Connection lost, marking as unstable")
+                state.memory_unstable = True
+                # Could trigger fallback mode here
+
+        except Exception as e:
+            if not was_unstable:
+                logger.warning(f"Memory health monitor: Connection test failed: {e}")
+                state.memory_unstable = True
+
+    except Exception as e:
+        logger.error(f"Memory health monitor task failed: {e}")
+
+
+# Register memory health monitoring task
+_memory_monitor_task = Task(
+    name="memory_health_monitor",
+    task_type=TaskType.MONITOR,
+    func=memory_health_monitor,
+    interval=30.0,  # Check every 30 seconds
+    enabled=True,
+    priority=TaskPriority.HIGH
+)
+
+
+# SYSTEM HEALTH MONITOR (5s Heartbeat)
+async def system_health_monitor():
+    """
+    Monitor system health every 5 seconds.
+    Updates in-memory cache and persists to DB on change.
+    """
+    try:
+        from agent_runner.agent_runner import get_shared_state, get_shared_engine
+        import httpx, time, asyncio
+        
+        state = get_shared_state()
+        if not state: return
+
+        # 1. Parallel Checks
+        async def check_rag():
+            try:
+                async with httpx.AsyncClient(timeout=0.2) as client:
+                    resp = await client.get(f"http://localhost:5555/health")
+                    return resp.status_code == 200
+            except: return False
+
+        async def check_facts():
+            if not (hasattr(state, "memory") and state.memory and state.memory.initialized): return "N/A"
+            try:
+                from agent_runner.db_utils import run_query
+                res = await run_query(state, "SELECT count() FROM fact GROUP ALL")
+                if res and isinstance(res, list) and len(res) > 0:
+                    return f"{res[0].get('count', 0):,} Facts"
+            except: pass
+            return "N/A"
+
+        async def check_latency():
+            try:
+                t0 = time.time()
+                url = "http://localhost:11434"
+                if state.config.get("llm_providers", {}).get("ollama", {}).get("base_url"):
+                    url = state.config["llm_providers"]["ollama"]["base_url"]
+                async with httpx.AsyncClient(timeout=0.2) as client:
+                    await client.get(url)
+                return f"{int((time.time()-t0)*1000)}ms"
+            except: return "Timeout"
+
+        rag_online, fact_count, latency = await asyncio.gather(
+            check_rag(), check_facts(), check_latency()
+        )
+
+        # 2. Gather Local State
+        memory_online = hasattr(state, "memory") and state.memory and state.memory.initialized
+        
+        engine = get_shared_engine()
+        mcp_count = len(state.mcp_servers)
+        mcp_tools = sum(len(tools) for tools in engine.executor.mcp_tool_cache.values()) if engine else 0
+        
+        internet = getattr(state, "internet_available", True) # Default true if unknown
+        
+        open_breakers = []
+        if hasattr(state, "mcp_circuit_breaker"):
+             for name, breaker in state.mcp_circuit_breaker.breakers.items():
+                 if breaker.state.value == "open":
+                     open_breakers.append(name)
+
+        # 3. Construct Snapshot
+        snapshot = {
+            "rag_online": rag_online,
+            "memory_online": memory_online,
+            "fact_count": fact_count,
+            "mcp_count": mcp_count,
+            "mcp_tools": mcp_tools,
+            "internet_online": internet,
+            "latency": latency,
+            "open_breakers": open_breakers,
+            "timestamp": time.time() 
+        }
+
+        # 4. Compare & Update
+        current_cache = getattr(state, "system_dashboard_data", {})
+        
+        # Compare critical fields (ignore timestamp/latency small jitters)
+        # We only persist to DB if structural change or significant metric shift?
+        # User said "updated every 5 seconds if any had changed". checking equality strictly.
+        # But latency changes every ms. We should ignore latency for "DB Write" trigger?
+        # Let's say we write if latency bucket changes? or just write. 
+        # Actually user said "if any had changed". 
+        # Let's clean the snapshot for comparison (remove timestamp)
+        
+        snap_cmp = snapshot.copy()
+        del snap_cmp["timestamp"]
+        # Allow latency jitter (e.g. only update if status "Timeout" vs "10ms")
+        # For strict matching, we keep latency. It will update DB almost every 5s. That is acceptable (~17k writes/day). Surreal handles it.
+        
+        old_cmp = current_cache.copy()
+        if "timestamp" in old_cmp: del old_cmp["timestamp"]
+        
+        # Update Cache (Always, for live dashboard)
+        state.system_dashboard_data = snapshot
+        
+        if snap_cmp != old_cmp:
+            # Change detected
+            if hasattr(state, "memory") and state.memory:
+                 from agent_runner.db_utils import run_query
+                 # Persist to system_state
+                 # We use a dedicated item 'dashboard_monitor'
+                 import json
+                 # Create/Update
+                 q = f"""
+                 LET $data = {json.dumps(snapshot)};
+                 UPDATE system_state SET details = $data WHERE item = 'dashboard_monitor';
+                 IF count(SELECT * FROM system_state WHERE item = 'dashboard_monitor') == 0 THEN 
+                    CREATE system_state SET item = 'dashboard_monitor', details = $data 
+                 END;
+                 """
+                 await run_query(state, q)
+                 # logger.debug("Persisted new system dashboard snapshot to DB")
+                 
+    except Exception as e:
+        logger.warning(f"System Health Monitor failed: {e}")

@@ -7,7 +7,8 @@ import io
 import re
 from typing import Any, Dict
 from pathlib import Path
-from agent_runner.registry import ServiceRegistry
+from agent_runner.service_registry import ServiceRegistry
+from common.sovereign import get_sovereign_model
 
 logger = logging.getLogger("agent_runner.rag_helpers")
 
@@ -54,7 +55,9 @@ async def _process_locally(file_path: Path, state: Any, http_client: Any) -> str
             # For now, we load per call. M3 Ultra is fast enough, or we can cache globally if needed.
             # Using 'medium' as a balanced default. 'large' is possible on 256GB RAM.
             try:
-                model = whisper.load_model("medium.en")
+                # [SOVEREIGN] Use centralized STT model
+                stt_model = get_sovereign_model("stt", "medium.en")
+                model = whisper.load_model(stt_model)
                 result = model.transcribe(str(file_path))
                 return result["text"]
             except Exception as e:

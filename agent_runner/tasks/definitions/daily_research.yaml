@@ -1,6 +1,6 @@
 name: daily_research
 type: agent
-enabled: true
+enabled: false
 schedule: "*/24 hours" # Daily # Every 24 hours
 priority: low
 idle_only: true

@@ -11,8 +11,9 @@ logger = logging.getLogger("agent_runner")
 async def call_http_mcp(state: AgentState, server: str, url: str, rpc_body: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
     """HTTP transport with retry logic."""
     client = await state.get_http_client()
-    max_retries = 3
-    base_delay = 0.1
+    from agent_runner.constants import DEFAULT_RETRY_ATTEMPTS, SLEEP_BRIEF_BACKOFF_BASE
+    max_retries = DEFAULT_RETRY_ATTEMPTS
+    base_delay = SLEEP_BRIEF_BACKOFF_BASE
     
     for attempt in range(max_retries):
         try:

@@ -7,9 +7,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-ROUTER_PORT=5455
-AGENT_PORT=5460
-SURREAL_PORT=8000
+# [SOVEREIGN] Retrieve Ports from Registry
+ROUTER_PORT=$(python3 bin/get_config.py network.router_port 5455)
+AGENT_PORT=$(python3 bin/get_config.py network.agent_port 5460)
+SURREAL_PORT=$(python3 bin/get_config.py network.surreal_port 8000)
+RAG_PORT=$(python3 bin/get_config.py network.rag_port 5555)
+
 ROUTER_LABEL="local.ai.router"
 AGENT_LABEL="local.ai.agent_runner"
 SURREAL_LABEL="local.ai.surrealdb"
@@ -18,7 +21,7 @@ AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
 SURREAL_PLIST="$HOME/Library/LaunchAgents/${SURREAL_LABEL}.plist"
 SURREAL_BIN="$HOME/.surrealdb/surreal"
 SURREAL_DATA_DIR="$HOME/ai/agent_data/surreal_db"
-RAG_PORT=5555
+
 RAG_LABEL="local.ai.rag_server"
 RAG_PLIST="$HOME/Library/LaunchAgents/${RAG_LABEL}.plist"
 
@@ -34,6 +37,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Check if a port is in use
@@ -51,7 +55,30 @@ job_loaded() {
 # Check if a service is responding via HTTP
 service_responding() {
   local url=$1
-  curl -sSf "$url" >/dev/null 2>&1
+  local timeout=${2:-2}  # Default 2 second timeout, can be overridden
+  curl -sSf --max-time "$timeout" "$url" >/dev/null 2>&1
+}
+
+# Wait for a service to become healthy
+wait_for_health() {
+  local url=$1
+  local name=$2
+  local max_attempts=${3:-30} # Default 30 attempts (30s)
+  
+  echo -n "⏳ Waiting for $name to be ready..."
+  local attempts=0
+  while [ $attempts -lt $max_attempts ]; do
+    if service_responding "$url" 1; then
+      echo -e "${GREEN} Done.${NC}"
+      return 0
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+    echo -n "."
+  done
+  
+  echo -e "${RED} Timeout!${NC}"
+  return 1
 }
 
 # Get PID using a port
@@ -95,7 +122,7 @@ check_agent() {
     pid=$(get_port_pid "$AGENT_PORT")
   fi
   
-  if service_responding "http://127.0.0.1:$AGENT_PORT/"; then
+  if service_responding "http://127.0.0.1:$AGENT_PORT/health" 3; then
     http_ok=true
   fi
   
@@ -269,18 +296,31 @@ show_status() {
 
 # Start router
 start_router() {
-  if [ -f "$ROUTER_PLIST" ]; then
-    echo "Starting router via launchd..."
-    if ! job_loaded "$ROUTER_LABEL"; then
-      launchctl bootstrap "$DOMAIN" "$ROUTER_PLIST" 2>/dev/null || true
-    fi
-    launchctl kickstart -k "$DOMAIN/$ROUTER_LABEL" 2>/dev/null || true
-    sleep 2
-  else
-    echo -e "${YELLOW}Warning: launchd plist not found at $ROUTER_PLIST${NC}"
-    echo "Run './setup_launchd.sh' first to create plists."
-    return 1
+  # MANUAL MANAGEMENT: Start router directly to avoid cached bytecode issues
+  echo "Starting router manually (no launchd)..."
+  if pgrep -f "uvicorn.*router.*5455" > /dev/null; then
+    echo -e "${GREEN}Router already running${NC}"
+    return 0
   fi
+
+  # Start router in background
+  PYTHONPATH=. nohup python -m uvicorn router.main:app --host 127.0.0.1 --port 5455 --log-level info > logs/router.log 2>&1 &
+  local router_pid=$!
+  echo $router_pid > /tmp/ai_router.pid
+
+  # Wait for startup
+  local attempts=0
+  while [ $attempts -lt 10 ]; do
+    if curl -s http://127.0.0.1:5455/health > /dev/null 2>&1; then
+      echo -e "${GREEN}Router started successfully (PID: $router_pid)${NC}"
+      return 0
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+
+  echo -e "${RED}Router failed to start within 10 seconds${NC}"
+  return 1
 }
 
 # Start agent-runner
@@ -327,40 +367,40 @@ start_surreal() {
 # Stop router
 # Stop router
 stop_router() {
-  local router_status=$(check_router)
-  IFS='|' read -r router_port router_http router_launchd router_pid <<< "$router_status"
-  
-  # 1. Try launchd stop
-  if [ "$router_launchd" = "true" ]; then
-    echo "Stopping router via launchd..."
-    launchctl bootout "$DOMAIN" "$ROUTER_PLIST" 2>/dev/null || true
-    # Wait for it to die (up to 5s)
-    for i in {1..10}; do
-      if ! port_in_use "$ROUTER_PORT"; then break; fi
-      sleep 0.5
-    done
-  fi
-  
-  # 2. Check if still alive (Zombie or Manual Process)
-  if port_in_use "$ROUTER_PORT"; then
-    local current_pid=$(get_port_pid "$ROUTER_PORT")
-    if [ -n "$current_pid" ]; then
-      echo "Process still running (PID: $current_pid). Sending SIGTERM..."
-      kill "$current_pid" 2>/dev/null || true
-      
-      # Wait again
-      for i in {1..6}; do
-        if ! port_in_use "$ROUTER_PORT"; then break; fi
-        sleep 0.5
-      done
-      
-      # 3. Force Kill
-      if port_in_use "$ROUTER_PORT"; then
-        echo "Force killing stuck process..."
-        kill -9 "$current_pid" 2>/dev/null || true
-      fi
+  # MANUAL MANAGEMENT: Stop router directly
+  echo "Stopping router manually..."
+
+  # Check if PID file exists and kill that process
+  if [ -f "/tmp/ai_router.pid" ]; then
+    local saved_pid=$(cat /tmp/ai_router.pid)
+    if kill -0 "$saved_pid" 2>/dev/null; then
+      echo "Stopping router (PID: $saved_pid)..."
+      kill "$saved_pid" 2>/dev/null || true
+      rm -f /tmp/ai_router.pid
+    else
+      rm -f /tmp/ai_router.pid
     fi
   fi
+
+  # Fallback: Kill any router processes
+  local pids=$(pgrep -f "uvicorn.*router.*5455" || true)
+  if [ -n "$pids" ]; then
+    echo "Force killing remaining router processes..."
+    echo "$pids" | xargs kill -9 2>/dev/null || true
+  fi
+
+  # Wait for port to be free
+  local attempts=0
+  while [ $attempts -lt 5 ]; do
+    if ! port_in_use "$ROUTER_PORT"; then
+      echo -e "${GREEN}Router stopped successfully${NC}"
+      return 0
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+
+  echo -e "${RED}Router may still be running${NC}"
 }
 
 # Stop agent-runner
@@ -436,10 +476,64 @@ stop_rag() {
   fi
 }
 
+# Temporarily disable KeepAlive for clean restarts
+disable_keepalive() {
+  local plist=$1
+  if [ -f "$plist" ]; then
+    echo "Temporarily disabling KeepAlive for $plist..."
+    # Remove KeepAlive key temporarily
+    plutil -remove KeepAlive "$plist" 2>/dev/null || true
+    launchctl unload "$plist" 2>/dev/null || true
+    launchctl load "$plist" 2>/dev/null || true
+  fi
+}
+
+# Restore KeepAlive after restart
+restore_keepalive() {
+  local plist=$1
+  if [ -f "$plist" ]; then
+    echo "Restoring KeepAlive for $plist..."
+    plutil -insert KeepAlive -bool YES "$plist" 2>/dev/null || true
+    launchctl unload "$plist" 2>/dev/null || true
+    launchctl load "$plist" 2>/dev/null || true
+  fi
+}
+
 # Start all services
 start_all() {
+# Pre-load all models at startup
+./scripts/preload_models.sh
+
   echo -e "${BLUE}Starting AI Orchestrator services...${NC}\n"
-  
+
+  # CONFIG VALIDATION: Check critical configuration before starting
+  echo -e "${CYAN}🔍 Validating configuration...${NC}"
+  # TEMPORARILY DISABLED FOR PYDANTIC AI TESTING
+  echo -e "${YELLOW}⚠️  Config validation temporarily disabled for Pydantic AI testing${NC}"
+  # if [ -f "scripts/validate_config.py" ]; then
+  #   if ! python3 scripts/validate_config.py; then
+  #     echo -e "${RED}❌ Configuration validation failed. Please fix issues above before starting services.${NC}"
+  #     return 1
+  #   fi
+  # else
+  #   echo -e "${YELLOW}⚠️  Configuration validator not found. Skipping validation.${NC}"
+  # fi
+
+  # OPTIMIZATION: Only clear cache on dev-start, not normal start
+  # Cache clearing is expensive and should only be done when explicitly requested
+  if [[ "${1:-}" == "dev" ]]; then
+    echo -e "${CYAN}🧹 Clearing Python bytecode cache for development...${NC}"
+    if [ -f "scripts/clear_cache.py" ]; then
+      python3 scripts/clear_cache.py > /dev/null 2>&1
+    fi
+  fi
+
+  # Development workflow aliases
+  echo -e "${CYAN}💡 Development aliases available:${NC}"
+  echo -e "  ${GREEN}./manage.sh dev-start${NC}    - Start all services with fresh cache"
+  echo -e "  ${GREEN}./manage.sh dev-debug${NC}   - Start router + agent-runner for debugging"
+  echo -e "  ${GREEN}./manage.sh clear-cache${NC} - Clear cache manually"
+
   local router_status=$(check_router)
   IFS='|' read -r router_port router_http router_launchd router_pid <<< "$router_status"
   
@@ -495,10 +589,83 @@ stop_all() {
 
 # Restart all services
 restart_all() {
+# Pre-load all models at startup
+./scripts/preload_models.sh
+
   echo -e "${BLUE}Restarting AI Orchestrator services...${NC}\n"
+
+  # Create temporary plist files without KeepAlive
+  create_temp_plists
+
+  # Stop all services
   stop_all
   sleep 2
-  start_all
+
+  # Kill any remaining processes
+  ./bin/kill_zombies.sh
+
+  # Start with temp plists (no KeepAlive)
+  start_with_temp_plists
+
+  # Restore original plists with KeepAlive
+  restore_original_plists
+
+  echo ""
+  
+  # Wait for services to actually come up (prevent false negatives in status)
+  wait_for_health "http://127.0.0.1:$ROUTER_PORT/health" "Router" 10 || true
+  wait_for_health "http://127.0.0.1:$AGENT_PORT/health" "Agent Runner" 30 || true  # Agent takes longer (~13s) due to imports
+  
+  sleep 2
+  show_status
+}
+
+# Create temporary plist files without KeepAlive
+create_temp_plists() {
+  echo "Creating temporary plist files without KeepAlive..."
+
+  # Router
+  cp "$ROUTER_PLIST" "${ROUTER_PLIST}.temp"
+  plutil -remove KeepAlive "${ROUTER_PLIST}.temp" 2>/dev/null || true
+
+  # Agent
+  cp "$AGENT_PLIST" "${AGENT_PLIST}.temp"
+  plutil -remove KeepAlive "${AGENT_PLIST}.temp" 2>/dev/null || true
+
+  # SurrealDB
+  cp "$SURREAL_PLIST" "${SURREAL_PLIST}.temp"
+  plutil -remove KeepAlive "${SURREAL_PLIST}.temp" 2>/dev/null || true
+}
+
+# Start services with temporary plists
+start_with_temp_plists() {
+  echo "Starting services with temporary plists (no KeepAlive)..."
+
+  # Load temp plists
+  launchctl load "${ROUTER_PLIST}.temp" 2>/dev/null || true
+  launchctl load "${AGENT_PLIST}.temp" 2>/dev/null || true
+  launchctl load "${SURREAL_PLIST}.temp" 2>/dev/null || true
+
+  # Wait for startup
+  sleep 5
+}
+
+# Restore original plists with KeepAlive
+restore_original_plists() {
+  echo "Restoring original plists with KeepAlive..."
+
+  # Unload temp plists
+  launchctl unload "${ROUTER_PLIST}.temp" 2>/dev/null || true
+  launchctl unload "${AGENT_PLIST}.temp" 2>/dev/null || true
+  launchctl unload "${SURREAL_PLIST}.temp" 2>/dev/null || true
+
+  # Load original plists
+  launchctl load "$ROUTER_PLIST" 2>/dev/null || true
+  launchctl load "$AGENT_PLIST" 2>/dev/null || true
+  launchctl load "$SURREAL_PLIST" 2>/dev/null || true
+
+  # Clean up temp files
+  rm -f "${ROUTER_PLIST}.temp" "${AGENT_PLIST}.temp" "${SURREAL_PLIST}.temp"
 }
 
 # Ensure all services are running (start what's missing)
@@ -628,16 +795,25 @@ case "${1:-status}" in
   unpack) ./bin/restore_brain.sh "${2:-}" ;;
   start-router) start_router; show_status ;;
   stop-router) stop_router; show_status ;;
-  restart-router) 
-    if job_loaded "$ROUTER_LABEL"; then
-      echo "Restarting router via launchd..."
-      launchctl kickstart -k "$DOMAIN/$ROUTER_LABEL" 2>/dev/null || true
-      sleep 2
-    else
-      echo "Router not loaded in launchd, starting..."
-      start_router
-    fi
+  restart-router)
+    echo "Restarting router manually..."
+    stop_router
+    sleep 2
+    start_router
     show_status
+    ;;
+  dev-start) echo "Starting all services with fresh cache..."; start_all dev ;;
+  dev-debug)
+    echo "Starting router + agent-runner for debugging..."
+    python3 scripts/clear_cache.py > /dev/null 2>&1
+    start_surrealdb
+    start_router
+    start_agent
+    show_status
+    ;;
+  clear-cache)
+    echo "Clearing Python bytecode cache..."
+    python3 scripts/clear_cache.py
     ;;
   start-agent) start_agent; show_status ;;
   stop-agent) stop_agent; show_status ;;
@@ -716,6 +892,7 @@ case "${1:-status}" in
   -h|--help|help) usage ;;
   *) echo "Unknown command: $1"; usage; exit 2 ;;
 esac
+
 
 
 

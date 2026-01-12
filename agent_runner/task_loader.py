@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 from pathlib import Path
+from agent_runner.db_utils import run_query
 
 try:
     import yaml # type: ignore[import-untyped]
@@ -114,7 +115,7 @@ async def load_tasks_from_db(state: Any) -> List[Dict[str, Any]]:
         
         # Query all tasks
         query = "SELECT * FROM task_def"
-        results = await memory._execute_query(query)
+        results = await run_query(state, query)
         
         if not results:
             return []
@@ -159,19 +160,32 @@ async def load_tasks_from_db(state: Any) -> List[Dict[str, Any]]:
 
 async def register_tasks_from_config(task_manager: Any, config_data: Optional[Dict[str, Any]] = None, state: Any = None) -> None:
     """
-    Load tasks from config dict AND Sovereign DB, then register them.
+    Load tasks from Sovereign DB (source of truth), with config fallback only if DB is empty.
+    Database is the source of truth - disk is only for bootstrap.
     """
-    # 1. Load from Config (Legacy/Boot)
-    tasks_cfg = load_tasks_from_config(config_data)
-    
-    # 2. Load from DB (Sovereign)
+    # 1. Load from DB (Sovereign Memory - Source of Truth)
     tasks_db = []
-    if state:
+    if state and hasattr(state, "memory") and state.memory:
         tasks_db = await load_tasks_from_db(state)
+    
+    # 2. Only use config/disk if DB is empty (bootstrap scenario)
+    tasks_cfg = []
+    if not tasks_db and config_data:
+        # DB is empty, use config as bootstrap
+        logger.debug("No tasks in database, bootstrapping from config")
+        tasks_cfg = load_tasks_from_config(config_data)
+    elif not tasks_db:
+        # DB is empty and no config_data provided, try disk as last resort
+        logger.info("No tasks in database and no config_data, attempting disk fallback")
+        tasks_cfg = load_tasks_from_config(None)  # Will read from disk if available
         
-    # 3. Merge (DB overrides Config)
+    # 3. Merge (DB takes precedence, config only if DB empty)
     # Using dictionary by name to dedup
-    merged = {t["name"]: t for t in tasks_cfg}
+    merged = {}
+    # First add config tasks (only if DB was empty)
+    for t in tasks_cfg:
+        merged[t["name"]] = t
+    # Then add DB tasks (overrides config)
     for t in tasks_db:
         merged[t["name"]] = t
         
@@ -347,6 +361,7 @@ async def register_tasks_from_config(task_manager: Any, config_data: Optional[Di
                     description=task_config.get("description", f"Agent Task: {name}"),
                     estimated_duration=task_config.get("estimated_duration", 300.0),
                     min_tempo=task_config.get("min_tempo"), # [NEW]
+                    time_of_day=task_config.get("time_of_day"), # [NEW] e.g., "NIGHT"
                 )
 
             logger.info(f"Registered periodic task: {name} ({task_type})")

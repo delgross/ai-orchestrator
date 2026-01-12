@@ -16,6 +16,9 @@ async def reload_mcp():
     # [NEW] Stop all existing MCP processes so we pick up new env/configs
     try:
         await state.cleanup_all_stdio_processes()
+        # [FIX] Add stabilization delay to release OS resources/locks
+        import asyncio
+        await asyncio.sleep(2.0)
     except Exception as e:
         logger.warning(f"Error cleaning up processes during reload: {e}")
         

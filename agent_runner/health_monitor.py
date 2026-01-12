@@ -28,25 +28,52 @@ _http_client: Optional[httpx.AsyncClient] = None
 _state: Optional[Any] = None # Will store AgentState
 
 
-async def check_mcp_server_health(server: str) -> Dict[str, Any]:
-    """Check health of a single MCP server."""
+async def check_mcp_server_health(server: str, timeout: float = 15.0, retries: int = 2) -> Dict[str, Any]:
+    """Actually test server health with lightweight call."""
     cfg = MCP_SERVERS.get(server)
     if not cfg:
-        return {"ok": False, "error": "Server not configured"}
+        return {"ok": False, "error": "Server not configured", "last_check": time.time()}
     
-    scheme = cfg.get("scheme", "http")
+    # For stdio servers, check if process is alive first (lightweight)
+    if cfg.get("type") == "stdio" and _state and server in _state.stdio_processes:
+        proc = _state.stdio_processes[server]
+        if proc.returncode is not None:  # Note: asyncio.subprocess.Process uses returncode, not poll()
+            return {"ok": False, "error": "Process died", "last_check": time.time()}
     
-    # Check circuit breaker status via registry
-    if not _mcp_circuit_breaker.is_allowed(server):
-        status = _mcp_circuit_breaker.get_breaker(server).to_dict()
-        return {
-            "ok": False,
-            "error": "Circuit breaker active",
-            "state": status["state"],
-            "disabled_until": status["disabled_until"],
-        }
-    
-    return {"ok": True, "scheme": scheme}
+    # Actually test server with tools/list (lightweight call)
+    for attempt in range(retries + 1):
+        try:
+            from agent_runner.tools.mcp import tool_mcp_proxy
+            
+            res = await asyncio.wait_for(
+                tool_mcp_proxy(_state, server, "tools/list", {}, bypass_circuit_breaker=True),
+                timeout=timeout
+            )
+            
+            if res.get("ok"):
+                # Also check that server actually has tools (not just responds)
+                tools = res.get("result", {}).get("tools", [])
+                if len(tools) == 0:
+                    return {"ok": False, "error": "Server responds but provides no tools", "last_check": time.time()}
+                return {"ok": True, "last_check": time.time()}
+            
+            # If not last attempt, retry
+            if attempt < retries:
+                await asyncio.sleep(1.0)
+                continue
+                
+            return {"ok": False, "error": res.get("error"), "last_check": time.time()}
+            
+        except asyncio.TimeoutError:
+            if attempt < retries:
+                await asyncio.sleep(1.0)
+                continue
+            return {"ok": False, "error": f"Health check timeout ({timeout}s)", "last_check": time.time()}
+        except Exception as e:
+            if attempt < retries:
+                await asyncio.sleep(1.0)
+                continue
+            return {"ok": False, "error": str(e), "last_check": time.time()}
 
 
 async def test_circuit_breaker_recovery() -> None:
@@ -107,7 +134,7 @@ async def test_circuit_breaker_recovery() -> None:
         logger.info(f"Circuit breaker recovery: {len(failed_recovery)} server(s) still failing: {failed_recovery}")
 
 
-async def check_critical_services() -> None:
+async def check_critical_services() -> None:  # Type hint already present
     """Monitor core services (Router) and trigger self-healing if needed."""
     try:
         # Check Router Health
@@ -210,14 +237,16 @@ async def check_internet_connectivity() -> bool:
     """Check if the system has internet access using multiple reliable targets."""
     # ISOLATION FIX: Use a dedicated, fresh client for connectivity checks.
     # Do NOT reuse the shared app client (_http_client) to avoid pool exhaustion or deadlocks.
-    async def check_target(client, url):
+    async def check_target(client: httpx.AsyncClient, url: str) -> bool:
         try:
             r = await client.head(url, timeout=5.0)
             if r.status_code < 400: return True
-        except: pass
+        except Exception as e:
+            logger.debug(f"Health check failed for {url}: {e}")
         return False
 
     try:
+        # 1. Try Python/HTTPX first
         async with httpx.AsyncClient(timeout=5.0) as private_client:
             targets = [
                 "https://www.google.com",
@@ -226,7 +255,6 @@ async def check_internet_connectivity() -> bool:
                 "https://1.1.1.1"
             ]
             
-            # Concurrent Race: Return True on FIRST success
             tasks = [check_target(private_client, t) for t in targets]
             for f in asyncio.as_completed(tasks):
                 if await f:
@@ -315,15 +343,169 @@ async def health_check_task() -> None:
     # Test circuit breaker recovery (run more frequently for faster recovery)
     await test_circuit_breaker_recovery()
     
-    # Check MCP server health (summary)
-    healthy_servers = 0
-    disabled_servers = []
-    for server in MCP_SERVERS.keys():
-        health = await check_mcp_server_health(server)
-        if health.get("ok"):
-            healthy_servers += 1
+    # Staggered MCP server health checks
+    from agent_runner.constants import CORE_MCP_SERVERS
+    
+    time_since_start = time.time() - _state.system_start_time if _state else 0.0
+    
+    # Startup window: Staggered checks at 5s, 15s, 60s
+    if time_since_start < 60.0:
+        # Determine which startup check we're at
+        if time_since_start < 5.0:
+            return  # Too early, skip
+        elif 5.0 <= time_since_start < 15.0:
+            # First check window (5-15s)
+            check_time = 5.0
+            last_check_key = "_startup_check_5s"
+        elif 15.0 <= time_since_start < 60.0:
+            # Second check window (15-60s)
+            check_time = 15.0
+            last_check_key = "_startup_check_15s"
         else:
-            disabled_servers.append(server)
+            # Third check window (60s)
+            check_time = 60.0
+            last_check_key = "_startup_check_60s"
+        
+        # Check if we've already done this check
+        last_check = getattr(_state, last_check_key, 0.0)
+        if last_check > 0:
+            return  # Already checked at this interval
+        
+        # Mark as checked
+        setattr(_state, last_check_key, time.time())
+        
+        logger.info(f"🔄 Startup health check at {check_time}s ({time_since_start:.0f}s since start)")
+        
+        # Shorter timeout during startup (faster feedback)
+        timeout = 10.0
+        
+        # Check all servers in parallel
+        health_tasks = [
+            check_mcp_server_health(server, timeout=timeout)
+            for server in MCP_SERVERS.keys()
+        ]
+        
+        results = await asyncio.gather(*health_tasks, return_exceptions=True)
+        
+        # Update health status
+        for server, result in zip(MCP_SERVERS.keys(), results):
+            if isinstance(result, Exception):
+                _state.mcp_server_health[server] = {
+                    "healthy": False,
+                    "error": str(result),
+                    "last_check": time.time()
+                }
+            else:
+                _state.mcp_server_health[server] = {
+                    "healthy": result.get("ok", False),
+                    "error": result.get("error") if not result.get("ok") else None,
+                    "last_check": result.get("last_check", time.time()),
+                    "last_success": time.time() if result.get("ok") else _state.mcp_server_health.get(server, {}).get("last_success"),
+                    "last_failure": time.time() if not result.get("ok") else _state.mcp_server_health.get(server, {}).get("last_failure")
+                }
+        
+        # Log summary
+        healthy_count = sum(1 for s in _state.mcp_server_health.values() if s.get("healthy"))
+        logger.info(f"Startup health check ({check_time}s): {healthy_count}/{len(MCP_SERVERS)} servers healthy")
+        
+        # Set variables for compatibility with existing code
+        healthy_servers = healthy_count
+        disabled_servers = [s for s, h in _state.mcp_server_health.items() if not h.get("healthy")]
+        core_disabled_servers = [s for s in disabled_servers if s in CORE_MCP_SERVERS]
+    
+    # Normal operation: Every 60 seconds
+    else:
+        # Check every 60 seconds
+        check_interval = 60.0
+        last_check_key = "_last_normal_health_check"
+        last_check = getattr(_state, last_check_key, 0.0)
+        
+        if time.time() - last_check < check_interval:
+            return  # Skip if checked recently
+        
+        setattr(_state, last_check_key, time.time())
+        
+        logger.debug("Running normal health check (every 60s)")
+        
+        # Normal timeout (15-20s)
+        from agent_runner.constants import CORE_MCP_SERVERS
+        health_tasks = []
+        for server in MCP_SERVERS.keys():
+            timeout = 20.0 if server in CORE_MCP_SERVERS else 15.0
+            health_tasks.append(check_mcp_server_health(server, timeout=timeout))
+        
+        results = await asyncio.gather(*health_tasks, return_exceptions=True)
+        
+        # Update health status
+        for server, result in zip(MCP_SERVERS.keys(), results):
+            if isinstance(result, Exception):
+                _state.mcp_server_health[server] = {
+                    "healthy": False,
+                    "error": str(result),
+                    "last_check": time.time()
+                }
+            else:
+                _state.mcp_server_health[server] = {
+                    "healthy": result.get("ok", False),
+                    "error": result.get("error") if not result.get("ok") else None,
+                    "last_check": result.get("last_check", time.time()),
+                    "last_success": time.time() if result.get("ok") else _state.mcp_server_health.get(server, {}).get("last_success"),
+                    "last_failure": time.time() if not result.get("ok") else _state.mcp_server_health.get(server, {}).get("last_failure")
+                }
+        
+        healthy_count = sum(1 for s in _state.mcp_server_health.values() if s.get("healthy"))
+        logger.info(f"Normal health check: {healthy_count}/{len(MCP_SERVERS)} servers healthy")
+        
+        # Set variables for compatibility with existing code
+        healthy_servers = healthy_count
+        disabled_servers = [s for s, h in _state.mcp_server_health.items() if not h.get("healthy")]
+        from agent_runner.constants import CORE_MCP_SERVERS
+        core_disabled_servers = [s for s in disabled_servers if s in CORE_MCP_SERVERS]
+    
+    # [CORE SERVICE PROTECTION] Automatic recovery for core services
+    if core_disabled_servers and _mcp_circuit_breaker and _state:
+        # Check if enough time has passed since last recovery attempt
+        last_recovery_key = "_core_service_last_recovery"
+        last_recovery = getattr(_state, last_recovery_key, 0.0)
+        now = time.time()
+        
+        if now - last_recovery >= CORE_SERVICE_AUTO_RECOVERY_INTERVAL:
+            logger.info(f"🔄 Attempting automatic recovery for core services: {', '.join(core_disabled_servers)}")
+            setattr(_state, last_recovery_key, now)
+            
+            for server in core_disabled_servers:
+                try:
+                    # Reset circuit breaker to allow retry
+                    _mcp_circuit_breaker.reset(server)
+                    logger.info(f"✅ Reset circuit breaker for core service '{server}' - attempting recovery")
+                    
+                    # Test the server with a lightweight call
+                    from agent_runner.tools.mcp import tool_mcp_proxy
+                    test_result = await tool_mcp_proxy(
+                        _state,
+                        server=server,
+                        tool="tools/list",
+                        arguments={},
+                        bypass_circuit_breaker=False  # Use circuit breaker to track recovery
+                    )
+                    
+                    if test_result.get("ok"):
+                        logger.info(f"✅ Core service '{server}' recovered successfully!")
+                        try:
+                            from common.unified_tracking import track_health_event, EventSeverity
+                            track_health_event(
+                                event="core_service_recovered",
+                                message=f"Core service '{server}' automatically recovered",
+                                severity=EventSeverity.INFO,
+                                component="health_monitor",
+                                metadata={"server": server}
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        logger.warning(f"⚠️ Core service '{server}' recovery test failed: {test_result.get('error', 'Unknown')}")
+                except Exception as e:
+                    logger.error(f"Failed to recover core service '{server}': {e}", exc_info=True)
     
     # Check memory growth
     try:
@@ -357,18 +539,32 @@ async def health_check_task() -> None:
 
     if disabled_servers:
         logger.info(f"MCP server health: {healthy_servers} healthy, {len(disabled_servers)} disabled")
+        # Core service failures are CRITICAL, non-core are HIGH
+        from agent_runner.constants import CORE_MCP_SERVERS
+        has_core_failures = any(s in CORE_MCP_SERVERS for s in disabled_servers)
+        
         # Only notify if there are multiple disabled servers or critical ones
-        if len(disabled_servers) > 1 or "project-memory" in disabled_servers:
+        if len(disabled_servers) > 1 or has_core_failures:
             # Use unified tracking if available
             try:
                 from common.unified_tracking import track_health_event, EventSeverity, EventCategory
-                is_critical = "project-memory" in disabled_servers
+                severity = EventSeverity.CRITICAL if has_core_failures else EventSeverity.HIGH
+                message = f"{len(disabled_servers)} MCP server(s) disabled"
+                if has_core_failures:
+                    core_list = [s for s in disabled_servers if s in CORE_MCP_SERVERS]
+                    message += f" - CRITICAL: Core services down: {', '.join(core_list)}"
+                
                 track_health_event(
                     event="mcp_server_health_issues",
-                    message=f"{len(disabled_servers)} MCP server(s) disabled: {', '.join(disabled_servers)}",
-                    severity=EventSeverity.CRITICAL if is_critical else EventSeverity.HIGH,
+                    message=message,
+                    severity=severity,
                     component="health_monitor",
-                    metadata={"disabled_servers": disabled_servers, "healthy_count": healthy_servers}
+                    metadata={
+                        "disabled_servers": disabled_servers,
+                        "core_disabled": core_disabled_servers,
+                        "healthy_count": healthy_servers,
+                        "has_core_failures": has_core_failures
+                    }
                 )
             except ImportError:
                 # Fallback to old system
@@ -437,8 +633,8 @@ async def check_zombie_processes() -> None:
                         component="health_monitor",
                         metadata={"command": command, "elapsed": etime}
                     )
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error recording command execution: {e}")
 
     except Exception as e:
         logger.debug(f"Zombie check error: {e}")
@@ -492,7 +688,7 @@ async def get_detailed_health_report() -> Dict[str, Any]:
     # [NEW] Access Engine for Tool Registry
     # Use Registry to avoid cycle
     try:
-        from agent_runner.registry import get_shared_engine
+        from agent_runner.agent_runner import get_shared_engine
         engine = get_shared_engine()
         # Ensure executor is initialized
         mcp_tool_cache = getattr(engine.executor, "mcp_tool_cache", {})
@@ -583,7 +779,7 @@ async def get_detailed_health_report() -> Dict[str, Any]:
 
     # 3. Scheduler & Task Awareness [NEW]
     try:
-        from agent_runner.registry import get_task_manager
+        from agent_runner.background_tasks import get_task_manager
         tm = get_task_manager()
         task_status = tm.get_status()
         

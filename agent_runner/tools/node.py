@@ -9,7 +9,7 @@ import shutil
 
 logger = logging.getLogger("tools.node")
 
-async def run_node(state: Any, code: str, dependency_check: bool = True) -> Dict[str, Any]:
+async def run_node(state: Any, code: str, dependency_check: bool = True, cwd: Optional[str] = None) -> Dict[str, Any]:
     """
     Execute a Node.js script.
     
@@ -22,21 +22,16 @@ async def run_node(state: Any, code: str, dependency_check: bool = True) -> Dict
         state: AgentState
         code: JavaScript code to run
         dependency_check: If True, warns about missing node_modules if imports detected (Basic).
+        cwd: Optional working directory path. If not provided, uses agent_fs_root or current directory.
     """
     
-    # 1. Create Isolation (Temp Directory)
-    # We use a temp dir to avoid polluting the workspace unless requested.
-    # TODO: In future, allow running in specific CWD.
-    # For now, we run in a temp dir to be safe "Sandboxed execution".
-    
-    # Actually, for "Sovereign" dev, we often want to run in the PROJECT ROOT to access files.
-    # Let's default to running in a temp file inside the FS_ROOT or CWD 
-    # so we can access project files if we use relative paths.
-    
-    # Safe Strategy: Write script to a .tmp file in CWD, run it, then delete it.
-    cwd = Path(os.getcwd())
-    if hasattr(state, "agent_fs_root"):
-        cwd = state.agent_fs_root 
+    # 1. Determine working directory
+    if cwd:
+        cwd = Path(cwd).resolve()
+    elif hasattr(state, "agent_fs_root"):
+        cwd = state.agent_fs_root
+    else:
+        cwd = Path(os.getcwd()) 
         
     # Ensure CWD exists
     cwd.mkdir(parents=True, exist_ok=True)

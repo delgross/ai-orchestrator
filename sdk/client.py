@@ -120,43 +120,10 @@ class AntigravityClient:
                     except:
                         pass
 
-    def ingest_file(self, file_path: str, kb_id: str = "default") -> Dict[str, Any]:
-        """Upload a file to RAG/Memory."""
-        path = Path(file_path)
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
-            
-        # Check if Gateway supports direct /memory/ingest or if we need to use 'ingest_file' tool
-        # For now, we assume the Gateway has /ingest proxy or logic.
-        # WAIT: Previous analysis said Gateway does NOT have /ingest proxy.
-        # It relies on 'ingest_file' tool or specific routes.
-        # But wait, rag_server.py has /ingest. 
-        # If we use Client pointing to 5455, we need 5455 to route to 5555.
-        # Does 5455 have a route? 
-        # router/routes/rag_proxy.py ONLY had /health.
-        # So we actually CANNOT hit /ingest on 5455 yet unless we add it. 
-        # But the User wants the Stub to "Handle external calls".
-        # So maybe this Client should wrap the "Agent Tool" call?
-        # NO, that's complex.
-        # Recommendation: We SHOULD add the proxy route to Router so this SDK works cleanly.
-        # OR: Client talks to 5555 for ingest?
-        # User explicitly asked "Can the stub be universal... gateway handled through stub".
-        # I will IMPLEMENT the PROXY in Router first? 
-        # No, I'll stick to what exists. 
-        # If 5455 doesn't expose ingest, I'll implement 'ingest_via_tool' logic?
-        # Or I'll point ingest to RAG URL if provided?
-        # Let's target 5455 and assume we will fix the Router to support it, OR use the tool_call_shim.
-        
-        pass 
-        # I actually need to verify if I can ingest via 5455.
-        # If not, I should probably implement the Ingest Proxy in Router to make this SDK true.
-        # But for now, let's just raise NotImplemented or try to use the Tool shim.
-        
-        # Actually, let's implement the 'Tool Shim' approach:
-        # We start a chat, and ask the agent to ingest the file? No, that's heavy.
-        # We likely need to add the route to Router.
-        
-        raise NotImplementedError("Gateway Ingest Proxy not yet configured. Please use RAG port 5555 directly or 'ingest_file' tool.")
+    # ingest_file() removed from public API - use ingest_direct() or 'ingest_file' tool instead
+    # The Gateway (port 5455) does not currently expose an /ingest endpoint.
+    # Use ingest_direct() to target RAG server (port 5555) directly,
+    # or use the 'ingest_file' tool via the agent.
 
     def ingest_direct(self, file_path: str, url: str = "http://localhost:5555") -> Dict[str, Any]:
         """Legacy direct ingest to RAG server (Port 5555)."""

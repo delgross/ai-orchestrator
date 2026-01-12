@@ -16,11 +16,11 @@ from typing import Any, Dict, List, Optional
 import os
 import datetime
 
-# --- CONFIGURATION ---
 # We use the AWQ (4-bit) version of Qwen2.5-VL-72B.
 # Original FP16: ~144GB (Too big for single H100 80GB)
 # AWQ Int4: ~40GB (Fits easily on H100 80GB -> Pure GPU -> Fast)
-MODEL_ID = "Qwen/Qwen2.5-VL-72B-Instruct-AWQ"
+from common.sovereign import get_sovereign_model
+MODEL_ID = get_sovereign_model("cloud_vision", "Qwen/Qwen2.5-VL-72B-Instruct-AWQ")
 
 # --- Uplink Logger Details ---
 def log_uplink(message: str):

@@ -1,0 +1,17 @@
+fastapi
+httpx
+PyYAML
+pydantic
+uvicorn
+python-dotenv
+pytest
+pytest-asyncio
+pytest-mock
+surrealdb>=1.0.7
+python-multipart>=0.0.21
+watchdog
+mcp
+tenacity>=9.1.2
+duckduckgo-search>=8.1.1
+mirascope>=1.0.0
+logfire[fastapi,httpx]>=4.17.0

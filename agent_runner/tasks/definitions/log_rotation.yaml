@@ -1,6 +1,6 @@
 name: system_log_rotation
 type: agent
-enabled: true
+enabled: false
 schedule: "02:00"
 priority: low
 idle_only: true

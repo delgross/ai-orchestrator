@@ -54,6 +54,11 @@ pkill -f "run_router.sh"
 stop_service "RAG Server" "python3 rag_server.py" "5555"
 pkill -f "run_rag_server.sh"
 
+stop_service "System Control" "system_control_server" "8001"
+
+stop_service "SurrealDB" "surreal" "8000"
+
+
 end_time=$(date +%s)
 duration=$((end_time - start_time))
 

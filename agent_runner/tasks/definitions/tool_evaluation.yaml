@@ -1,0 +1,17 @@
+name: tool_evaluation
+type: periodic
+interval: 21600  # 6 hours
+module: agent_runner.tasks.tool_maintenance
+function: tool_evaluation_task
+priority: low
+idle_only: false
+description: "Automatically evaluate all tools and deprecate low-rated ones (< 0.3 rating after 10+ uses)"
+estimated_duration: 30.0
+
+
+
+
+
+
+
+

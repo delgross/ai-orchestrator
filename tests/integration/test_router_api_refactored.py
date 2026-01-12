@@ -1,7 +1,8 @@
 from fastapi.testclient import TestClient
-from router.router import app
+from router.app import create_app
 import router.config as config
 
+app = create_app()
 client = TestClient(app)
 
 def test_root_redirect():

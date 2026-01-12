@@ -2,13 +2,18 @@ import logging
 import time
 import json
 import asyncio
+import aiofiles
+import yaml
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, Body, Request, HTTPException
+from fastapi import APIRouter, Body, Request, HTTPException, Depends
 from pathlib import Path
 
 from agent_runner.agent_runner import get_shared_state, get_shared_engine
+from agent_runner.state import AgentState
 from agent_runner.background_tasks import get_task_manager
+from agent_runner.constants import MODEL_ROLES
 from common.observability import get_observability
+from agent_runner.db_utils import run_query
 
 router = APIRouter()
 logger = logging.getLogger("agent_runner.admin")
@@ -33,7 +38,8 @@ async def get_ingestion_status():
     if is_paused:
         try:
             reason = pause_file.read_text().strip()
-        except:
+        except Exception as e:
+            logger.debug(f"Could not read pause reason: {e}")
             reason = "Manual Pause"
             
     return {
@@ -105,7 +111,8 @@ async def get_memory_status():
         async with aiohttp.ClientSession() as session:
             async with session.get("http://localhost:8000/health", timeout=1.0) as resp:
                 db_ok = resp.status == 200
-    except:
+    except Exception as e:
+        logger.debug(f"Database health check failed: {e}")
         db_ok = False
         
     return {
@@ -154,6 +161,26 @@ async def metrics():
         }
     }
 
+@router.get("/admin/startup-status")
+async def startup_status():
+    """
+    Get the startup status message that was generated during system initialization.
+    Useful when no chat client was connected during startup.
+    """
+    state = get_shared_state()
+    if hasattr(state, 'startup_status') and state.startup_status:
+        return {
+            "ok": True,
+            "startup_status": state.startup_status,
+            "available": True
+        }
+    else:
+        return {
+            "ok": False,
+            "message": "Startup status not available (system may not have completed startup)",
+            "available": False
+        }
+
 @router.get("/admin/system-status")
 async def system_status():
     state = get_shared_state()
@@ -166,7 +193,8 @@ async def system_status():
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=timeout) as resp:
                     return resp.status < 500
-        except:
+        except Exception as e:
+            logger.debug(f"URL check failed for {url}: {e}")
             return False
 
     # Check Ollama (Port 11434)
@@ -179,13 +207,49 @@ async def system_status():
     # Internet is updated by background task, which is acceptable cache
     internet_status = "Connected" if state.internet_available else "Offline"
     
+    # CPU and memory metrics (using psutil if available)
+    try:
+        import psutil
+        process = psutil.Process()
+        cpu_percent = process.cpu_percent(interval=0.1)
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        memory_percent = process.memory_percent()
+        
+        # Categorize CPU usage
+        if cpu_percent < 25:
+            cpu_status = "Low"
+        elif cpu_percent < 75:
+            cpu_status = "Moderate"
+        else:
+            cpu_status = "High"
+        
+        # Categorize memory usage
+        if memory_percent < 50:
+            memory_status = "Optimal"
+        elif memory_percent < 80:
+            memory_status = "Moderate"
+        else:
+            memory_status = "High"
+        
+        cpu_usage = f"{cpu_status} ({cpu_percent:.1f}%)"
+        memory_info_str = f"{memory_status} ({memory_mb:.1f} MB, {memory_percent:.1f}%)"
+    except ImportError:
+        cpu_usage = "Unavailable (psutil not installed)"
+        memory_info_str = "Unavailable (psutil not installed)"
+    except Exception as metrics_err:
+        logger.debug(f"Failed to get system metrics: {metrics_err}")
+        cpu_usage = "Error"
+        memory_info_str = "Error"
+    
     return {
         "ok": True,
-        "mode": state.system_mode,
+        "mode": state.system_mode, # Production/Dev
+        "active_mode": state.active_mode, # Chat/Coding
         "internet": internet_status,
         "hardware_verified": state.hardware_verified,
-        "cpu_usage": "Low", # Still simplified (requires psutil)
-        "memory_info": "Optimal",
+        "cpu_usage": cpu_usage,
+        "memory_info": memory_info_str,
         "ollama_ok": ollama_ok,
         "database_ok": db_ok, # Explicitly returning DB status now
         "limits": {
@@ -198,21 +262,15 @@ async def system_status():
 async def update_models(config: Dict[str, str] = Body(...)):
     """Update system models dynamically."""
     state = get_shared_state()
-    model_keys = [
-        "agent_model", "router_model", "task_model", "summarization_model",
-        "vision_model", "mcp_model", "finalizer_model", "fallback_model",
-        "intent_model", "pruner_model", "healer_model", "critic_model",
-        "embedding_model"
-    ]
     
-    for key in model_keys:
+    for key in MODEL_ROLES:
         if key in config:
             setattr(state, key, config[key])
 
-    save_system_config(state)
+    await save_system_config(state)
     
     # Return current state of all models
-    current_models = {k: getattr(state, k) for k in model_keys}
+    current_models = {k: getattr(state, k) for k in MODEL_ROLES}
     return {"ok": True, "models": current_models}
 
 @router.post("/admin/config/update")
@@ -241,7 +299,7 @@ async def update_single_config(body: Dict[str, Any] = Body(...)):
     else:
         return {"ok": False, "error": "Failed to update configuration"}
 
-def save_system_config(state):
+async def save_system_config(state):
     """Save current state to system_config.json for persistence."""
     try:
         config_path = Path(__file__).parent.parent.parent / "system_config.json"
@@ -249,28 +307,15 @@ def save_system_config(state):
         # Load existing to avoid overwriting unrelated settings
         cfg = {}
         if config_path.exists():
-            with open(config_path, "r") as f:
-                cfg = json.load(f)
+            async with aiofiles.open(config_path, "r") as f:
+                content = await f.read()
+                cfg = json.loads(content)
         
-        # Update all 12 Roles
-        cfg.update({
-            "agent_model": state.agent_model,
-            "router_model": state.router_model,
-            "task_model": state.task_model,
-            "summarization_model": state.summarization_model,
-            "vision_model": state.vision_model,
-            "mcp_model": state.mcp_model,
-            "finalizer_model": state.finalizer_model,
-            "fallback_model": state.fallback_model,
-            "intent_model": state.intent_model,
-            "pruner_model": state.pruner_model,
-            "healer_model": state.healer_model,
-            "critic_model": state.critic_model,
-            "embedding_model": state.embedding_model
-        })
+        # Update all 13 Roles
+        cfg.update({k: getattr(state, k) for k in MODEL_ROLES})
 
-        with open(config_path, "w") as f:
-            json.dump(cfg, f, indent=4)
+        async with aiofiles.open(config_path, "w") as f:
+            await f.write(json.dumps(cfg, indent=4))
         logger.info(f"Saved system configuration to {config_path}")
     except Exception as e:
         logger.error(f"Failed to save system_config.json: {e}")
@@ -288,7 +333,6 @@ async def trigger_backup():
     """Manually trigger memory backup."""
     # We use the shell script via manage.sh wrapper or direct execution
     # Ideally, we should wrap this in a python task, but for now spawning the script is fine
-    import asyncio
     from agent_runner.config import PROJECT_ROOT
     
     script_path = f"{PROJECT_ROOT}/bin/backup_memory.sh"
@@ -413,18 +457,28 @@ async def get_dashboard_state():
     # We could call get_memory_stats() but let's keep it fast
     mem_active = hasattr(state, "memory") and state.memory is not None
     
-    # 5. Budget (Mock/Placeholder for now as in V1)
-    budget = {
-        "percent_used": 0,
-        "current_spend": 0.0,
-        "daily_limit_usd": 50.0
-    }
+    # 5. Budget (Real implementation)
+    try:
+        from common.budget import get_budget_tracker
+        tracker = get_budget_tracker()
+        budget = {
+            "percent_used": (tracker.current_spend / tracker.daily_limit_usd * 100) if tracker.daily_limit_usd > 0 else 0,
+            "current_spend": tracker.current_spend,
+            "daily_limit_usd": tracker.daily_limit_usd
+        }
+    except Exception as budget_err:
+        logger.warning(f"Failed to load budget: {budget_err}")
+        budget = {
+            "percent_used": 0,
+            "current_spend": 0.0,
+            "daily_limit_usd": 50.0
+        }
         
     return {
         "status": health.get("status", "healthy"),
         "ingestion": ingest_status,
         "memory_stats": {"active": mem_active, "mode": "Transactional" if mem_active else "Offline"},
-        "budget": budget,
+        # "budget": budget,  # Removed - not implemented
         "metrics": health.get("metrics", {}),
         "summary": {
             "critical_count": len(open_breakers),
@@ -457,14 +511,16 @@ async def get_logs_tail(lines: int = 100):
     
     try:
         from collections import deque
-        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-            lines_list = list(deque(f, maxlen=lines))
+        # Read file asynchronously
+        async with aiofiles.open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = await f.readlines()
+            lines_list = list(deque(all_lines, maxlen=lines))
         return {"ok": True, "logs": [l.rstrip() for l in lines_list]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-import asyncio
-# from sse_starlette.sse import EventSourceResponse (Removed to avoid dependency)
+# Note: sse_starlette.sse.EventSourceResponse was removed to avoid dependency
+# Using FastAPI's StreamingResponse instead
 
 @router.get("/admin/llm/roles")
 async def get_llm_roles():
@@ -485,31 +541,12 @@ async def get_llm_roles():
          "critic_model": "openai:gpt-4o",
          "embedding_model": "ollama:mxbai-embed-large:latest"
     }
-    try:
-        import yaml
-        with open("ai/config/config.yaml", "r") as f:
-            cfg = yaml.safe_load(f)
-            defaults.update(cfg.get("llm_roles", {}))
-    except Exception:
-        pass
+    # NOTE: Removed config.yaml read - database is source of truth
+    # If defaults are needed, they should come from database or be hardcoded constants
 
     return {
         "ok": True,
-        "roles": {
-            "agent_model": state.agent_model,
-            "router_model": state.router_model,
-            "task_model": state.task_model,
-            "summarization_model": state.summarization_model,
-            "vision_model": state.vision_model,
-            "mcp_model": state.mcp_model,
-            "finalizer_model": state.finalizer_model,
-            "fallback_model": state.fallback_model,
-            "intent_model": state.intent_model,
-            "pruner_model": state.pruner_model,
-            "healer_model": state.healer_model,
-            "critic_model": state.critic_model,
-            "embedding_model": state.embedding_model
-        },
+        "roles": {k: getattr(state, k) for k in MODEL_ROLES},
         "defaults": defaults
     }
 
@@ -518,16 +555,12 @@ async def update_llm_roles(request: Request):
     state = get_shared_state()
     try:
         data = await request.json()
-        if "agent_model" in data: state.agent_model = data["agent_model"]
-        if "task_model" in data: state.task_model = data["task_model"]
-        if "summarization_model" in data: state.summarization_model = data["summarization_model"]
-        if "router_model" in data: state.router_model = data["router_model"]
-        if "mcp_model" in data: state.mcp_model = data["mcp_model"]
-        if "finalizer_model" in data: state.finalizer_model = data["finalizer_model"]
-        if "embedding_model" in data: state.embedding_model = data["embedding_model"]
-        if "vision_model" in data: state.vision_model = data["vision_model"]
+        # Use MODEL_ROLES constant instead of individual if statements
+        for key in MODEL_ROLES:
+            if key in data:
+                setattr(state, key, data[key])
         
-        save_system_config(state)
+        await save_system_config(state)
         return {"ok": True, "message": "Roles updated successfully"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -537,7 +570,8 @@ async def stop_process():
     """Stop the Agent Runner process."""
     import sys
     async def _exit():
-        await asyncio.sleep(1)
+        from agent_runner.constants import SLEEP_STREAM_POLL
+        await asyncio.sleep(1)  # Exit delay - keep as 1 second
         sys.exit(0)
     
     asyncio.create_task(_exit())
@@ -575,7 +609,6 @@ async def stream_logs(request: Request, services: str = "agent_runner"):
     import os
     from fastapi.responses import StreamingResponse
     import json
-    import asyncio
     
     async def event_generator():
         files_map = {
@@ -584,37 +617,46 @@ async def stream_logs(request: Request, services: str = "agent_runner"):
         }
         
         target_files = []
-        for svc in services.split(","):
-            if svc in files_map:
-                try:
-                    target_files.append((svc, open(files_map[svc], "r")))
-                except FileNotFoundError:
-                    pass
-        
-        # Seek to end
-        for _, f in target_files:
-            f.seek(0, os.SEEK_END)
+        try:
+            for svc in services.split(","):
+                if svc in files_map:
+                    try:
+                        target_files.append((svc, open(files_map[svc], "r")))
+                    except FileNotFoundError:
+                        pass
             
-        while True:
-            if await request.is_disconnected():
-                break
+            # Seek to end
+            for _, f in target_files:
+                f.seek(0, os.SEEK_END)
+            
+            while True:
+                if await request.is_disconnected():
+                    break
+                    
+                has_data = False
+                for svc, f in target_files:
+                    line = f.readline()
+                    if line:
+                        yield f"data: {json.dumps({'service': svc, 'line': line.strip()})}\n\n"
+                        has_data = True
                 
-            has_data = False
-            for svc, f in target_files:
-                line = f.readline()
-                if line:
-                    yield f"data: {json.dumps({'service': svc, 'line': line.strip()})}\n\n"
-                    has_data = True
-            
-            if not has_data:
-                await asyncio.sleep(0.5)
+                from agent_runner.constants import SLEEP_STREAM_POLL
+                if not has_data:
+                    await asyncio.sleep(SLEEP_STREAM_POLL)
+        finally:
+            # Ensure all file handles are closed
+            for _, f in target_files:
+                try:
+                    f.close()
+                except (OSError, IOError) as file_err:
+                    logger.debug(f"Failed to close log file: {file_err}")
+                    pass
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.post("/admin/system/restart")
 async def restart_system_endpoint():
     """Trigger a full system restart script."""
-    import asyncio
     import os
     from agent_runner.config import PROJECT_ROOT
     
@@ -637,31 +679,155 @@ async def restart_system_endpoint():
 @router.get("/admin/diagnostics/stream")
 async def stream_diagnostics(request: Request):
     """
-    Stream the 'live_stream.md' file content as distinct events.
+    Stream diagnostic logs directly from the diagnostic_log table.
+    
+    NOTE: This endpoint is currently UNUSED - there is no diagnostics tab in the UI.
+    live_stream.md is a log file only - it should not be read for UI purposes.
+    If a diagnostics UI is added in the future, this endpoint is ready to use.
     """
     from fastapi.responses import StreamingResponse
     import os
+    import httpx
     
     async def diag_generator():
-        log_path = "logs/live_stream.md"
+        # Read directly from diagnostic_log table instead of live_stream.md
+        # live_stream.md is a log file only, not for UI consumption
+        surreal_url = os.getenv("SURREAL_URL", "http://localhost:8000")
+        surreal_ns = os.getenv("SURREAL_NS", "orchestrator")
+        surreal_db = os.getenv("SURREAL_DB", "memory")
+        surreal_user = os.getenv("SURREAL_USER", "root")
+        surreal_pass = os.getenv("SURREAL_PASS", "root")
         
-        # Ensure file exists
-        if not os.path.exists(log_path):
-             yield f"data: {json.dumps({'line': 'Waiting for diagnostics stream...'})}\n\n"
-             
-        # Tail logic
-        with open(log_path, "r") as f:
-            # Start at end
-            f.seek(0, os.SEEK_END)
-            
+        last_timestamp = time.time()
+        
+        async with httpx.AsyncClient() as client:
             while True:
                 if await request.is_disconnected():
                     break
+                
+                try:
+                    # Query for new logs since last check
+                    query = (
+                        f"USE NS {surreal_ns}; USE DB {surreal_db}; "
+                        f"SELECT * FROM diagnostic_log "
+                        f"WHERE timestamp > {last_timestamp} "
+                        f"ORDER BY timestamp ASC LIMIT 50;"
+                    )
                     
-                line = f.readline()
-                if line:
-                    yield f"data: {json.dumps({'line': line.strip()})}\n\n"
-                else:
-                     await asyncio.sleep(1.0)
+                    resp = await client.post(
+                        f"{surreal_url}/sql",
+                        content=query,
+                        auth=(surreal_user, surreal_pass),
+                        headers={"Accept": "application/json"},
+                        timeout=5.0
+                    )
+                    
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, list):
+                            for item in data:
+                                if item.get("status") == "OK" and isinstance(item.get("result"), list):
+                                    for log_entry in item.get("result", []):
+                                        timestamp = log_entry.get("timestamp", 0)
+                                        if timestamp > last_timestamp:
+                                            last_timestamp = timestamp
+                                        
+                                        # Format log entry
+                                        service = log_entry.get("service", "unknown")
+                                        level = log_entry.get("level", "INFO")
+                                        message = log_entry.get("message", "")
+                                        iso_time = log_entry.get("iso_time", "")
+                                        
+                                        formatted = f"{iso_time} [{level}] {service}: {message}"
+                                        yield f"data: {json.dumps({'line': formatted})}\n\n"
+                
+                except Exception as e:
+                    logger.debug(f"Diagnostics stream error: {e}")
+                
+                from agent_runner.constants import SLEEP_STREAM_POLL
+                await asyncio.sleep(1.0)  # Diagnostics stream delay
                      
     return StreamingResponse(diag_generator(), media_type="text/event-stream")
+
+@router.post("/admin/tools/execute")
+async def execute_tool_endpoint(body: Dict[str, Any] = Body(...)):
+    """
+    Directly execute a defined tool/function.
+    Body: { "tool_name": "list_dir", "arguments": {"path": "."} }
+    """
+    state = get_shared_state()
+    engine = get_shared_engine()
+    tool_name = body.get("tool_name")
+    args = body.get("arguments", {})
+    
+    if not tool_name:
+         return {"ok": False, "error": "Missing tool_name"}
+
+    if hasattr(engine, "executor"):
+        # We wrap in the standard executor call
+        # Mock a tool call object
+        tool_call = {
+            "function": {
+                "name": tool_name,
+                "arguments": json.dumps(args)
+            }
+        }
+        try:
+            result = await engine.executor.execute_tool_call(tool_call, request_id="admin-debug", user_query="")
+            return {"ok": True, "result": result}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    else:
+        return {"ok": False, "error": f"Executor not ready. Engine: {engine}, Dir: {dir(engine)}"}
+
+@router.get("/admin/registry/health")
+async def registry_health(state: AgentState = Depends(get_shared_state)):
+    """
+    Check registry integrity and return validation status.
+    """
+    try:
+        from agent_runner.maintenance_tasks import validate_registry_integrity
+        result = await validate_registry_integrity(state)
+        return result
+    except Exception as e:
+        logger.error(f"Registry health check failed: {e}", exc_info=True)
+        return {"ok": False, "error": str(e), "issues": [], "warnings": []}
+
+
+@router.get("/admin/task-health")
+async def task_health(state: AgentState = Depends(get_shared_state)):
+    """
+    Get health statistics for fire-and-forget tasks.
+    """
+    from agent_runner.task_utils import get_task_health_summary
+    summary = await get_task_health_summary()
+    return {"ok": True, "task_health": summary}
+
+
+@router.post("/admin/validate-changes")
+async def validate_changes():
+    """
+    Validate all recent changes (last 2 hours).
+    Tests tool categorization, evaluation, registry, rating integration, and marketplace.
+    """
+    from agent_runner.tests.validate_recent_changes import validate_all_changes
+    return await validate_all_changes()
+
+
+@router.post("/admin/chat-latency-test")
+async def chat_latency_test(
+    iterations: int = Body(5, embed=True),
+    test_message: Optional[str] = Body(None, embed=True)
+):
+    """
+    Run comprehensive chat interface latency test with component breakdown.
+    """
+    try:
+        from agent_runner.tools.chat_latency_test import tool_run_chat_latency_test
+        state = get_shared_state()
+        return await tool_run_chat_latency_test(state, iterations, test_message)
+    except ImportError:
+        # Fallback to direct implementation if import fails
+        from agent_runner.tools.chat_latency_test import tool_run_chat_latency_test as _run_test
+        state = get_shared_state()
+        return await _run_test(state, iterations, test_message)

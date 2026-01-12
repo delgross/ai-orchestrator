@@ -4,7 +4,7 @@ import os
 import yaml
 from typing import Dict, Any, List
 from agent_runner.state import AgentState
-from agent_runner.registry import SystemRegistry
+from common.sovereign import get_sovereign_roles, get_sovereign_toggles
 
 logger = logging.getLogger("agent_runner.tools.introspection")
 
@@ -31,7 +31,13 @@ async def tool_get_service_status(state: AgentState) -> Dict[str, Any]:
 async def tool_get_component_map(state: AgentState) -> Dict[str, Any]:
     """
     Returns a map of all system roles (Agent, Router, Maître d', etc.) and their currently assigned models.
-    Useful for answering "What model is the Router using?".
+    Use this to answer questions about:
+    - "What models are configured?"
+    - "Inventory all LLMs"
+    - "List all internal models"
+    - "What model is the Router using?"
+    - "What models are running?"
+    Returns data from the database (source of truth), not from files.
     """
     try:
         # We fetch this from the Router's config API if available, 
@@ -41,8 +47,10 @@ async def tool_get_component_map(state: AgentState) -> Dict[str, Any]:
         base = state.gateway_base
         models = {}
         
+        models = {}
+        
         # Fetch keys from Registry
-        roles = SystemRegistry.get_all_roles()
+        roles = get_sovereign_roles()
         keys = [f"{r['id']}_model" for r in roles]
         
         client = await state.get_http_client()
@@ -75,31 +83,46 @@ async def tool_get_component_map(state: AgentState) -> Dict[str, Any]:
 
 async def tool_get_active_configuration(state: AgentState) -> Dict[str, Any]:
     """
-    Reads the active 'config.yaml' and relevant environment variables.
-    IMPORTANT: Secrets are masked.
+    Reads the active configuration from Sovereign Memory (database), including all model assignments.
+    Use this to answer questions about:
+    - "What models are configured?"
+    - "Inventory all LLMs"
+    - "List all internal models"
+    - "Show me the system configuration"
+    IMPORTANT: Secrets are masked. Database is the source of truth - no disk reads.
+    Returns all config keys including AGENT_MODEL, ROUTER_MODEL, VISION_MODEL, etc.
     """
     try:
-        config_path = os.path.join(state.agent_fs_root, "config.yaml")
-        if not os.path.exists(config_path):
-             return {"ok": False, "error": "config.yaml not found"}
-             
-        with open(config_path, "r") as f:
-            cfg = yaml.safe_load(f)
-            
-        # Mask secrets
-        if "surreal" in cfg:
-            cfg["surreal"]["pass"] = "***"
-        if "api_keys" in cfg:
-            for k in cfg["api_keys"]:
-                cfg["api_keys"][k] = "***"
-                
+        # Query configuration from database (config_state table)
+        if not hasattr(state, "memory") or not state.memory:
+            return {"ok": False, "error": "Memory server not initialized"}
+        
+        from agent_runner.db_utils import run_query
+        query = "SELECT key, value FROM config_state"
+        results = await run_query(state, query)
+        
+        if not results:
+            return {"ok": False, "error": "No configuration found in database"}
+        
+        # Build config dictionary from database
+        config_dict = {}
+        for item in results:
+            key = item.get("key")
+            val = item.get("value")
+            if key and val:
+                # Mask secrets (keys containing API_KEY, SECRET, PASSWORD, TOKEN, PASS)
+                if any(secret_word in key.upper() for secret_word in ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "PASS"]):
+                    config_dict[key] = "***"
+                else:
+                    config_dict[key] = val
+        
         env_vars = {
             "PORT": os.getenv("PORT"),
             "AGENT_FS_ROOT": str(state.agent_fs_root),
             "ROUTER_MODE": getattr(state, "router_mode", "unknown")
         }
         
-        return {"ok": True, "config_yaml": cfg, "env": env_vars}
+        return {"ok": True, "config": config_dict, "env": env_vars, "source": "database"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -110,7 +133,7 @@ async def tool_list_system_toggles(state: AgentState) -> Dict[str, Any]:
     """
     try:
         toggles = []
-        registry_toggles = SystemRegistry.get_all_toggles()
+        registry_toggles = get_sovereign_toggles()
         
         for t in registry_toggles:
             current_val = "unknown"
@@ -123,7 +146,8 @@ async def tool_list_system_toggles(state: AgentState) -> Dict[str, Any]:
                     resp = await client.get(f"{base}/config/router_mode", timeout=1.0)
                     if resp.status_code == 200:
                         current_val = resp.json().get("value", "unknown")
-                except: pass
+                except Exception as e:
+                    logger.debug(f"Failed to fetch router config: {e}")
             
             elif t["key"] == "policy:internet":
                  current_val = "enabled" if state.internet_available else "local_only"

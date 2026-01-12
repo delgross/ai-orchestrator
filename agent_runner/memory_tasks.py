@@ -6,6 +6,7 @@ import contextlib
 import time
 from agent_runner.state import AgentState
 from common.constants import OBJ_MODEL
+from common.sovereign import get_sovereign_model
 
 logger = logging.getLogger("agent_runner.memory_tasks")
 
@@ -113,7 +114,8 @@ async def memory_consolidation_task(state: AgentState):
                     url = f"{state.gateway_base}/v1/chat/completions"
                     
                     payload = {
-                        OBJ_MODEL: state.summarization_model or "ollama:mistral:latest",
+                        # [SOVEREIGN] Use centralized model for summarization
+                        OBJ_MODEL: get_sovereign_model("summarizer", "ollama:mistral:latest"),
                         "messages": [{"role": "user", "content": extraction_prompt}],
                         "response_format": {"type": "json_object"}
                     }
@@ -259,9 +261,9 @@ async def memory_audit_task(state: AgentState):
                 
                 client = await state.get_http_client()
                 url = f"{state.gateway_base}/v1/chat/completions"
-                # UPGRADE: Use Finalizer (High-End/H100) model for deep audit instead of weak summarizer
+                # UPGRADE: Use Sovereign Auditor (High-End/H100)
                 payload = {
-                    "model": state.finalizer_model or "openai:gpt-4o",
+                    "model": get_sovereign_model("auditor", "openai:gpt-4o"),
                     "messages": [{"role": "user", "content": verification_prompt}],
                     "response_format": {"type": "json_object"}
                 }

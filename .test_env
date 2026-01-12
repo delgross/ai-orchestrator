@@ -1,0 +1,4 @@
+EXISTING_KEY='new_value'
+COMPLEX_KEY='value with "quotes" and spaces'
+MULTILINE='line1
+line2'

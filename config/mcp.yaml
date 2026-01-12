@@ -1,11 +1,79 @@
 mcp_servers:
-  weather:
-    command: uvx
-    args:
-    - mcp-server-weather
+  tavily-search:
+    cmd:
+    - npx
+    - -y
+    - tavily-mcp@0.1.3
     env: {}
     enabled: true
     type: stdio
+  project-memory:
+    cmd:
+    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
+    - /Users/bee/Sync/Antigravity/ai/agent_runner/memory_server.py
+    env: {}
+    enabled: true
+    type: stdio
+  fetch:
+    cmd:
+    - uvx
+    - mcp-server-fetch
+    env: {}
+    enabled: true
+    type: stdio
+  brave-search:
+    cmd:
+    - npx
+    - -y
+    - '@modelcontextprotocol/server-brave-search'
+    env: {}
+    enabled: true
+    type: stdio
+  weather:
     cmd:
     - uvx
     - mcp-server-weather
+    env: {}
+    enabled: false
+    type: stdio
+    disabled_reason: circuit_breaker_opened
+  ollama:
+    cmd:
+    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
+    - /Users/bee/Sync/Antigravity/ai/agent_runner/ollama_server.py
+    env: {}
+    enabled: true
+    type: stdio
+  time:
+    cmd:
+    - uvx
+    - mcp-server-time
+    env: {}
+    enabled: true
+    type: stdio
+  filesystem:
+    cmd:
+    - npx
+    - -y
+    - '@modelcontextprotocol/server-filesystem'
+    - /Users/bee/Sync/Antigravity
+    - /Users/bee/Desktop
+    - /Users/bee/Downloads
+    env: {}
+    enabled: true
+    type: stdio
+  system-control:
+    cmd:
+    - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
+    - /Users/bee/Sync/Antigravity/ai/agent_runner/system_control_server.py
+    env: {}
+    enabled: true
+    type: stdio
+  sequential-thinking:
+    cmd:
+    - npx
+    - -y
+    - '@modelcontextprotocol/server-sequential-thinking'
+    env: {}
+    enabled: true
+    type: stdio

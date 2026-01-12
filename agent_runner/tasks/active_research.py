@@ -14,6 +14,7 @@ async def active_research_task():
     logger.info("Starting Active Research Cycle (Tempo Confirmed via Scheduler)...")
     
     # Logic: Mock Implementation for Phase 12 verification
+    logger.warning("Active Research is a MOCK implementation (Phase 12 Verification). No action taken.")
     from agent_runner.tools.mcp import tool_mcp_proxy
     try:
         # Check 'active_research' bank

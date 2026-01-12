@@ -1,0 +1,116 @@
+# SOVEREIGN REGISTRY (Single Source of Truth)
+# ==========================================
+# This file governs the entire AI System: Network, Models, Policies, and Capabilities.
+# It is ingested into the Database (SurrealDB) at startup.
+# Runtime changes via Tool/CLI will update the Database (Live State).
+
+network:
+  router_port: 5455
+  agent_port: 5460
+  rag_port: 5555
+  surreal_port: 8000
+  ollama_port: 11434
+
+models:
+  # The "Rogue Six" - Consolidated
+  agent: "ollama:llama3.1:latest" # Primary Agent (Speed + Intelligence)
+  router: "ollama:llama3.1:latest"   # Maître d' Logic (Speed)
+  healer: "ollama:qwen3:30b"        # Log Sorter / Diagnostics (Balanced)
+  summarizer: "ollama:llama3.1:latest" # Memory Consolidation (Speed)
+  auditor: "ollama:qwen3:30b"       # Memory Fact Auditing (Balanced)
+  cloud_vision: "Qwen/Qwen2.5-VL-72B-Instruct-AWQ" # Modal Cloud Vision
+  stt: "medium.en"                  # Whisper Local STT
+
+policies:
+  internet: "enabled"
+  safety: "moderate"
+  allow_commands: true              # Consolidated 'enable_command_execution'
+  cloud_compute: false              # Replaces ENABLE_MODAL
+  night_shift: false                # Replaces NIGHT_SHIFT env vars
+
+triggers:
+  - pattern: "cwindow"
+    action_type: "control_ui"
+    action_data:
+      action: "open_window"
+      target: "chat_secondary"
+    description: "Open a secondary chat window."
+
+  - pattern: "wizard"
+    action_type: "control_ui"
+    action_data:
+      target: "/v2/mcp_wizard.html"
+    description: "Launch the MCP Smart Import Wizard."
+  
+  - pattern: "debug_mode"
+    action_type: "system_prompt"
+    action_data:
+      key: "preferences.debug"
+      value: true
+    description: "Enable verbose debug logging in chat."
+
+  - pattern: "status"
+    action_type: "tool_call"
+    action_data:
+      tool: "check_system_health"
+      args: {}
+    description: "Show System/Agent Health Report"
+
+  - pattern: "qq"
+    action_type: "menu"
+    action_data: {}
+    description: "Show the System Menu."
+
+  - pattern: "restart"
+    action_type: "tool_call"
+    action_data:
+      tool: "restart_agent"
+    action_data:
+      tool: "restart_agent"
+    description: "Reboot the Agent Runner (Graceful)."
+
+  - pattern: "restore_chat"
+    action_type: "tool_call"
+    action_data:
+      tool: "set_mode"
+      args:
+        mode: "chat"
+    description: "Reset to default Chat Mode."
+
+  - pattern: "latency"
+    action_type: "tool_call"
+    action_data:
+      tool: "investigate_system_performance"
+      args:
+        components: ["latency"]
+    description: "Run system latency diagnostics."
+
+  - pattern: "zombies"
+    action_type: "tool_call"
+    action_data:
+      tool: "investigate_system_performance"
+      args:
+        components: ["zombies"]
+    description: "Check for stuck processes."
+
+  - pattern: "diagnose"
+    action_type: "tool_call"
+    action_data:
+      tool: "investigate_system_performance"
+    description: "Run full system investigation (Latency, MCP, Ingestor, Zombies)."
+
+  - pattern: "latency"
+    action_type: "tool_call"
+    action_data:
+      tool: "run_latency_tests"
+    description: "Run full system latency diagnostic."
+
+
+
+modes:
+  chat:
+    prompt_suffix: "Focus on natural, engaging conversation."
+  coding:
+    prompt_suffix: "You are an experienced developer. Prioritize code correctness and best practices."
+  admin:
+    prompt_suffix: "You can manage system configuration and settings when needed."

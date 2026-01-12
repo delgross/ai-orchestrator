@@ -7,9 +7,9 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-
 from agent_runner.memory_server import MemoryServer
 from agent_runner.state import AgentState
+from agent_runner.db_utils import run_query_with_memory
 
 logger = logging.getLogger("system_ingestor")
 
@@ -38,12 +38,15 @@ class SystemIngestor:
 
             await self.ingest_env()
             await self.ingest_config()
+            await self.ingest_registry() # [NEW] Sovereign YAML Ingestion
             await self.ingest_system_profiler()
             await self.ingest_task_definitions()
-            await self.ingest_mcp_servers()
             # [PHASE 46] Universal Sovereign Memory Sync
             # This ensures BRAIN_DIR files are mirrored to DB (Wipe & Replace)
             await self.ingest_permanent_memory()
+            # [PHASE 47] Project Registry Sync
+            # This ensures data/permanent/ files are mirrored to DB (Project-specific context)
+            await self.ingest_project_registry()
             
             logger.info("System State Ingestion Complete.")
             
@@ -64,7 +67,7 @@ class SystemIngestor:
             # Count how many critical keys exist
             # This query counts config_state rows where key matches any critical key
             q = f"SELECT count() FROM config_state WHERE key IN {json.dumps(critical_keys)} GROUP ALL"
-            res = await self.memory._execute_query(q)
+            res = await run_query_with_memory(self.memory, q)
             
             # We expect at least 2 keys (e.g. API KEY + MODEL) to consider it "Configured"
             config_ok = False
@@ -73,7 +76,7 @@ class SystemIngestor:
                 
             # 2. Hardware/System State
             # Must have at least one system record (e.g. 'hardware')
-            res_sys = await self.memory._execute_query("SELECT count() FROM system_state WHERE item = 'hardware' GROUP ALL")
+            res_sys = await run_query_with_memory(self.memory, "SELECT count() FROM system_state WHERE item = 'hardware' GROUP ALL")
             sys_ok = False
             if res_sys and res_sys[0]['count'] > 0:
                 sys_ok = True
@@ -189,7 +192,7 @@ class SystemIngestor:
         UPSERT type::thing('config_state', $key) 
         SET key = $key, value = $val, source = $src, last_updated = time::now();
         """
-        await self.memory._execute_query(q, {"key": key, "val": value, "src": source})
+        await run_query_with_memory(self.memory, q, {"key": key, "val": value, "src": source})
 
     async def _store_system_state(self, item: str, details: Any, category: str = "General"):
         """Helper to UPSERT system state."""
@@ -197,7 +200,7 @@ class SystemIngestor:
         UPSERT type::thing('system_state', $item) 
         SET item = $item, details = $det, category = $cat, last_updated = time::now();
         """
-        await self.memory._execute_query(q, {"item": item, "det": details, "cat": category})
+        await run_query_with_memory(self.memory, q, {"item": item, "det": details, "cat": category})
 
     async def ingest_task_definitions(self):
         """
@@ -236,11 +239,13 @@ class SystemIngestor:
                     }
                     
                     # UPSERT: "DELETE then CREATE" logic to ensure clean slate for this ID
-                    await self.memory._execute_query(
+                    await run_query_with_memory(
+                        self.memory,
                         "DELETE FROM task_def WHERE name = $name",
                         {"name": task_name}
                     )
-                    await self.memory._execute_query(
+                    await run_query_with_memory(
+                        self.memory,
                         "CREATE task_def CONTENT $data",
                         {"data": record}
                     )
@@ -314,10 +319,75 @@ class SystemIngestor:
         }
         
         # UPSERT
-        await self.memory._execute_query(
-             f"DELETE FROM mcp_server WHERE name = '{name}'; CREATE mcp_server CONTENT $data",
-             {"data": record}
+        await run_query_with_memory(
+            self.memory,
+            f"DELETE FROM mcp_server WHERE name = '{name}'; CREATE mcp_server CONTENT $data",
+            {"data": record}
         )
+
+    async def ingest_registry(self):
+        """
+        Ingests the Sovereign Registry (sovereign.yaml) into the Database.
+        This provides the baseline configuration for Models, Network, and Policies.
+        """
+        registry_path = os.path.join(os.path.dirname(os.path.dirname(self.fs_root)), "config", "sovereign.yaml")
+        # Fallback if fs_root structure is different
+        if not os.path.exists(registry_path):
+             registry_path = os.path.join(self.fs_root, "config", "sovereign.yaml")
+        
+        if not os.path.exists(registry_path):
+            logger.warning(f"Sovereign Registry not found at {registry_path}. Skipping.")
+            return
+
+        logger.info(f"Ingesting Sovereign Registry from {registry_path}...")
+        try:
+            with open(registry_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+
+            # 1. MODELS
+            models = data.get("models", {})
+            for key, val in models.items():
+                await self._upsert_registry_item("registry_models", key, val, "sovereign.yaml")
+
+            # 2. NETWORK
+            network = data.get("network", {})
+            for key, val in network.items():
+                 await self._upsert_registry_item("registry_ports", key, val, "sovereign.yaml")
+
+            # 3. POLICIES
+            policies = data.get("policies", {})
+            for key, val in policies.items():
+                 await self._upsert_registry_item("registry_policies", key, val, "sovereign.yaml")
+
+            # 4. MCP
+            mcp = data.get("mcp", {})
+            for key, val in mcp.items():
+                # MCP logic is slightly complex, it has 'enabled', 'command', etc.
+                # We store the full blob.
+                await self._upsert_registry_item("registry_mcp", key, json.dumps(val, default=str), "sovereign.yaml")
+
+            logger.info("Sovereign Registry Ingestion Complete.")
+
+        except Exception as e:
+            logger.error(f"Failed to ingest Sovereign Registry: {e}")
+
+    async def _upsert_registry_item(self, table: str, key: str, value: Any, source: str):
+        """Helper to UPSERT registry items."""
+        q = f"""
+        UPSERT type::thing($table, $key) 
+        SET key = $key, value = $val, source = $src, last_updated = time::now();
+        """
+        await run_query_with_memory(self.memory, q, {"table": table, "key": key, "val": value, "src": source})
+
+    async def _upsert_mcp_server(self, name: str, config: Dict[str, Any]):
+        # Legacy helper kept for clean diff execution if needed, but largely replaced by ingest_registry handling mcp blob
+        # Actually we should keep it if we want 'mcp_server' specific table structure vs generic 'registry_mcp'
+        # For unification, let's use the generic helper for now, or adapt this.
+        # The prompt implies replacing the old manual mcp ingestion.
+        # Let's map the old logic to the new `registry_mcp` table or keep `mcp_server` table but populated from sovereign?
+        pass # Using generic `registry_mcp` for now as per plan.
+
+    # [REMOVED: ingest_mcp_servers as it is now part of ingest_registry]
 
     async def ingest_permanent_memory(self):
         """
@@ -361,8 +431,10 @@ class SystemIngestor:
                 except Exception as te:
                     logger.warning(f"Timestamp check failed for {kb_id}, forcing sync: {te}")
 
-                with open(md_file, "r") as f:
-                    content = f.read()
+                # Use async file I/O
+                import aiofiles
+                async with aiofiles.open(md_file, "r") as f:
+                    content = await f.read()
                 
                 if not content.strip(): continue
 
@@ -374,3 +446,57 @@ class SystemIngestor:
                 logger.error(f"Failed to sync sovereign file {md_file}: {e}")
 
         logger.info(f"Sovereign Memory Sync Complete: {count} files synced.")
+
+    async def ingest_project_registry(self):
+        """
+        Recursively scan data/permanent/ directory and sync all markdown files as project registry.
+        These are project-specific context files (e.g., user_profile.md, inventory.md).
+        """
+        registry_dir = Path(self.fs_root) / "data" / "permanent"
+        if not registry_dir.exists():
+            logger.debug(f"Project registry directory not found at {registry_dir}. Skipping.")
+            return
+
+        logger.info(f"Scanning Project Registry in {registry_dir}...")
+        count = 0
+        
+        # Recursive glob
+        for md_file in registry_dir.rglob("*.md"):
+            try:
+                # Derive stable ID (relative path without extension)
+                # e.g. data/permanent/user_profile.md -> project_registry/user_profile
+                rel_path = md_file.relative_to(registry_dir)
+                kb_id = f"project_registry/{str(rel_path.with_suffix(''))}"
+                
+                # Check timestamps (Optimization: Only sync if changed)
+                try:
+                    stats = md_file.stat()
+                    disk_mtime = stats.st_mtime
+                    
+                    db_time_str = await self.memory.check_sovereign_state(kb_id)
+                    if db_time_str:
+                        import datetime
+                        db_dt = datetime.datetime.fromisoformat(db_time_str.replace('Z', '+00:00'))
+                        db_ts = db_dt.timestamp()
+                        
+                        # If Disk is older or equal to DB, skip
+                        if disk_mtime <= (db_ts + 1.0):
+                            continue
+                except Exception as te:
+                    logger.warning(f"Timestamp check failed for {kb_id}, forcing sync: {te}")
+
+                # Use async file I/O
+                import aiofiles
+                async with aiofiles.open(md_file, "r") as f:
+                    content = await f.read()
+                
+                if not content.strip(): continue
+
+                # Perform Atomic Sync (Wipe & Replace)
+                res = await self.memory.sync_sovereign_file(kb_id, content)
+                if res.get("ok"):
+                    count += 1
+            except Exception as e:
+                logger.error(f"Failed to sync project registry file {md_file}: {e}")
+
+        logger.info(f"Project Registry Sync Complete: {count} files synced.")

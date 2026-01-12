@@ -34,10 +34,10 @@ def create_app(lifespan=None) -> FastAPI:
         component_id="router-main"
     )
 
-    # Static Files
-    dashboard_v2_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard", "v2")
-    if os.path.exists(dashboard_v2_path):
-        app.mount("/v2", StaticFiles(directory=dashboard_v2_path), name="dashboard_v2")
+    # Static Files: Dashboard removed as per user request (Jan 2026)
+    # dashboard_v2_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard", "v2")
+    # if os.path.exists(dashboard_v2_path):
+    #     app.mount("/v2", StaticFiles(directory=dashboard_v2_path), name="dashboard_v2")
 
     # Routers
     app.include_router(admin_router)
@@ -46,5 +46,9 @@ def create_app(lifespan=None) -> FastAPI:
     # Internal Imports to prevent cycle if placed at top, or just standard import
     from router.routes.clients import router as clients_router
     app.include_router(clients_router)
+    
+    # System messages router (for pushing warnings/problems to chat)
+    from router.routes.system_messages import router as system_messages_router
+    app.include_router(system_messages_router)
 
     return app

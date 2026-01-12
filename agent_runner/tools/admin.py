@@ -1,23 +1,56 @@
 import logging
+import os
 from typing import Dict, Any, Optional
 from agent_runner.state import AgentState
+from agent_runner.db_utils import run_query
 
 logger = logging.getLogger("tools.admin")
 
-SECRET_PASSPHRASE = "lloovies"
+async def _get_secret_passphrase(state: AgentState) -> str:
+    """
+    Get admin passphrase from:
+    1. Environment variable ADMIN_PASSWORD (highest priority)
+    2. Database config_state table (ADMIN_PASSWORD key)
+    3. Hardcoded default (fallback only)
+    """
+    # 1. Check environment variable
+    env_pass = os.getenv("ADMIN_PASSWORD")
+    if env_pass:
+        return env_pass
+    
+    # 2. Check database (if memory is available)
+    if hasattr(state, "memory") and state.memory:
+        try:
+            result = await run_query(state, """
+                SELECT value FROM config_state 
+                WHERE key = 'ADMIN_PASSWORD' LIMIT 1;
+            """)
+            if result and len(result) > 0:
+                db_pass = result[0].get("value")
+                if db_pass:
+                    return str(db_pass)
+        except Exception as e:
+            logger.debug(f"Failed to load ADMIN_PASSWORD from database: {e}")
+    
+    # 3. Hardcoded fallback (for initial setup)
+    return "lloovies"
 
-def unlock_session(state: AgentState, password: str) -> Dict[str, Any]:
+async def unlock_session(state: AgentState, password: str) -> Dict[str, Any]:
     """
     Authenticate as the Owner to unlock 'God Mode' for this session.
     Once unlocked, no further passwords are required for sensitive actions.
     """
-    if password == SECRET_PASSPHRASE:
+    secret_passphrase = await _get_secret_passphrase(state)
+    if password == secret_passphrase:
+        import time
         state.admin_override_active = True
-        logger.info(f"ADMIN: Session unlocked by Owner.")
+        state.sudo_granted_at = time.time()  # Track when sudo was granted
+        logger.info(f"ADMIN: Sudo unlocked. Will persist until system is idle (REFLECTIVE tempo or deeper).")
         return {
             "ok": True, 
-            "message": "Session Unlocked. You have absolute control.",
-            "mode": "SUDO"
+            "message": "Sudo unlocked. Will persist until system is idle (REFLECTIVE tempo or deeper).",
+            "mode": "SUDO",
+            "revert_tempo": state.sudo_revert_tempo
         }
     else:
         logger.warning(f"ADMIN: Failed unlock attempt.")
@@ -26,19 +59,20 @@ def unlock_session(state: AgentState, password: str) -> Dict[str, Any]:
             "error": "Access Denied."
         }
 
-def set_policy(state: AgentState, policy: str, value: Any, password: Optional[str] = None) -> Dict[str, Any]:
+async def set_policy(state: AgentState, policy: str, value: Any, password: Optional[str] = None) -> Dict[str, Any]:
     """
     Modify ANY system policy (internet, safety, limits).
     Requires active Admin Session or immediate password.
     """
     # 1. Auth Check
-    is_auth = state.admin_override_active or (password == SECRET_PASSPHRASE)
+    secret_passphrase = await _get_secret_passphrase(state)
+    is_auth = state.admin_override_active or (password == secret_passphrase)
     
     if not is_auth:
         return {
             "ok": False, 
             "error": "Access Denied. Please unlock session or provide password.", 
-            "hint": "Use unlock_session(password='lloovies')"
+            "hint": "Use unlock_session() with the admin password"
         }
     
     # 2. Apply Policy
@@ -58,8 +92,10 @@ def set_policy(state: AgentState, policy: str, value: Any, password: Optional[st
     
     # If successful and password provided, imply unlock? 
     # User said "once I have given one" -> lets auto-unlock if password correct here too.
-    if password == SECRET_PASSPHRASE:
+    if password == secret_passphrase:
+        import time
         state.admin_override_active = True
+        state.sudo_granted_at = time.time()  # Track when sudo was granted
         
     return {
         "ok": True,

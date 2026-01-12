@@ -188,7 +188,7 @@ async def process_message(session, message: Dict[str, Any]):
                     
                     # [Removed Inline Check - Moved to PrivacyInterceptor]
                     
-                    from agent_runner.registry import ServiceRegistry
+                    from agent_runner.service_registry import ServiceRegistry
                     # We need the memory server just to fetch data now, not for auth
                     mem = ServiceRegistry.get_memory_server()
                     if mem:
@@ -351,7 +351,7 @@ async def process_message(session, message: Dict[str, Any]):
                 "id": str(uuid.uuid4()), "type": "function"
             }
             try:
-                raw_result = await engine.execute_tool_call(engine_tool_call)
+                raw_result = await engine.execute_tool_call(engine_tool_call, user_query="")
                 
                 # 3. After Execution Interceptors
                 for ic in interceptors:

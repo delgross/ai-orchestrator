@@ -4,5 +4,5 @@ module: agent_runner.tasks.active_research
 function: active_research_task
 interval: 600  # 10 minutes
 description: "Background research on active topics when system is idle."
-enabled: true
+enabled: false
 min_tempo: REFLECTIVE

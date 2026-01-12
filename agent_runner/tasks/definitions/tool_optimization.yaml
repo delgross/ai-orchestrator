@@ -1,0 +1,17 @@
+name: tool_optimization
+type: scheduled
+schedule: "0 2 * * *"  # Daily at 2 AM
+module: agent_runner.tasks.tool_maintenance
+function: tool_optimization_task
+priority: low
+idle_only: true
+description: "Analyze tool performance patterns and generate optimization recommendations"
+estimated_duration: 60.0
+
+
+
+
+
+
+
+

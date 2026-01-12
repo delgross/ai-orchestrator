@@ -795,6 +795,30 @@ class ObservabilitySystem:
             if anomaly:
                 anomalies.append(anomaly)
                 
+                # Route to Unified Tracker for alerting
+                try:
+                    from common.unified_tracking import track_event, EventCategory, EventSeverity
+                    from common.anomaly_detector import AnomalySeverity
+                    
+                    # Map severity
+                    severity_map = {
+                        AnomalySeverity.CRITICAL: EventSeverity.CRITICAL,
+                        AnomalySeverity.WARNING: EventSeverity.HIGH,
+                        AnomalySeverity.INFO: EventSeverity.INFO
+                    }
+                    severity = severity_map.get(anomaly.severity, EventSeverity.INFO)
+                    
+                    track_event(
+                        event="anomaly_detected",
+                        severity=severity,
+                        category=EventCategory.ANOMALY,
+                        message=f"Anomaly detected in {anomaly.metric_name}: current={anomaly.current_value:.2f} (baseline={anomaly.baseline_value:.2f}, deviation={anomaly.deviation:.2f}x)",
+                        metadata=anomaly.to_dict(),
+                        component="anomaly_detector"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to track anomaly event: {e}")
+                
         return anomalies
 
     async def get_anomalies(self, limit: int = 100) -> Dict[str, Any]:

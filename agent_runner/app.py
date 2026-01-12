@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from common.observability import ComponentType
 from common.observability_middleware import ObservabilityMiddleware
-from agent_runner.routes import chat, mcp, admin, files, notifications
+from agent_runner.routes import chat, mcp, admin, files, notifications, tools, marketplace
 
 from agent_runner.mcp_server.router import router as mcp_server_router
 
@@ -34,5 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(files.router)
     app.include_router(mcp_server_router) # New MCP Server Interface
     app.include_router(notifications.router)
+    app.include_router(tools.router) # Tool Management API
+    app.include_router(marketplace.router) # Tool Marketplace API
 
     return app

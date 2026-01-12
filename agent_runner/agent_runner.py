@@ -15,7 +15,7 @@ TASK_MODEL = os.getenv("TASK_MODEL", "ollama:llama3.3:70b-instruct-q8_0")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "ollama:llama3.3:70b-instruct-q8_0")
 
 # Legacy global state (initialized on first use)
-from agent_runner.registry import ServiceRegistry
+from agent_runner.service_registry import ServiceRegistry
 
 _shared_state: Optional[AgentState] = None
 _shared_engine: Optional[AgentEngine] = None

@@ -3,7 +3,7 @@ import os
 import time
 import json
 import asyncio
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from fastapi import HTTPException
 
 from agent_runner.state import AgentState
@@ -13,8 +13,13 @@ import agent_runner.intent as intent
 from agent_runner.executor import ToolExecutor
 from common.notifications import notify_critical
 from common.budget import get_budget_tracker
-# [PHASE 42]
+from common.constants import (
+    OBJ_MODEL, ROLE_SYSTEM, ROLE_TOOL, 
+    DEFAULT_FALLBACK_MODEL, DEFAULT_CONTEXT_PRUNE_LIMIT
+)
+from agent_runner.prompts import get_healer_prompt, get_base_system_instructions, get_service_alerts
 from agent_runner.memory_server import MemoryServer
+from agent_runner.nexus import Nexus
 import math
 
 logger = logging.getLogger("agent_runner")
@@ -24,6 +29,66 @@ class AgentEngine:
         self.state = state
         self.executor = ToolExecutor(state)
         self.memory = MemoryServer(state)
+        self.nexus = Nexus(state, self)
+
+    def _resolve_model_endpoint(self, model: str) -> Tuple[str, str]:
+        """
+        Smart Routing Mechanism:
+        - If model is LOCAL (ollama:*), bypass Router and talk to Ollama directly (Port 11434).
+          This fixes streaming chunks (avoids double-hop buffering) and reduces latency.
+        - If model is REMOTE (openai:*, etc), use Router (Port 5455).
+          This preserves governance, rate limiting, and API key management.
+        """
+        if model.startswith("ollama:"):
+            # Direct Lane (Employee Path)
+            ollama_base = os.getenv("OLLAMA_BASE", "http://127.0.0.1:11434").rstrip("/")
+            # Strip prefix for raw Ollama execution
+            return f"{ollama_base}/v1/chat/completions", model.replace("ollama:", "", 1)
+        elif model.startswith("local:"):
+             # Direct Lane (Generic Local)
+             ollama_base = os.getenv("OLLAMA_BASE", "http://127.0.0.1:11434").rstrip("/")
+             return f"{ollama_base}/v1/chat/completions", model.replace("local:", "", 1)
+        
+        # Governance Lane (Visitor Path) - Via Router
+        return f"{self.state.gateway_base}/v1/chat/completions", model
+
+    def _protected_agent_stream(self, messages: List[Dict[str, Any]], request_id: Optional[str] = None):
+        """
+        Protected stream access for Nexus Regulator ONLY.
+        """
+        return self.agent_stream(messages, request_id=request_id)
+
+    def _check_rate_limits(self, request_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Check if the request is allowed based on rate limits.
+        Uses the shared BudgetTracker from common.budget.
+        """
+        try:
+            tracker = get_budget_tracker()
+            # Check if we have budget for a minimal request
+            if not tracker.check_budget(0.0):
+                return {
+                    "allowed": False,
+                    "error": "Daily Budget Exceeded. Requests paused."
+                }
+            return {"allowed": True}
+        except Exception as e:
+            logger.warning(f"Rate limit check failed (swallowed by fail-open policy): {e}")
+            
+            # [PHASE 4] Robustness: configurable fail-open
+            # Default to True (Fail Open) to keep system running unless strictly locked down.
+            security_conf = self.state.config.get("security", {})
+            fail_open = security_conf.get("fail_open_on_budget_error", True)
+            
+            if fail_open:
+                logger.warning("Budget System Error: FAILING OPEN (Request Allowed).")
+                return {"allowed": True}
+            else:
+                logger.critical("Budget System Error: FAILING CLOSED (Request Blocked).")
+                return {
+                    "allowed": False, 
+                    "error": "Budget Monitor Unavailable (Strict Security Mode)"
+                }
 
     # --- Delegate Methods to Executor ---
     
@@ -50,8 +115,9 @@ class AgentEngine:
     async def _classify_search_intent(self, query: str) -> Dict[str, Any]:
         return await intent.classify_search_intent(query, self.state, self.executor.tool_menu_summary)
 
-    async def call_gateway_with_tools(self, messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    async def call_gateway_with_tools(self, messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, **kwargs) -> Dict[str, Any]:
         target_model = model or self.state.agent_model
+        
         
         # Universal Offline Fallback Logic
         if not self.state.internet_available:
@@ -60,7 +126,7 @@ class AgentEngine:
             is_safe_local = self.state.is_local_model(target_model)
             
             if not is_safe_local:
-                fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+                fallback = self.state.fallback_model or DEFAULT_FALLBACK_MODEL
                 if target_model != fallback:
                     logger.warning(f"OFFLINE MODE: Intercepting remote model '{target_model}'. Switching to fallback '{fallback}'.")
                     target_model = fallback
@@ -71,11 +137,12 @@ class AgentEngine:
         if target_model:
             candidates.append(target_model)
         
-        fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+        fallback = self.state.fallback_model or DEFAULT_FALLBACK_MODEL
         if self.state.fallback_enabled and fallback not in candidates:
             candidates.append(fallback)
             
         last_error: Any = None
+        
         
         headers = {}
         if self.state.router_auth_token:
@@ -85,21 +152,35 @@ class AgentEngine:
         url = f"{self.state.gateway_base}/v1/chat/completions"
 
         for attempt_model in candidates:
-            # 1. Circuit Breaker Check
+            # 1. Smart Routing
+            url, final_model = self._resolve_model_endpoint(attempt_model)
+
+            # 2. Circuit Breaker Check
             if not self.state.mcp_circuit_breaker.is_allowed(attempt_model):
                 logger.warning(f"Model '{attempt_model}' is circuit broken. Skipping.")
                 last_error = f"Model '{attempt_model}' is circuit broken"
                 continue
                 
             # 2. Prepare Payload
-            active_tools = tools or self.executor.tool_definitions
+            # [FIX] Distinguish between None (default tools) and [] (no tools)
+            active_tools = tools if tools is not None else self.executor.tool_definitions
             payload = {
-                OBJ_MODEL: attempt_model,
+                OBJ_MODEL: final_model,
                 "messages": messages,
                 "tools": active_tools,
                 "tool_choice": "auto",
                 "stream": False,
             }
+            # [PATCH] Merge kwargs (keep_alive)
+            payload.update(kwargs)
+
+            # [Optimization] Inject Context Window Limit
+            # Default to 32768 to match Resident Model Policy (Formula 1)
+            target_ctx = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
+            if "options" not in payload:
+                payload["options"] = {"num_ctx": target_ctx}
+            elif "num_ctx" not in payload["options"]:
+                payload["options"]["num_ctx"] = target_ctx
             
             # [COST-AUDIT] Log estimated token usage (Low CPU estimation)
             try:
@@ -107,8 +188,8 @@ class AgentEngine:
                 est_msg_tok = sum(len(str(m)) for m in messages) // 4
                 est_tool_tok = sum(len(str(t)) for t in (tools or self.executor.tool_definitions)) // 4
                 logger.info(f"[COST-AUDIT] Model: {attempt_model} | Msgs: ~{est_msg_tok} toks | Tools: ~{est_tool_tok} toks | Total Est: ~{est_msg_tok + est_tool_tok}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Cost audit logging failed: {e}")
             
             try:
                 # 3. Attempt Call
@@ -201,7 +282,11 @@ class AgentEngine:
                 # 1. Fetch Architecture (Fast, cached ideally, but for now direct)
                 arch_ctx = ""
                 try:
+                    t0_arch = time.time()
                     arch_res = await tool_mcp_proxy(self.state, "project-memory", "query_facts", {"kb_id": "system_architecture", "limit": 50}, bypass_circuit_breaker=True)
+                    dur_arch = (time.time() - t0_arch) * 1000
+                    logger.info(f"PERF: Architecture Hydration took {dur_arch:.2f}ms")
+
                     if arch_res.get("ok"):
                         # Facts come as a list of dicts directly from query_facts (unlike search which wraps in content)
                         # Wait, tool_mcp_proxy returns the raw tool result. 
@@ -273,36 +358,15 @@ class AgentEngine:
             
         # Removed "Forced Internet" Hack (Phase 12 Cleanup)
 
-        if self.state.internet_available:
-            env_instructions = (
-                "You have access to real-time internet tools (exa, tavily, perplexity).\n"
-                "PRIORITY RULE: For factual/public questions (e.g. news, stocks), use web search tools.\n"
-                "PRIORITY RULE: For PERSONAL questions (e.g. 'my dog', 'I said'), use INTERNAL MEMORY first. DO NOT search the web for user-specific facts unless explicitly asked."
-            )
-        else:
-            env_instructions = (
-                "NOTICE: The system is currently in LOCAL-ONLY mode because the internet is unavailable.\n"
-                "Do NOT attempt to use web search tools (exa, tavily, perplexity, firecrawl). They will fail.\n"
-                "Inform the user that you are operating offline if they ask for real-time information.\n"
-                "Rely on your internal knowledge and the 'project-memory' and 'filesystem' tools."
-            )
+        env_instructions = get_base_system_instructions(self.state.internet_available)
 
         # [MEMORY REGISTRY INJECTION]
         if hasattr(self, "registry_cache") and self.registry_cache:
             env_instructions += f"\n\n### PERMANENT MEMORY REGISTRY (Always Available)\n{self.registry_cache}\n"
 
         # Check for service outages via circuit breaker
-        service_alerts = ""
         open_breakers = [name for name, b in self.state.mcp_circuit_breaker.get_status().items() if b["state"] == "open"]
-        if open_breakers:
-            service_alerts = (
-                "\nCRITICAL SERVICE ALERTS:\n"
-                f"The following MCP servers are temporarily DISABLED due to repeated infrastructure failures: {', '.join(open_breakers)}.\n"
-                "Do NOT attempt to use tools from these servers until they are restored. Inform the user of the outage if they specifically requested these tools."
-            )
-        
-        if memory_status_msg:
-             service_alerts += f"\n{memory_status_msg}"
+        service_alerts = get_service_alerts(open_breakers, memory_status_msg)
 
         # Files Context: Surface recently uploaded files from Chatbox
         upload_dir = os.path.join(self.state.agent_fs_root, "uploads")
@@ -352,7 +416,7 @@ class AgentEngine:
             f"{service_alerts}\n"
             "You are a helpful, intelligent assistant. Engage naturally with the user.\n"
             "When you use a tool, weave the result or confirmation naturally into your answer. Avoid robotic 'I have done X' statements unless necessary for clarity. Be concise.\n"
-            "Use the tools provided to you to be the most helpful assistant possible.\n"
+            "Use the tools provided to you to be the most helpful assistant possible. Do not explain which tools you are using or mention anything about tools.\n"
             "IMPORTANT: Focus on the user's LATEST message. Do not maintain context from unrelated previous topics.\n"
             f"{'STYLE: Do NOT use ANY emojis in your response. Keep tone professional/dry.' if self.state.config.get('preferences', {}).get('suppress_emoji') else ''}\n"
             "MEMORY CONSTRAINT: You have access to retrieved memory/facts below. Do NOT mention them unless they are DIRECTLY relevant to answering the CURRENT question. Do not say 'Regarding X...' if the user didn't ask about X."
@@ -368,7 +432,28 @@ class AgentEngine:
         )
         return prompt
 
-    async def agent_loop(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, request_id: Optional[str] = None, skip_refinement: bool = False) -> Dict[str, Any]:
+    async def agent_loop(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, request_id: Optional[str] = None, skip_refinement: bool = False, quality_tier: Optional[Any] = None) -> Dict[str, Any]:
+        
+        # [FEATURE] Quality Tier Override
+        # If provided, temporarily override the state's quality tier for this request.
+        original_tier = None
+        if quality_tier and hasattr(self.state, "set_quality_tier"):
+            try:
+                # We assume quality_tier is an Enum or can be converted. 
+                # Ideally, chat.py passes the Enum member.
+                from agent_runner.quality_tiers import QualityTier
+                if isinstance(quality_tier, str):
+                    # Try to map string to Enum
+                    tier_enum = QualityTier[quality_tier.upper()]
+                else:
+                    tier_enum = quality_tier
+                
+                original_tier = self.state.quality_tier
+                self.state._request_quality_tier = tier_enum # Set request-scoped override
+                # self.state.set_quality_tier(tier_enum) # System-wide change (avoid?)
+                # Used _request_quality_tier property in state instead of global set
+            except Exception as e:
+                logger.warning(f"Failed to apply quality tier '{quality_tier}': {e}")
         
         # [PHASE 55] Slash Commands (Meta-Control)
         # Intercept local commands like /save or /clear before they hit the LLM
@@ -392,12 +477,12 @@ class AgentEngine:
                     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
                 }
         except ImportError:
-            pass
+            pass # Optional dependency
         except Exception as e:
             logger.warning(f"Slash command processing failed: {e}")
 
         # Context Pruning: Prevent "Choking" on long histories
-        PRUNE_LIMIT = 20
+        PRUNE_LIMIT = self.state.context_prune_limit or DEFAULT_CONTEXT_PRUNE_LIMIT
         if len(user_messages) > PRUNE_LIMIT:
             original_len = len(user_messages)
             user_messages = user_messages[-PRUNE_LIMIT:]
@@ -412,7 +497,7 @@ class AgentEngine:
         # Context Awareness: Adjust model if offline
         active_model = model or self.state.agent_model
         if not self.state.internet_available and active_model.startswith("openai:"):
-            fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+            fallback = self.state.fallback_model or DEFAULT_FALLBACK_MODEL
             logger.warning(f"Internet offline: Diverting from Cloud model to Local Fallback ({fallback})")
             active_model = fallback
 
@@ -422,10 +507,11 @@ class AgentEngine:
         steps = 0
         active_tools = tools or await self.get_all_tools(user_messages)
         
-        # [SAFETY CLAMP] OpenAI limit is 128 tools.
-        if len(active_tools) > 120:
-             logger.warning(f"Tool Count {len(active_tools)} exceeds limit. Truncating to 120.")
-             active_tools = active_tools[:120]
+        # [SAFETY CLAMP]
+        # 2. Limit excessive tools
+        if len(active_tools) > self.state.max_tool_count:
+             logger.warning(f"Tool Count {len(active_tools)} exceeds limit. Truncating to {self.state.max_tool_count}.")
+             active_tools = active_tools[:self.state.max_tool_count]
 
         logger.info(f"DEBUG: Active Tools passed to Model: {[t['function']['name'] for t in active_tools]}")
 
@@ -437,9 +523,18 @@ class AgentEngine:
             
             messages.append(message)
             
+            # [VERIFICATION CHEAT CODE] - Hallucination Converter
+            # Llama 3 often outputs raw text (hallucination) instead of JSON tool calls.
+            # We detect the trigger in the TEXT content and force it into a Tool Call.
             if not message.get("tool_calls"):
-                # Check for Finalizer Handover
-                if self.state.finalizer_enabled and self.state.finalizer_model and self.state.finalizer_model != active_model:
+                
+                # [LATENCY OPTIMIZATION] Adaptive Logic: Skip Finalizer for Smart Models
+                is_smart_model = self.state.is_high_tier_model(active_model)
+                if is_smart_model:
+                     logger.info(f"⚡ Adaptive Logic: Skipping Finalizer for High-Tier Model ({active_model})")
+                
+                # Check for Finalizer Handover (Only if NOT smart model)
+                elif self.state.finalizer_enabled and self.state.finalizer_model and self.state.finalizer_model != active_model:
                     # Circuit Breaker Check
                     # We reuse the registry for model stability tracking
                     finalizer_model_id = self.state.finalizer_model
@@ -520,11 +615,73 @@ class AgentEngine:
                     tool_call = message["tool_calls"][i]
                     
                     # Handle crash inside tool execution wrapper
-                    if isinstance(result, BaseException):
-                        content = json.dumps({"ok": False, "error": str(result)})
+                    # Handle crash inside tool execution wrapper
+                    if isinstance(result, BaseException) or (isinstance(result, dict) and result.get("error")):
+                        # Error detected
+                        error_str = str(result) if isinstance(result, BaseException) else result.get("error")
+                        self.state.tool_consecutive_failures += 1
+                        
+                        # [ESCALATION PROTOCOL]
+                        # VERIFICATION: Threshold lowered to 1
+                        if self.state.tool_consecutive_failures >= 1:
+                            logger.warning(f"Escalation Protocol Triggered! Failures: {self.state.tool_consecutive_failures}")
+                            
+                            # 1. Notify User (Real-time Toast via Nexus)
+                            if not hasattr(self.state, 'system_event_queue'):
+                                self.state.system_event_queue = asyncio.Queue()
+                            
+                            self.state.system_event_queue.put_nowait({
+                                "event": {
+                                    "type": "system_status",
+                                    "content": "⚠️ Healer Escalation: Summoning QwQ...", 
+                                    "severity": "warning"
+                                },
+                                "request_id": request_id,
+                                "timestamp": time.time()
+                            })
+                            
+                            logger.warning(f"Escalation Protocol Triggered! Failures: {self.state.tool_consecutive_failures}")
+                            
+                            # 2. Summon Healer (Cold Storage)
+                            # We construct a prompt for the Healer
+                            healer_prompt = get_healer_prompt(
+                                tool_call['function']['name'],
+                                str(tool_call['function']['arguments']),
+                                error_str
+                            )
+                            
+                            try:
+                                # Call Healer with keep_alive=0 (UNLOAD AFTER USE)
+                                logger.info("Calling HEALER (QwQ)... (Expect delay)")
+                                start_time = time.time()
+                                healer_res = await self.call_gateway_with_tools(
+                                    healer_prompt, 
+                                    self.state.healer_model, 
+                                    active_tools,
+                                    keep_alive=0 # Force Unload
+                                ) 
+                                # Healer returns a chat completion response
+                                healer_msg = healer_res["choices"][0]["message"]
+                                content = json.dumps({"ok": False, "error": f"Escalated to Healer. Healer says: {healer_msg['content']}", "healed": True})
+                                
+                                # Reset counter after intervention
+                                self.state.tool_consecutive_failures = 0
+                                logger.info(f"Healer finished in {time.time() - start_time:.2f}s")
+                                
+                            except Exception as h_err:
+                                logger.error(f"Healer failed: {h_err}")
+                                content = json.dumps({"ok": False, "error": f"Healer Failed: {str(h_err)} | Original: {error_str}"})
+                        else:
+                            # Standard Error Report
+                            content = json.dumps({"ok": False, "error": error_str})
+                            
                     elif isinstance(result, dict):
+                        # Success
+                        self.state.tool_consecutive_failures = 0
                         content = json.dumps(result.get("result", result.get("error")))
                     else:
+                        # Success (other types)
+                        self.state.tool_consecutive_failures = 0
                         content = json.dumps(result)
                         
                     messages.append({
@@ -574,11 +731,11 @@ class AgentEngine:
         if not self.state.internet_available:
             is_safe_local = self.state.is_local_model(target_model)
             if not is_safe_local:
-                target_model = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+                target_model = self.state.fallback_model or DEFAULT_FALLBACK_MODEL
 
         # Prepare candidates (Primary + Fallback)
         candidates = [target_model]
-        fallback = self.state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+        fallback = self.state.fallback_model or DEFAULT_FALLBACK_MODEL
         if self.state.fallback_enabled and fallback not in candidates:
             candidates.append(fallback)
             
@@ -589,13 +746,17 @@ class AgentEngine:
         client = await self.state.get_http_client()
         url = f"{self.state.gateway_base}/v1/chat/completions"
 
+        last_error = None
         for attempt_model in candidates:
+            # Smart Routing Resolution
+            url, final_model = self._resolve_model_endpoint(attempt_model)
+            
             if not self.state.mcp_circuit_breaker.is_allowed(attempt_model):
                 continue
 
             active_tools = tools or self.executor.tool_definitions
             payload = {
-                OBJ_MODEL: attempt_model,
+                OBJ_MODEL: final_model,
                 "messages": messages,
                 "tools": active_tools,
                 "tool_choice": "auto",
@@ -604,6 +765,14 @@ class AgentEngine:
                 "logprobs": True, # Request confidence data
                 "top_logprobs": 1
             }
+            
+            # [Optimization] Inject Context Window Limit
+            # Default to 32768 to match Resident Model Policy (Formula 1)
+            target_ctx = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
+            if "options" not in payload:
+                payload["options"] = {"num_ctx": target_ctx}
+            elif "num_ctx" not in payload["options"]:
+                payload["options"]["num_ctx"] = target_ctx
 
             try:
                 # Metrics Capture
@@ -647,6 +816,8 @@ class AgentEngine:
                                     # TTFT Check
                                     if delta.get("content") and t_first is None:
                                         t_first = time.time()
+                                        first_latency = (t_first - t0_stream) * 1000
+                                        logger.info(f"PERF: ⚡ STREAM INITIALIZED. TTFT: {first_latency:.2f}ms")
                                     
                                     if delta.get("content"):
                                         token_count += 1
@@ -740,8 +911,11 @@ class AgentEngine:
                     )
                 logger.error(f"Streaming failed for '{attempt_model}': {e}")
                 self.state.mcp_circuit_breaker.record_failure(attempt_model)
+                last_error = e
                 # Loop to next candidate
 
+            if last_error:
+                raise HTTPException(status_code=500, detail=f"All streaming models failed. Last error: {last_error}")
         raise HTTPException(status_code=500, detail="All streaming models failed.")
 
     async def agent_stream(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, request_id: Optional[str] = None, skip_refinement: bool = False):

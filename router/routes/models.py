@@ -69,12 +69,37 @@ async def v1_models(request: Request):
     async def fetch_provider_models(p_name, p):
         try:
             url = join_url(p.base_url, p.models_path)
-            r = await state.client.get(url, headers=provider_headers(p), timeout=5.0)
+            logger.warning(f"🔍 FETCHING models from {p_name} at {url}")
+
+            # Check if API key is available
+            api_key = p.api_key()
+            logger.warning(f"🔑 API key for {p_name}: {'Available' if api_key else 'NOT FOUND'}")
+
+            # Increased timeout for remote APIs
+            r = await state.client.get(url, headers=provider_headers(p), timeout=15.0)
+
+            logger.warning(f"📡 Provider {p_name} response status: {r.status_code}")
+            if r.status_code != 200:
+                logger.warning(f"❌ Response body: {r.text[:200]}")
+
             if r.status_code == 200:
-                p_models = r.json().get("data", [])
+                response_data = r.json()
+                p_models = response_data.get("data", [])
+                logger.info(f"Successfully fetched {len(p_models)} models from {p_name}")
                 return [{"id": f"{p_name}:{m.get('id', '')}", "object": OBJ_MODEL, "owned_by": p_name} for m in p_models]
+            elif r.status_code == 401:
+                logger.warning(f"Authentication failed for provider {p_name} - check API keys")
+            elif r.status_code == 403:
+                logger.warning(f"Access forbidden for provider {p_name}")
+            else:
+                logger.warning(f"Unexpected status {r.status_code} from provider {p_name}")
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout fetching models from provider {p_name} (15s)")
         except Exception as e:
             logger.warning(f"Failed to fetch models for provider {p_name}: {e}")
+
+        # Return empty list on failure - don't break the entire models list
         return []
 
     provider_tasks = [fetch_provider_models(name, prov) for name, prov in state.providers.items()]

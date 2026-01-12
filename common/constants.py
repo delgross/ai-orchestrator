@@ -1,6 +1,7 @@
 """
 Centralized constants for the AI Orchestrator project.
 """
+import os
 
 # Provider Types
 PROVIDER_OPENAI_COMPAT = "openai_compat"
@@ -44,3 +45,15 @@ EVENT_RAG_ERROR = "rag_error"
 # Special Model Names
 MODEL_AGENT_MCP = "agent:mcp"
 MODEL_ROUTER = "router"
+
+# System Defaults & Timeouts (Audit Jan 11, 2026)
+DEFAULT_FALLBACK_MODEL = os.getenv("FALLBACK_MODEL")
+DEFAULT_VISION_FALLBACK = "ollama:llama3.2-vision"
+DEFAULT_CONTEXT_PRUNE_LIMIT = 20
+
+# Network Timeouts (Seconds)
+TIMEOUT_HTTP_DEFAULT = 30.0
+TIMEOUT_HTTP_LONG = 120.0  # Serverless cold-boots, heavy inference
+TIMEOUT_MCP_DISCOVERY = 45.0
+TIMEOUT_MCP_DISCOVERY_RETRY = 30.0
+TIMEOUT_MCP_CORE_DISCOVERY = 60.0

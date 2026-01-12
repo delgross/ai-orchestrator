@@ -4,8 +4,10 @@ import logging
 import os
 import time
 import httpx
+import aiofiles
 from typing import List, Dict, Any
 from common.lexicon import LexiconRegistry
+from common.sovereign import get_sovereign_model, get_sovereign_port
 
 logger = logging.getLogger("agent_runner.services.log_sorter")
 
@@ -25,6 +27,12 @@ class LogSorterService:
         self.surreal_user = self.surreal_auth[0]
         self.surreal_pass = self.surreal_auth[1]
         
+        # Persistent HTTP client for connection pooling
+        self.client = httpx.AsyncClient(
+            timeout=30.0,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+        )
+        
         # Resilience State (Phase 3.5)
         self._seen_hashes = {}
         self._llm_semaphore = asyncio.Semaphore(2)
@@ -32,11 +40,11 @@ class LogSorterService:
         self._cb_open = False
         self._cb_failures = 0
         self._cb_last_failure = 0.0
-        print(f"DEBUG_SORTER: Init complete. URL={self.surreal_url}")
+        logger.debug(f"LogSorter initialized: URL={self.surreal_url}")
 
     async def start(self):
         """Start the background sorting loop."""
-        print("DEBUG_SORTER: Start called.")
+        logger.debug("LogSorter start() called")
         if self.running:
             return
         self.running = True
@@ -46,6 +54,8 @@ class LogSorterService:
     async def stop(self):
         self.running = False
         logger.info("LogSorter Service stopping...")
+        # Close HTTP client
+        await self.client.aclose()
 
     async def _loop(self):
         while self.running:
@@ -54,7 +64,8 @@ class LogSorterService:
             except Exception as e:
                 logger.error(f"Error in LogSorter loop: {e}", exc_info=True)
             
-            await asyncio.sleep(self.interval)
+            from agent_runner.constants import SLEEP_LOG_SORTER
+            await asyncio.sleep(self.interval or SLEEP_LOG_SORTER)
 
     async def _process_batch(self):
         # [BACKPRESSURE] Stop fetching if local queue is busy
@@ -71,17 +82,17 @@ class LogSorterService:
         query = f"USE NS {self.surreal_ns}; USE DB {self.surreal_db}; SELECT * FROM diagnostic_log WHERE handled IS NONE ORDER BY timestamp ASC LIMIT 50;"
         
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{self.surreal_url}/sql", 
-                    content=query, 
-                    auth=(self.surreal_user, self.surreal_pass),
-                    headers={"Accept": "application/json"}
-                )
-                
-                if resp.status_code != 200:
-                    logger.error(f"Failed to fetch logs: {resp.text}")
-                    return
+            # Use persistent client for connection pooling
+            resp = await self.client.post(
+                f"{self.surreal_url}/sql", 
+                content=query, 
+                auth=(self.surreal_user, self.surreal_pass),
+                headers={"Accept": "application/json"}
+            )
+            
+            if resp.status_code != 200:
+                logger.error(f"Failed to fetch logs: {resp.text}")
+                return
 
                 data = resp.json()
                 # Surreal returns array of results. Last one is SELECT.
@@ -100,14 +111,12 @@ class LogSorterService:
                 if not results: return
 
                 updates = []
-                # Stream File
+                # Stream File (async)
                 stream_path = os.path.join(os.getcwd(), "logs", "live_stream.md")
                 os.makedirs(os.path.dirname(stream_path), exist_ok=True)
-                
-                # Ensure we have a valid output file for stream
-                sf = open(stream_path, "a")
 
                 ids_to_shred = [] # For Immediate Destruction
+                stream_lines = []  # Collect lines for async write
 
                 for log_entry in results:
                     log_id = log_entry["id"]
@@ -129,7 +138,7 @@ class LogSorterService:
                     if result.label != "NOISE":
                         # --- FAST LANE (Known Signal) ---
                         # 1. Output to Stream
-                        sf.write(f"{timestamp} {result.formatted_message}\n")
+                        stream_lines.append(f"{timestamp} {result.formatted_message}\n")
                         
                         # 2. Mark handled
                         updates.append(f"UPDATE {log_id} SET handled = true, classification = '{result.label}', severity = '{result.severity}', needs_review = false;")
@@ -141,7 +150,7 @@ class LogSorterService:
                     else:
                         # --- SLOW LANE (Unknown / Noise) ---
                         # 1. Output to Stream (Visual Feedback for Unknowns)
-                        sf.write(f"{timestamp} [UNKNOWN] {msg}\n")
+                        stream_lines.append(f"{timestamp} [UNKNOWN] {msg}\n")
 
                         # 2. Mark for Review
                         updates.append(f"UPDATE {log_id} SET handled = true, classification = 'UNKNOWN', needs_review = true;")
@@ -155,7 +164,10 @@ class LogSorterService:
                             # If even the queue is full (persistent overload), we drop.
                             logger.warning(f"LogSorter Queue Full. Dropping analysis for {log_id}")
 
-                sf.close()
+                # Write all lines at once (async)
+                if stream_lines:
+                    async with aiofiles.open(stream_path, "a") as sf:
+                        await sf.writelines(stream_lines)
                 
                 # Execute Destruction Batch
                 if ids_to_shred:
@@ -166,25 +178,25 @@ class LogSorterService:
                     id_list = ", ".join([f"{uid}" for uid in ids_to_shred]) # IDs come as strings with colons usually
                     delete_query = f"USE NS {self.surreal_ns}; USE DB {self.surreal_db}; DELETE {id_list};"
                     
-                    async with httpx.AsyncClient() as client:
-                        await client.post(
-                            f"{self.surreal_url}/sql", 
-                            content=delete_query, 
-                            auth=(self.surreal_user, self.surreal_pass),
-                             headers={"Accept": "application/json"}
-                        )
+                    # Use persistent client
+                    await self.client.post(
+                        f"{self.surreal_url}/sql", 
+                        content=delete_query, 
+                        auth=(self.surreal_user, self.surreal_pass),
+                        headers={"Accept": "application/json"}
+                    )
                     logger.warning(f"[LOAD SHEDDING] Vaporized {len(ids_to_shred)} logs due to overload.")
 
                 # Execute Update Batch
                 if updates:
                     update_query = f"USE NS {self.surreal_ns}; USE DB {self.surreal_db}; " + " ".join(updates)
-                    async with httpx.AsyncClient() as client:
-                        await client.post(
-                            f"{self.surreal_url}/sql", 
-                            content=update_query, 
-                            auth=(self.surreal_user, self.surreal_pass),
-                            headers={"Accept": "application/json"}
-                        )
+                    # Use persistent client
+                    await self.client.post(
+                        f"{self.surreal_url}/sql", 
+                        content=update_query, 
+                        auth=(self.surreal_user, self.surreal_pass),
+                        headers={"Accept": "application/json"}
+                    )
 
         except Exception as e:
             logger.error(f"Failed processing LogSorter batch: {e}")
@@ -220,19 +232,22 @@ class LogSorterService:
 
         # 2. Privacy / "Never Remote" Enforcement
         # We bypass the Gateway entirely to ensure NO billing risk.
-        target_url = "http://localhost:11434/v1/chat/completions" 
+        # [SOVEREIGN] Use centralized port
+        ollama_port = get_sovereign_port("ollama", 11434)
+        target_url = f"http://127.0.0.1:{ollama_port}/v1/chat/completions"
         
         # DYNAMIC CONFIG LOOKUP:
-        model = "llama3.1:latest" # Default
+        # [SOVEREIGN] Use centralized model definition for 'healer'
+        model = get_sovereign_model("healer", "llama3.1:latest")
         
-        if self.state:
-            # Map 'Diagnostician' role to 'healer_model' as per Dashboard convention
-            model = getattr(self.state, "healer_model", None) or getattr(self.state, "fallback_model", "llama3.1:latest")
-        else:
-            # Fallback to static config if state not injected (tests)
-            env_model = os.getenv("FALLBACK_MODEL")
-            cfg_model = self.config.get("agent_runner", {}).get("fallback", {}).get("model")
-            model = env_model or cfg_model or "llama3.1:latest"
+        # Fallback to state if sovereign missing (unlikely) or if state has dynamic override?
+        # Ideally Sovereign is the truth. 
+        # But if state has a runtime override that IS reflected in DB, Sovereign (read from DB/Yaml) should match.
+        # But here we are reading YAML via common.sovereign.
+        # Let's trust Sovereign YAML as the baseline.
+        
+        # Old state fallback logic removed to ensure consistency with Sovereign.
+        # if self.state: ... 
 
         if model.startswith("ollama:"): model = model.replace("ollama:", "")
         
@@ -258,24 +273,24 @@ class LogSorterService:
         }
         
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(target_url, json=payload, timeout=45.0)
+            # Use persistent client (with longer timeout for LLM calls)
+            resp = await self.client.post(target_url, json=payload, timeout=45.0)
                 
-                if resp.status_code == 200:
+            if resp.status_code == 200:
                     analysis = resp.json()['choices'][0]['message']['content'].strip()
                     
-                    # Append to Stream
+                    # Append to Stream (async)
                     stream_path = os.path.join(os.getcwd(), "logs", "live_stream.md")
-                    with open(stream_path, "a") as sf:
-                        sf.write(f"\n    ↳ 🧠 [AI Insight] {analysis}\n\n")
+                    async with aiofiles.open(stream_path, "a") as sf:
+                        await sf.write(f"\n    ↳ 🧠 [AI Insight] {analysis}\n\n")
                         
                     logger.info(f"Analyzed Anomaly: {log_id} via Local Ollama")
                     # Reset Circuit Breaker on Success
                     self._cb_failures = 0
                     
-                else:
-                    logger.warning(f"Local LLM Failed: {resp.status_code} {resp.text}")
-                    self._cb_failures += 1
+            else:
+                logger.warning(f"Local LLM Failed: {resp.status_code} {resp.text}")
+                self._cb_failures += 1
                     
         except Exception as e:
             logger.error(f"Local LLM Connection Error: {e}")

@@ -1,0 +1,7 @@
+# Router Model Providers Configuration
+# Authority: Sovereign Memory
+# This file defines the available model providers and their hosted models.
+
+ollama-local:
+  type: ollama
+  base_url: http://127.0.0.1:11434

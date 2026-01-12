@@ -2,6 +2,7 @@ import json
 import os
 import re
 import logging
+from agent_runner.db_utils import run_query
 import asyncio
 from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -29,16 +30,27 @@ class Sentinel:
         self.state = state
         self.lexicon_path = Path(state.agent_fs_root).parent / "config" / "lexicons" / "command_safety.json"
         self._memory_cache = {"approved": [], "blocked": []}
+        # Database is source of truth - sync from DB on init
+        # Local JSON is just a performance cache for Tier 2 lookups
         self._load_memory()
 
+    async def initialize(self):
+        """Initialize Sentinel by syncing from database (source of truth)."""
+        try:
+            await self._sync_from_db()
+        except Exception as e:
+            logger.warning(f"Sentinel DB sync failed on init, using local cache: {e}")
+            # Fallback to local cache if DB unavailable
+            self._load_memory()
+
     def _load_memory(self):
-        """Load learned patterns from disk."""
+        """Load learned patterns from local cache file (fallback only)."""
         if self.lexicon_path.exists():
             try:
                 with open(self.lexicon_path, "r") as f:
                     self._memory_cache = json.load(f)
             except Exception as e:
-                logger.warning(f"Failed to load Sentinel memory: {e}")
+                logger.warning(f"Failed to load Sentinel memory from cache: {e}")
         else:
             # Init empty
             self._save_memory()
@@ -143,78 +155,100 @@ class Sentinel:
     async def _sync_from_db(self):
         """
         Pull latest rules from SurrealDB (Source of Truth) and update local cache.
+        Database is the authoritative source - JSON file is just a performance cache.
+        
+        NOTE: Cache invalidation framework available in agent_runner/cache_helpers.py
+        Future: Integrate with CacheInvalidator for automatic TTL and DB timestamp validation.
         """
         try:
-            # We use the generic tool_query_surreal pattern mentally, but implement directly here via HTTP
-            # Table: sentinel_rules
-            base_url = self.state.config.get("surreal", {}).get("url", "http://localhost:8000")
-            ns = os.getenv("SURREAL_NS", "orchestrator")
-            db = os.getenv("SURREAL_DB", "memory")
-            auth = (os.getenv("SURREAL_USER", "root"), os.getenv("SURREAL_PASS", "root"))
+            if not hasattr(self.state, "memory") or not self.state.memory:
+                logger.warning("Memory server not available for Sentinel sync")
+                return
             
-            client = await self.state.get_http_client()
+            # Fetch all enabled rules from database
+            query = "SELECT * FROM sentinel_rules WHERE enabled = true;"
+            rows = await run_query(self.state, query)
             
-            # Fetch all rules
-            query = f"USE NS {ns}; USE DB {db}; SELECT * FROM sentinel_rules;"
-            url = f"{base_url}/sql"
-            headers = {"Accept": "application/json", "ns": ns, "db": db}
-            
-            resp = await client.post(url, content=query, auth=auth, headers=headers, timeout=5.0)
-            if resp.status_code == 200:
-                data = resp.json()
-                # Parse result... (Surreal returns list of results for each query statement)
-                rows = []
-                for res in data:
-                    if res.get("status") == "OK" and isinstance(res.get("result"), list):
-                        rows = res.get("result")
-                        
-                if rows:
-                    # Rebuild cache structure
-                    new_cache = {"approved": [], "blocked": []}
-                    for r in rows:
-                        target = "approved" if r.get("allowed") else "blocked"
-                        new_cache[target].append(r)
+            if rows:
+                # Rebuild cache structure from database
+                new_cache = {"approved": [], "blocked": []}
+                for r in rows:
+                    # Map database fields to cache structure
+                    pattern = r.get("pattern", "")
+                    action = r.get("action", "allow")  # "allow" or "block"
+                    reason = r.get("name", "Database rule")  # Use name as reason
                     
-                    self._memory_cache = new_cache
-                    self._save_memory() # Update local cache file
-                    logger.info(f"Sentinel Synced {len(rows)} rules from DB.")
+                    entry = {
+                        "pattern": pattern,
+                        "allowed": (action.lower() == "allow"),
+                        "reason": reason,
+                        "source": "database"
+                    }
+                    
+                    target = "approved" if entry["allowed"] else "blocked"
+                    new_cache[target].append(entry)
+                
+                self._memory_cache = new_cache
+                self._save_memory()  # Update local cache file for fast Tier 2 lookups
+                logger.info(f"Sentinel synced {len(rows)} rules from database (source of truth)")
+            else:
+                logger.debug("No Sentinel rules found in database")
                     
         except Exception as e:
-            logger.warning(f"Sentinel DB Sync Failed (Using Local Cache): {e}")
+            logger.warning(f"Sentinel DB sync failed (using local cache): {e}", exc_info=True)
 
     async def learn_pattern(self, pattern: str, allowed: bool, reason: str):
-        """Dual-Write: Persist to SurrealDB (Primary) and Local File (Cache)."""
-        # 1. Update Local
-        target = "approved" if allowed else "blocked"
-        entry = {
-            "pattern": pattern,
-            "allowed": allowed,
-            "reason": reason,
-            "added_at": str(self.state.started_at),
-            "source": "manual_override"
-        }
-        self._memory_cache[target].append(entry)
-        self._save_memory()
+        """
+        Learn a new pattern: Write to Database (Primary) then update local cache.
+        Database is source of truth - JSON file is just a performance cache.
+        """
+        if not hasattr(self.state, "memory") or not self.state.memory:
+            logger.error("Memory server not available for Sentinel learn_pattern")
+            return
         
-        # 2. Write to DB
         try:
-             base_url = self.state.config.get("surreal", {}).get("url", "http://localhost:8000")
-             ns = os.getenv("SURREAL_NS", "orchestrator")
-             db = os.getenv("SURREAL_DB", "memory")
-             auth = (os.getenv("SURREAL_USER", "root"), os.getenv("SURREAL_PASS", "root"))
-             
-             # Create Record
-             table = "sentinel_rules"
-             query = f"USE NS {ns}; USE DB {db}; CREATE {table} CONTENT {json.dumps(entry)};"
-             
-             client = await self.state.get_http_client()
-             url = f"{base_url}/sql"
-             headers = {"Accept": "application/json", "ns": ns, "db": db}
-             
-             await client.post(url, content=query, auth=auth, headers=headers, timeout=5.0)
-             logger.info(f"Sentinel DB Write Success: {pattern}")
-             
-        except Exception as e:
-            logger.error(f"Sentinel DB Write Failed: {e}")
+            # 1. Write to Database (Source of Truth)
+            rule_name = f"pattern_{hash(pattern) % 10000}"  # Generate unique name
+            action = "allow" if allowed else "block"
             
-        logger.info(f"Sentinel LEARNED: {target.upper()} -> {pattern}")
+            query = """
+            UPSERT type::thing('sentinel_rules', $name)
+            SET name = $name,
+                pattern = $pattern,
+                action = $action,
+                enabled = true;
+            """
+            
+            await run_query(self.state, query, {
+                "name": rule_name,
+                "pattern": pattern,
+                "action": action
+            })
+            
+            logger.info(f"Sentinel rule written to database: {pattern} -> {action}")
+            
+            # 2. Update local cache for immediate use (Tier 2 lookups)
+            target = "approved" if allowed else "blocked"
+            entry = {
+                "pattern": pattern,
+                "allowed": allowed,
+                "reason": reason,
+                "source": "database"
+            }
+            self._memory_cache[target].append(entry)
+            self._save_memory()  # Persist cache for fast lookups
+            
+            logger.info(f"Sentinel LEARNED: {target.upper()} -> {pattern}")
+            
+        except Exception as e:
+            logger.error(f"Sentinel learn_pattern failed: {e}", exc_info=True)
+            # Fallback: at least update local cache
+            target = "approved" if allowed else "blocked"
+            entry = {
+                "pattern": pattern,
+                "allowed": allowed,
+                "reason": reason,
+                "source": "local_fallback"
+            }
+            self._memory_cache[target].append(entry)
+            self._save_memory()

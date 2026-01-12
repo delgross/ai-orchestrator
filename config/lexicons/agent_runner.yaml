@@ -1,0 +1,12 @@
+- label: "NOISE"
+  regex: "Tool Count.*exceeds limit"
+  severity: "INFO"
+  description: "Tool count warning - expected behavior when many MCP tools are available"
+  template: ""
+
+- label: "TOOL_TRUNCATION"
+  regex: "Truncating to 120"
+  severity: "INFO"
+  description: "Tools truncated to OpenAI limit - normal operation"
+  template: ""
+

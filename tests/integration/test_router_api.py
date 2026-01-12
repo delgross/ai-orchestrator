@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
-from router.router import app, state
+from router.app import create_app
+from router.config import state
 
+app = create_app()
 client = TestClient(app)
 
 def test_health_check():

@@ -13,7 +13,7 @@ PAYLOAD = {
     "stream": True  
 }
 HEADERS = {
-    "Authorization": "Bearer 9sYBjBLjAHKG8g8ZzzsUeBOvtzgQFHmX7oIeygdpzic"
+    "Authorization": "Bearer antigravity_router_token_2025"
 }
 
 # Config

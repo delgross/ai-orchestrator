@@ -28,7 +28,7 @@ async def tool_remove_memory_from_file(state: AgentState, target_text: str, file
         original_content = abs_path.read_text(encoding="utf-8")
         
         # Intelligence Step: Identification
-        # We ask the Architect Brain to identify the exact line range to remove
+        # We ask the Agent Model (or appropriate model) to identify the exact line range to remove
         prompt = (
             f"I need to 'Forget' the following concept from the text:\n"
             f"Concept to Remove: '{target_text}'\n\n"

@@ -38,9 +38,8 @@ async def get_config(key: str):
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                url, 
-                content=q, 
-                sys_auth=(SURREAL_USER, SURREAL_PASS) if SURREAL_USER else None,
+                url,
+                content=q,
                 auth=(SURREAL_USER, SURREAL_PASS), # Direct HTTP auth
                 headers={"Accept": "application/json", "NS": SURREAL_NS, "DB": SURREAL_DB},
                 params={"key": key} # Does not work for vars in body unless parsed? 
@@ -70,6 +69,13 @@ async def get_config(key: str):
             
     except Exception as e:
         logger.error(f"DB Config Fetch Failed: {e}")
+        # Fallback to environment variable if database is inaccessible
+        import os
+        env_value = os.getenv(key)
+        if env_value is not None:
+            logger.info(f"Using environment variable fallback for {key}")
+            return {"key": key, "value": env_value}
+        # Re-raise if neither database nor environment has the value
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/config/{key}")

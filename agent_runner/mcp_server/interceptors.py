@@ -75,7 +75,7 @@ class PrivacyInterceptor(ToolInterceptor):
                     client_name = context.get("client_name", "unknown")
                     
                     # --- REUSED LOGIC (Ideally extract method) ---
-                    from agent_runner.registry import ServiceRegistry
+                    from agent_runner.service_registry import ServiceRegistry
                     
                     # Check Cache
                     cache_key = (target_kb, client_name)
@@ -120,7 +120,7 @@ class PrivacyInterceptor(ToolInterceptor):
                 # Or re-instantiate MemoryServer (lightweight if using HTTP)
                 
                 # Use ServiceRegistry to access MemoryServer without circular dependencies
-                from agent_runner.registry import ServiceRegistry
+                from agent_runner.service_registry import ServiceRegistry
                 
                 # Check Cache
                 cache_key = (target_kb, client_name)

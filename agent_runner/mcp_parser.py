@@ -3,6 +3,7 @@ import logging
 import yaml
 from typing import Dict, Any, List
 from agent_runner.state import AgentState
+from agent_runner.db_utils import run_query
 
 logger = logging.getLogger("agent_runner.mcp_parser")
 

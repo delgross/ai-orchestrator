@@ -8,6 +8,7 @@ from pathlib import Path
 
 from agent_runner.state import AgentState
 from agent_runner.memory_server import MemoryServer
+from agent_runner.db_utils import run_query
 
 logger = logging.getLogger(__name__)
 
@@ -26,74 +27,163 @@ class ConfigManager:
     async def check_and_sync_all(self):
         """
         Boot-time check: Sync all config files if disk is newer than DB.
+        Executes checks in PARALLEL to reduce startup latency.
+        
+        [PHASE 3] Optimization: Fetch mtimes in batch along with hashes for fast-path check.
         """
-        logger.info("Performing Sovereign File Sync Check...")
+        logger.info("Performing Sovereign File Sync Check (Parallel)...")
         
-        # 1. config.yaml
-        await self._sync_if_newer(
-            self.state.agent_fs_root.parent / "config" / "config.yaml",
-            "config_yaml",
-            self.sync_base_config_from_disk
-        )
+        # [OPTIMIZATION] Batch fetch all hashes AND mtimes to avoid sequential DB round-trips
+        # This resolves the bottleneck where asyncio.gather was serialized by DB lock contention.
+        keys = [
+            # Hashes
+            "meta:config_yaml_hash",
+            "meta:mcp_yaml_hash",
+            "meta:env_file_hash",
+            "meta:system_config_hash",
+            "meta:sovereign_config_hash",
+            # [PHASE 3] MTimes for fast-path check
+            "meta:config_yaml_mtime",
+            "meta:mcp_yaml_mtime",
+            "meta:env_file_mtime",
+            "meta:system_config_mtime",
+            "meta:sovereign_config_mtime"
+        ]
+        # Format for SurrealQL: ['key1', 'key2', ...]
+        formatted_keys = "[" + ", ".join([f"'{k}'" for k in keys]) + "]" 
+        q = f"SELECT * FROM config_state WHERE key IN {formatted_keys}"
+        
+        try:
+            res = await run_query(self.state, q)
+            # Map key -> value
+            db_cache = {r['key']: str(r['value']) for r in res} if res else {}
+        except Exception as e:
+            logger.warning(f"Batch metadata fetch failed: {e}. Falling back to empty.")
+            db_cache = {}
+            
+        # Define tasks with pre-fetched hashes and mtimes
+        tasks = [
+            # 1. config.yaml
+            self._sync_if_newer(
+                self.state.agent_fs_root.parent / "config" / "config.yaml",
+                "config_yaml",
+                self.sync_base_config_from_disk,
+                pre_fetched_hash=db_cache.get("meta:config_yaml_hash", ""),
+                pre_fetched_mtime=db_cache.get("meta:config_yaml_mtime", None)
+            ),
+            # 2. mcp.yaml
+            self._sync_if_newer(
+                self.state.agent_fs_root.parent / "config" / "mcp.yaml",
+                "mcp_yaml",
+                self.sync_mcp_from_disk,
+                pre_fetched_hash=db_cache.get("meta:mcp_yaml_hash", ""),
+                pre_fetched_mtime=db_cache.get("meta:mcp_yaml_mtime", None)
+            ),
+            # 3. .env
+            self._sync_if_newer(
+                self.state.agent_fs_root.parent / ".env",
+                "env_file",
+                self.sync_env_from_disk,
+                pre_fetched_hash=db_cache.get("meta:env_file_hash", ""),
+                pre_fetched_mtime=db_cache.get("meta:env_file_mtime", None)
+            ),
+            # 4. system_config.json
+            self._sync_if_newer(
+                self.state.agent_fs_root.parent / "system_config.json",
+                "system_config",
+                self.sync_from_disk,
+                pre_fetched_hash=db_cache.get("meta:system_config_hash", ""),
+                pre_fetched_mtime=db_cache.get("meta:system_config_mtime", None)
+            ),
+            # 5. sovereign.yaml (Master Config)
+            self._sync_if_newer(
+                self.state.agent_fs_root.parent / "config" / "sovereign.yaml",
+                "sovereign_config",
+                self.sync_sovereign_from_disk,
+                pre_fetched_hash=db_cache.get("meta:sovereign_config_hash", ""),
+                pre_fetched_mtime=db_cache.get("meta:sovereign_config_mtime", None)
+            )
+        ]
 
-        # 2. mcp.yaml
-        await self._sync_if_newer(
-            self.state.agent_fs_root.parent / "config" / "mcp.yaml",
-            "mcp_yaml",
-            self.sync_mcp_from_disk
-        )
+        # Execute all sync checks concurrently
+        await asyncio.gather(*tasks)
         
-        # 3. .env
-        await self._sync_if_newer(
-            self.state.agent_fs_root.parent / ".env",
-            "env_file",
-            self.sync_env_from_disk
-        )
-
-        # 4. system_config.json
-        await self._sync_if_newer(
-            self.state.agent_fs_root.parent / "system_config.json",
-            "system_config",
-            self.sync_from_disk
-        )
-        
-    async def _sync_if_newer(self, file_path: Path, meta_key: str, sync_method) -> bool:
+    async def _sync_if_newer(self, file_path: Path, meta_key: str, sync_method, pre_fetched_hash: str = None, pre_fetched_mtime: str = None) -> bool:
         """
-        Checks mtime of file vs 'meta:{meta_key}_mtime' in DB.
-        If file is newer, awaits sync_method() and updates DB timestamp.
+        Checks content hash of file vs 'meta:{meta_key}_hash' in DB.
+        If content changed, awaits sync_method() and updates DB hash.
+        Uses execution-time provided hash if available to save a query.
+        
+        [PHASE 3] Optimization: Use file mtime as fast-path check to avoid MD5 on every boot.
         """
         if not file_path.exists():
             return False
             
         try:
-            # 1. Get Disk mtime
-            disk_mtime = file_path.stat().st_mtime
+            import hashlib
+            import os.path
             
-            # 2. Get DB mtime
-            db_key = f"meta:{meta_key}_mtime"
-            q = "SELECT value FROM config_state WHERE key = $key"
-            res = await self.memory._execute_query(q, {"key": db_key})
+            # [PHASE 3] FAST PATH: Check file modification time first
+            # Only compute expensive MD5 if file mtime changed since last check
+            mtime_key = f"meta:{meta_key}_mtime"
+            current_mtime = os.path.getmtime(file_path)
             
-            db_mtime = 0.0
-            if res and len(res) > 0:
+            # Use pre-fetched mtime if available
+            if pre_fetched_mtime is not None:
+                cached_mtime = float(pre_fetched_mtime) if pre_fetched_mtime else 0.0
+            else:
+                # Fallback: Query DB for mtime
+                mtime_query = "SELECT * FROM config_state WHERE key = $key"
+                mtime_res = await run_query(self.state, mtime_query, {"key": mtime_key})
+                cached_mtime = float(mtime_res[0].get("value", 0)) if mtime_res and len(mtime_res) > 0 else 0.0
+            
+            # If mtime hasn't changed, file is identical - skip hash computation
+            if current_mtime == cached_mtime and cached_mtime > 0:
+                logger.info(f"[PHASE 3] Fast-path HIT: {file_path.name} unchanged (mtime: {current_mtime})")
+                return False
+            else:
+                logger.info(f"[PHASE 3] Fast-path MISS: {file_path.name} - mtime changed ({cached_mtime} -> {current_mtime})")
+            
+            # SLOW PATH: File changed (or first boot) - compute MD5 hash
+            # 1. Compute file content hash
+            with open(file_path, 'rb') as f:
+                disk_hash = hashlib.md5(f.read()).hexdigest()
+            
+            # 2. Get DB hash (Use pre-fetched if available)
+            if pre_fetched_hash is not None:
+                db_hash = pre_fetched_hash
+            else:
+                db_key = f"meta:{meta_key}_hash"
+                q = "SELECT * FROM config_state WHERE key = $key"
+                logger.warning(f"[Watcher] Querying DB hash for {db_key}...")
                 try:
-                    db_mtime = float(res[0].get("value", 0.0))
-                except:
-                    pass
+                    res = await run_query(self.state, q, {"key": db_key})
+                    db_hash = str(res[0].get("value", "")) if res and len(res) > 0 else ""
+                    logger.warning(f"[Watcher] DB Hash: {db_hash[:8]}... Disk Hash: {disk_hash[:8]}...")
+                except Exception as db_err:
+                    logger.error(f"[Watcher] DB Hash Query Failed: {db_err}")
+                    db_hash = "" # Force sync if DB fails? Or abort?
             
-            # 3. Compare (Use a small epsilon for float equality or just strict greater)
-            # If disk is newer by at least 1 second (file systems vary)
-            if disk_mtime > db_mtime + 0.001:
-                logger.info(f"Sovereign Sync: {file_path.name} (Disk {disk_mtime}) > (DB {db_mtime}). Syncing...")
+            # 3. Compare hashes (only sync if content actually changed)
+            if disk_hash != db_hash:
+                logger.warning(f"[Watcher] Hash Mismatch! Syncing {file_path.name}...")
+                logger.info(f"Sovereign Sync: {file_path.name} content changed (hash: {disk_hash[:8]}...). Syncing...")
                 
                 # Execute specific sync logic
                 await sync_method()
                 
-                # Update DB Timestamp
-                await self._update_db_config(db_key, str(disk_mtime), "file_watcher")
+                # Update DB Hash AND mtime
+                db_key = f"meta:{meta_key}_hash"
+                await self._update_db_config(db_key, disk_hash, "file_watcher")
+                await self._update_db_config(mtime_key, str(current_mtime), "file_watcher")
+                logger.info(f"[PHASE 3] Saved mtime cache: {mtime_key} = {current_mtime}")
                 return True
+            else:
+                # Hash unchanged but mtime changed (e.g., editor touch) - update mtime cache
+                await self._update_db_config(mtime_key, str(current_mtime), "file_watcher")
+                logger.debug(f"{file_path.name} mtime changed but content unchanged")
+                return False
                 
-            return False
         except Exception as e:
             logger.error(f"Sovereign Sync Check failed for {file_path.name}: {e}")
             return False
@@ -129,7 +219,10 @@ class ConfigManager:
     async def set_config_value(self, key: str, value: Any) -> bool:
         """
         Update a Configuration Value (Model, Timeout, etc).
-        Target: system_config.json (Backup), config_state (Master), AgentState (Runtime)
+        Target: Database (Master), Runtime State, and ALL disk backups:
+        - system_config.json
+        - config/config.yaml
+        - agent_runner/agent_runner.env (if it's a MODEL config)
         """
         logger.info(f"Updating Config: {key} -> {value}")
         
@@ -143,7 +236,10 @@ class ConfigManager:
         # 2. Update Runtime
         self._update_state_attributes(key, value)
         
-        # 3. Update Disk Backup (system_config.json)
+        # 3. Update ALL Disk Backups (keep all files in sync)
+        disk_update_errors = []
+        
+        # 3a. Update system_config.json
         try:
             config_path = self.state.agent_fs_root.parent / "system_config.json"
             cfg = {}
@@ -153,16 +249,69 @@ class ConfigManager:
             
             # Use lowercase for json compatibility usually, but state attributes are mapped from UPPER.
             # system_config.json typically uses lowercase keys (e.g. "vision_model").
-            # Let's map UPPER -> lower for file storage if it matches standard keys.
             file_key = key.lower()
             cfg[file_key] = value
             
             with open(config_path, "w") as f:
                 json.dump(cfg, f, indent=4)
                 
-            logger.info(f"Backed up {key} to {config_path}")
+            logger.info(f"✅ Backed up {key} to {config_path}")
         except Exception as e:
-            logger.error(f"Failed to patch system_config.json: {e}")
+            error_msg = f"Failed to patch system_config.json: {e}"
+            logger.error(error_msg)
+            disk_update_errors.append(error_msg)
+        
+        # 3b. Update config/config.yaml (if it's a model config)
+        if key.endswith("_MODEL") or key in ["AGENT_MODEL", "ROUTER_MODEL", "TASK_MODEL", "VISION_MODEL", 
+                                               "EMBEDDING_MODEL", "MCP_MODEL", "SUMMARIZATION_MODEL", 
+                                               "FINALIZER_MODEL", "FALLBACK_MODEL", "INTENT_MODEL", 
+                                               "PRUNER_MODEL", "HEALER_MODEL", "CRITIC_MODEL", 
+                                               "QUERY_REFINEMENT_MODEL"]:
+            try:
+                yaml_path = self.state.agent_fs_root.parent / "config" / "config.yaml"
+                if yaml_path.exists():
+                    with open(yaml_path, "r") as f:
+                        yaml_data = yaml.safe_load(f) or {}
+                    
+                    # Ensure 'system' section exists
+                    if "system" not in yaml_data:
+                        yaml_data["system"] = {}
+                    
+                    # Map UPPER key to lowercase for YAML (e.g., AGENT_MODEL -> agent_model)
+                    yaml_key = key.lower()
+                    yaml_data["system"][yaml_key] = value
+                    
+                    with open(yaml_path, "w") as f:
+                        yaml.dump(yaml_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+                    
+                    logger.info(f"✅ Backed up {key} to {yaml_path}")
+                else:
+                    logger.debug(f"config.yaml not found at {yaml_path}, skipping")
+            except Exception as e:
+                error_msg = f"Failed to patch config.yaml: {e}"
+                logger.error(error_msg)
+                disk_update_errors.append(error_msg)
+        
+        # 3c. Update agent_runner/agent_runner.env (if it's AGENT_MODEL)
+        # Note: Only AGENT_MODEL is stored in agent_runner.env based on current file structure
+        if key == "AGENT_MODEL":
+            try:
+                env_path = self.state.agent_fs_root.parent / "agent_runner" / "agent_runner.env"
+                if env_path.exists():
+                    await self._patch_agent_runner_env(key, str(value), env_path)
+                    logger.info(f"✅ Backed up {key} to {env_path}")
+                else:
+                    logger.debug(f"agent_runner.env not found at {env_path}, skipping")
+            except Exception as e:
+                error_msg = f"Failed to patch agent_runner.env: {e}"
+                logger.error(error_msg)
+                disk_update_errors.append(error_msg)
+        
+        # Log summary
+        if disk_update_errors:
+            logger.warning(f"Some disk backups failed (non-critical): {len(disk_update_errors)} errors")
+        else:
+            logger.info(f"✅ All disk backups updated for {key}")
         
         return True
 
@@ -175,7 +324,7 @@ class ConfigManager:
         # Ensure values are strings for simple KV storage, or handle JSON if needed.
         # For secrets/config, string is usually safe.
         val_str = str(value) if not isinstance(value, (int, float, bool)) else value
-        await self.memory._execute_query(q, {"key": key, "val": val_str, "src": source})
+        await run_query(self.state, q, {"key": key, "val": val_str, "src": source})
 
     def _update_state_attributes(self, key: str, value: Any):
         """Reflect changes in AgentState object immediately."""
@@ -193,68 +342,79 @@ class ConfigManager:
         elif key == "PRUNER_MODEL": self.state.pruner_model = value
         elif key == "HEALER_MODEL": self.state.healer_model = value
         elif key == "CRITIC_MODEL": self.state.critic_model = value
+        elif key == "QUERY_REFINEMENT_MODEL": self.state.query_refinement_model = value
+        elif key == "ROUTER_AUTH_TOKEN": self.state.router_auth_token = value
         # Add more mappings as needed
 
     async def _patch_env_file(self, key: str, value: str):
         """
-        Safely update a key in .env using Regex to handle quotes/comments.
-        Example: 
-          KEY="Old" # Comment -> KEY="New" # Comment
+        Safely update a key in .env using python-dotenv.
         """
-        import re
-        
-        env_path = self.state.agent_fs_root / ".env"
-        # Fallback if fs_root is bad (logic we added to ingestor, let's replicate or assume fix)
-        if not env_path.exists():
-            env_path = Path(os.getcwd()) / ".env"
-            
-        if not env_path.exists():
-            # Create new if missing
-            logger.warning("Creating new .env file for backup.")
-            with open(env_path, "w") as f:
-                f.write(f'{key}="{value}"\n')
+        try:
+            import dotenv
+        except ImportError:
+            logger.error("python-dotenv library not found. Cannot update .env file.")
             return
 
-        # Read all lines
-        lines = []
-        with open(env_path, "r") as f:
-            lines = f.readlines()
-
-        key_found = False
-        new_lines = []
+        # Determine path - prefer project root (parent of agent_fs_root)
+        env_path = self.state.agent_fs_root.parent / ".env"
         
-        # Regex: Start of line, Optional export, KEY, Optional WS, =, Optional WS, Capture Value, Optional WS, Optional Comment
-        # Actually simpler: Just find the key assignment and replace the value part
-        # ^(export\s+)?KEY\s*=.*
-        pattern = re.compile(rf'^(?:export\s+)?{re.escape(key)}\s*=.*', re.MULTILINE)
-        
-        updated_line = f'{key}="{value}"'
+        # Fallback to CWD if specific path doesn't exist (unless we want to force creation at specific path)
+        if not env_path.exists():
+            cwd_path = Path(os.getcwd()) / ".env"
+            if cwd_path.exists():
+                env_path = cwd_path
+            
+        # Create if missing (default to project root)
+        if not env_path.exists():
+            logger.warning(f"Creating new .env file at {env_path}")
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            env_path.touch()
 
-        for line in lines:
-            if pattern.match(line):
-                # Preserve comment if exists
-                if "#" in line:
-                    comment = line.split("#", 1)[1].rstrip()
-                    new_lines.append(f'{updated_line} # {comment}\n')
-                else:
-                    new_lines.append(f'{updated_line}\n')
-                key_found = True
+        # set_key performs atomic-ish rewrite
+        # We run it in a thread to avoid blocking the event loop (it does file I/O)
+        def _update():
+             # quote_mode='always' ensures complex strings/multiline are safe
+             return dotenv.set_key(str(env_path), key, value, quote_mode="always")
+
+        try:
+            success, key_out, value_out = await asyncio.to_thread(_update)
+            
+            if success:
+                 logger.info(f"Updated .env: {key}=*** at {env_path}")
             else:
-                new_lines.append(line)
-        
-        if not key_found:
-            # Append to end
-            if new_lines and not new_lines[-1].endswith("\n"):
-                new_lines.append("\n")
-            new_lines.append(f'{updated_line}\n')
+                 logger.warning(f"Failed to update .env for {key} at {env_path}")
+        except Exception as e:
+            logger.error(f"Error updating .env file: {e}")
 
-        # Atomic Write
-        tmp_path = env_path.with_suffix(".tmp")
-        with open(tmp_path, "w") as f:
-            f.writelines(new_lines)
-        
-        os.rename(tmp_path, env_path)
-        logger.info(f"Backed up {key} to {env_path}")
+
+
+    async def _patch_agent_runner_env(self, key: str, value: str, env_path: Path):
+        """
+        Safely update a key in agent_runner/agent_runner.env using python-dotenv.
+        """
+        try:
+            import dotenv
+        except ImportError:
+            logger.error("python-dotenv library not found.")
+            return
+
+        if not env_path.exists():
+            logger.debug(f"agent_runner.env not found at {env_path}, skipping")
+            return
+
+        def _update():
+             return dotenv.set_key(str(env_path), key, value, quote_mode="always")
+
+        try:
+            success, _, _ = await asyncio.to_thread(_update)
+            if success:
+                logger.info(f"Updated {env_path.name}: {key}=***")
+            else:
+                logger.warning(f"Failed to update {env_path.name}")
+        except Exception as e:
+            logger.error(f"Error updating {env_path.name}: {e}")
+
 
     # Future: set_preference(key, val) -> system_config.json
     # Future: set_preference(key, val) -> system_config.json
@@ -321,8 +481,16 @@ class ConfigManager:
             "type": config.get("type", "stdio")
         }
         
+        # Include disabled_reason if present
+        if "disabled_reason" in config:
+            record["disabled_reason"] = config["disabled_reason"]
+        
+
         q = "UPSERT mcp_server CONTENT $data"
-        await self.memory._execute_query(f"DELETE FROM mcp_server WHERE name = '{name}'; {q}", {"data": record})
+        await run_query(self.state, f"DELETE FROM mcp_server WHERE name = '{name}'; {q}", {"data": record})
+        
+        # 2. Update Disk (Reverse Sync) via full dump of state.mcp_servers
+
         
         # 2. Update Disk (Reverse Sync) via full dump of state.mcp_servers
         # We assume state.mcp_servers has been updated by the caller (AgentState)
@@ -395,48 +563,88 @@ class ConfigManager:
             class ConfigHandler(FileSystemEventHandler):
                 def __init__(self, manager):
                     self.manager = manager
-                    # self.last_ts not needed, using mtime checks
+                    # Track last known content hash to prevent false positives
+                    self._last_hashes = {}
 
                 def on_modified(self, event):
-                    filename = Path(event.src_path).name
-                    # Using _sync_if_newer handles debouncing via timestamp comparison
+                    """Handle file modification events, but only sync if content actually changed."""
+                    if event.is_directory:
+                        return
+                    
+                    file_path = Path(event.src_path)
+                    filename = file_path.name
+                    
+                    # Check if content actually changed (prevent false positives from file access/metadata)
+                    try:
+                        import hashlib
+                        with open(file_path, 'rb') as f:
+                            current_hash = hashlib.md5(f.read()).hexdigest()
+                        
+                        last_hash = self._last_hashes.get(str(file_path), "")
+                        
+                        # Only proceed if content actually changed
+                        if current_hash == last_hash:
+                            # Content didn't change - false positive (file access, metadata change, etc.)
+                            return
+                        
+                        # Update last known hash
+                        self._last_hashes[str(file_path)] = current_hash
+                    except (OSError, AttributeError, IOError):
+                        # File might not exist, be locked, or read failed - proceed with sync check
+                        # _sync_if_newer will handle the actual hash comparison
+                        pass
+                    
+                    # Using _sync_if_newer handles content hash comparison
+                    target_loop = getattr(self.manager, "loop", None)
+                    if target_loop is None:
+                        try:
+                            target_loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            target_loop = asyncio.get_event_loop_policy().get_event_loop()
+                        self.manager.loop = target_loop
                     
                     if filename == "system_config.json":
                         asyncio.run_coroutine_threadsafe(
                             self.manager._sync_if_newer(
-                                Path(event.src_path), "system_config", self.manager.sync_from_disk
+                                file_path, "system_config", self.manager.sync_from_disk
                             ), 
-                            self.manager.state.loop
+                            target_loop
                         )
 
                     elif filename == ".env":
                         asyncio.run_coroutine_threadsafe(
                             self.manager._sync_if_newer(
-                                Path(event.src_path), "env_file", self.manager.sync_env_from_disk
+                                file_path, "env_file", self.manager.sync_env_from_disk
                             ),
-                            self.manager.state.loop
+                            target_loop
                         )
 
                     elif filename == "config.yaml":
                         asyncio.run_coroutine_threadsafe(
                              self.manager._sync_if_newer(
-                                Path(event.src_path), "config_yaml", self.manager.sync_base_config_from_disk
+                                file_path, "config_yaml", self.manager.sync_base_config_from_disk
                              ),
-                             self.manager.state.loop
+                             target_loop
                         )
 
-                    elif filename == "mcp.yaml":
+                    elif filename == "sovereign.yaml":
                          asyncio.run_coroutine_threadsafe(
                              self.manager._sync_if_newer(
-                                Path(event.src_path), "mcp_yaml", self.manager.sync_mcp_from_disk
+                                file_path, "sovereign_config", self.manager.sync_sovereign_from_disk
                              ),
-                             self.manager.state.loop
+                             target_loop
                         )
 
             # Determine paths to watch
             root_dir = self.state.agent_fs_root.parent
             config_dir = root_dir / "config"
             
+            # Capture the running loop for thread callbacks
+            try:
+                self.loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self.loop = asyncio.get_event_loop_policy().get_event_loop()
+
             observer = Observer()
             handler = ConfigHandler(self)
             
@@ -485,7 +693,7 @@ class ConfigManager:
             logger.error(f"Config Sync Failed: {e}")
 
     async def sync_env_from_disk(self):
-        """Syncs .env changes to Sovereign Memory (Secrets)."""
+        """Syncs .env changes to Sovereign Memory (Secrets) and PRUNES removed keys."""
         env_path = self.state.agent_fs_root.parent / ".env"
         if not env_path.exists(): return
         
@@ -495,13 +703,37 @@ class ConfigManager:
             # Load without touching os.environ yet
             values = dotenv.dotenv_values(env_path)
             
+            # 1. Upsert / Update Present Keys
             for key, val in values.items():
                 if val:
                     # Update DB (Source=env)
                     await self._update_db_config(key, val, "env")
                     # Update Runtime
-                    os.environ[key] = val
+                    os.environ[key] = str(val)
                     self._update_state_attributes(key, val)
+            
+            # 2. Prune Removed Keys (Ghost Config Fix)
+            # Find all keys in DB that claim to be from "env" source
+            try:
+                # Use query parameter if possible, but execute_query interface here is raw string often.
+                # Assuming safe simple query.
+                q = "SELECT key FROM config_state WHERE source = 'env'"
+                results = await run_query(self.state, q)
+                
+                if results:
+                    db_keys = {item.get('key') for item in results if item.get('key')}
+                    current_keys = set(values.keys())
+                    
+                    ghost_keys = db_keys - current_keys
+                    
+                    if ghost_keys:
+                        logger.info(f"[Watcher] Pruning {len(ghost_keys)} ghost keys from Sovereign Memory: {ghost_keys}")
+                        for ghost in ghost_keys:
+                            # Delete from DB
+                            # Note: DELETE returns [] usually
+                            await run_query(self.state, f"DELETE FROM config_state WHERE key = '{ghost}';")
+            except Exception as e:
+                logger.warning(f"[Watcher] Failed to prune ghost keys (non-critical): {e}")
                     
             logger.info("[Watcher] .env Sync Complete.")
         except Exception as e:
@@ -522,7 +754,14 @@ class ConfigManager:
             # For now, we allow high-level keys to update runtime attributes.
             
             for key, val in cfg.items():
-                # We trust config.yaml structure matches some internal expectation
+                # [FIX] Handle Nested 'system' block
+                if key == "system" and isinstance(val, dict):
+                    logger.info("[Watcher] Flattening 'system' block from config.yaml...")
+                    for subkey, subval in val.items():
+                        await self._update_db_config(subkey.upper(), subval, "config_yaml")
+                        self._update_state_attributes(subkey.upper(), subval)
+                    continue
+
                 # Update DB (Source=config_yaml)
                 await self._update_db_config(key.upper(), val, "config_yaml")
                 # Update Runtime
@@ -533,22 +772,84 @@ class ConfigManager:
             logger.error(f"Failed to sync config.yaml: {e}")
 
     async def sync_mcp_from_disk(self):
-        """Syncs mcp.yaml changes to Sovereign Memory (MCP Servers)."""
+        """
+        Syncs mcp.yaml changes to Sovereign Memory (MCP Servers).
+        When user edits file, file becomes source of truth → DB → Runtime.
+        """
         mcp_path = self.state.agent_fs_root.parent / "config" / "mcp.yaml"
-        if not mcp_path.exists(): return
+        if not mcp_path.exists(): 
+            return
 
-        logger.info("[Watcher] Syncing mcp.yaml to Sovereign Memory...")
+        logger.info("[Watcher] Syncing mcp.yaml to Sovereign Memory (user edit detected)...")
         try:
             with open(mcp_path, "r") as f:
                 data = yaml.safe_load(f) or {}
                 
             servers = data.get("mcp_servers", {})
             for name, config in servers.items():
-                # Re-use update logic but ensure we don't write back to disk
-                # calling update_mcp_server updates DB.
-                # update_mcp_server current impl has `pass` for disk write, so it is safe.
+                # Update DB (file is source of truth when user edits)
                 await self.update_mcp_server(name, config)
+            
+            # [NEW] Reload runtime state (file edit → DB → Runtime)
+            from agent_runner.config import load_mcp_servers
+            await load_mcp_servers(self.state)
+            
+            # [NEW] Discover tools
+            from agent_runner.service_registry import ServiceRegistry
+            try:
+                engine = ServiceRegistry.get_engine()
+                await engine.discover_mcp_tools()
+                logger.info("[Watcher] MCP tools reloaded after mcp.yaml change (user edit)")
+            except RuntimeError:
+                logger.warning("[Watcher] Could not reload MCP tools (engine not available)")
                 
-            logger.info(f"[Watcher] mcp.yaml Sync Complete ({len(servers)} servers updated).")
+            logger.info(f"[Watcher] mcp.yaml Sync Complete ({len(servers)} servers updated, runtime reloaded).")
         except Exception as e:
             logger.error(f"Failed to sync mcp.yaml: {e}")
+
+    async def sync_sovereign_from_disk(self):
+        """Syncs sovereign.yaml changes to Sovereign Memory."""
+        path = self.state.agent_fs_root.parent / "config" / "sovereign.yaml"
+        if not path.exists(): return
+
+        logger.info("[Watcher] Syncing sovereign.yaml to Sovereign Memory...")
+        try:
+            with open(path, "r") as f:
+                data = yaml.safe_load(f) or {}
+
+            # Sync Models (Rogue Six + others)
+            # We map 'models' section to config keys
+            if "models" in data:
+                for k, v in data["models"].items():
+                    # Map standard terms to Keys
+                    # e.g. 'agent' -> 'AGENT_MODEL'
+                    key_map = {
+                        "agent": "AGENT_MODEL",
+                        "router": "ROUTER_MODEL",
+                        "healer": "HEALER_MODEL",
+                        "summarizer": "SUMMARIZATION_MODEL",
+                        "auditor": "AUDITOR_MODEL", # Not in State yet?
+                        "cloud_vision": "VISION_MODEL",
+                        "stt": "STT_MODEL"
+                    }
+                    db_key = key_map.get(k, k.upper() + "_MODEL")
+                    await self._update_db_config(db_key, v, "sovereign_yaml")
+                    self._update_state_attributes(db_key, v)
+
+            # Sync Modes
+            if "modes" in data:
+                # Store the entire modes blob as a JSON string for easy retrieval
+                import json
+                blob = json.dumps(data["modes"])
+                await self._update_db_config("MODES", blob, "sovereign_yaml")
+                self._update_state_attributes("MODES", blob)
+            
+            # Sync Policies
+            if "policies" in data:
+                # We can store these individually or as a blob
+                # For now, let's just log
+                pass 
+
+            logger.info("[Watcher] sovereign.yaml Sync Complete.")
+        except Exception as e:
+            logger.error(f"Failed to sync sovereign.yaml: {e}")

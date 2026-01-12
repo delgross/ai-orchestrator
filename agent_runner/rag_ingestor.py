@@ -1,7 +1,10 @@
 import os
 import time
 import logging
+import json
+import hashlib
 from pathlib import Path
+from typing import Optional
 import httpx
 import asyncio
 import datetime
@@ -14,8 +17,9 @@ except ImportError:
     class FileSystemEventHandler: pass # Dummy
 
 from agent_runner.state import AgentState
+from agent_runner.memory_server import MemoryServer
 from common.notifications import notify_info, notify_error, notify_health
-from agent_runner.registry import ServiceRegistry
+from agent_runner.service_registry import ServiceRegistry
 from agent_runner.rag_helpers import _process_locally, _ingest_content, aio_read_bytes, aio_rename
 
 logger = logging.getLogger("agent_runner.rag_ingestor")
@@ -88,59 +92,115 @@ def start_rag_watcher(rag_base_url: str, state: AgentState):
     except Exception as e:
         logger.error(f"Failed to start RAG Watchdog: {e}")
         return None
-    except Exception as e:
-        logger.error(f"Failed to start RAG Watchdog: {e}")
-        return None
 
 import hashlib
 import json
 
-def get_file_hash(path: Path) -> str:
-    """Calculate SHA-256 hash of a file."""
-    sha256_hash = hashlib.sha256()
-    with open(path, "rb") as f:
-        # Read in chunks to handle large files efficiently
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
+async def get_file_hash(path: Path) -> str:
+    """
+    Calculate SHA-256 hash of a file asynchronously.
+    Uses asyncio.to_thread for CPU-bound work.
+    """
+    def _calculate_hash(p: Path) -> str:
+        sha256_hash = hashlib.sha256()
+        with open(p, "rb") as f:
+            # Read in chunks to handle large files efficiently
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    
+    return await asyncio.to_thread(_calculate_hash, path)
 
 class IngestionHistory:
-    """Simple persistent registry of ingested file hashes to prevent duplication."""
-    def __init__(self, storage_dir: Path):
-        self.history_file = storage_dir / "system" / "ingestion_history.json"
-        self.history_file.parent.mkdir(parents=True, exist_ok=True)
-        self.cache = self._load()
+    """
+    Database-backed registry of ingested file hashes to prevent duplication.
+    Uses SurrealDB as the source of truth instead of a local JSON file.
+    """
+    def __init__(self, memory_server: MemoryServer) -> None:
+        self.memory = memory_server
+        self._cache: Optional[set] = None  # Optional in-memory cache for fast lookups
 
-    def _load(self):
-        if self.history_file.exists():
-            try:
-                with open(self.history_file, "r") as f:
-                    return set(json.load(f))
-            except:
-                return set()
-        return set()
+    async def _ensure_connected(self) -> None:
+        """Ensure database connection is established."""
+        await self.memory.ensure_connected()
 
-    def save(self):
+    async def is_duplicate(self, file_hash: str) -> bool:
+        """
+        Check if a file hash exists in the database.
+        
+        Args:
+            file_hash: SHA256 hash of the file
+            
+        Returns:
+            True if the file has been ingested before, False otherwise
+        """
+        await self._ensure_connected()
+        
         try:
-            with open(self.history_file, "w") as f:
-                json.dump(list(self.cache), f)
+            query = f"SELECT file_hash FROM ingestion_history WHERE file_hash = '{file_hash}' LIMIT 1;"
+            from agent_runner.db_utils import run_query_with_memory
+            result = await run_query_with_memory(self.memory, query)
+            
+            if result and len(result) > 0:
+                return True
+            return False
         except Exception as e:
-            logger.warning(f"Failed to save ingestion history: {e}")
+            logger.warning(f"Failed to check ingestion history for {file_hash[:8]}: {e}")
+            return False  # Fail open - allow ingestion if check fails
 
-    def is_duplicate(self, file_hash: str) -> bool:
-        return file_hash in self.cache
-
-    def mark_seen(self, file_hash: str):
-        self.cache.add(file_hash)
-        self.save()
+    async def mark_seen(self, file_hash: str, kb_id: str = "default", file_path: Optional[str] = None, file_size: Optional[int] = None) -> None:
+        """
+        Record a file ingestion in the database.
+        
+        Args:
+            file_hash: SHA256 hash of the file
+            kb_id: Knowledge base ID where the file was ingested
+            file_path: Optional path to the file
+            file_size: Optional size of the file in bytes
+        """
+        await self._ensure_connected()
+        
+        try:
+            # SurrealDB: Use UPSERT with record ID based on file_hash (unique index)
+            # This automatically handles duplicates - if exists, updates; if not, creates
+            record_id = f"ingestion_history:{file_hash}"
+            
+            # Escape single quotes in strings for SurrealDB
+            safe_path = file_path.replace("'", "''") if file_path else None
+            safe_kb = kb_id.replace("'", "''") if kb_id else "default"
+            
+            # Build content object
+            content_parts = [
+                f"file_hash: '{file_hash}'",
+                f"kb_id: '{safe_kb}'",
+                f"ingested_at: time::now()"
+            ]
+            
+            if safe_path:
+                content_parts.append(f"file_path: '{safe_path}'")
+            if file_size is not None:
+                content_parts.append(f"file_size: {file_size}")
+            
+            content_str = ", ".join(content_parts)
+            
+            # UPSERT automatically handles duplicates
+            query = f"UPSERT {record_id} SET {content_str};"
+            
+            await run_query_with_memory(self.memory, query)
+            
+            # Invalidate cache if it exists
+            self._cache = None
+        except Exception as e:
+            logger.warning(f"Failed to record ingestion history for {file_hash[:8]}: {e}")
+            # Don't raise - ingestion can continue even if history recording fails
 
 # Global singleton (lazy init)
 _history_manager = None
 
-from agent_runner.registry import ServiceRegistry
+from agent_runner.service_registry import ServiceRegistry
 
-async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None):
-    logger.info("DEBUG: rag_ingestion_task ENTERED")
+async def rag_ingestion_task(rag_base_url: Optional[str] = None, state: Optional[AgentState] = None) -> None:
+    logger.debug("rag_ingestion_task entered")
     # 0. SETUP & ARGUMENT RECONCILIATION
     if rag_base_url is None:
         rag_base_url = os.getenv("RAG_BASE_URL", "http://127.0.0.1:5555")
@@ -228,7 +288,8 @@ async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None)
         if force_run:
             logger.warning("Force Run Detected")
             try: await asyncio.to_thread(trigger_file.unlink)
-            except: pass
+            except Exception as e:
+                logger.debug(f"Error during file processing: {e}")
 
         for f in inbox_files:
             f_size_mb = f.stat().st_size / (1024 * 1024)
@@ -251,18 +312,21 @@ async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None)
 
         # 3. PROCESSING - TRACK A: LIGHT FILES (Local)
         
-        # Init History Manager if needed
+        # Init History Manager if needed (now uses DB)
         global _history_manager
         if _history_manager is None:
-            _history_manager = IngestionHistory(state.agent_fs_root if isinstance(state.agent_fs_root, Path) else Path(state.agent_fs_root))
+            from agent_runner.memory_server import MemoryServer
+            memory = MemoryServer(state)
+            await memory.ensure_connected()
+            _history_manager = IngestionHistory(memory)
 
         for file_path in light_batch:
             try:
                 is_brain_file = str(BRAIN_DIR) in str(file_path.resolve())
 
                 # [DEDUPLICATION CHECK]
-                f_hash = get_file_hash(file_path)
-                if _history_manager.is_duplicate(f_hash):
+                f_hash = await get_file_hash(file_path)
+                if await _history_manager.is_duplicate(f_hash):
                     if is_brain_file:
                         # Brain file duplicate = No Op (Already ingested, don't move, don't delete)
                         continue 
@@ -270,14 +334,16 @@ async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None)
                     reason = f"Duplicate Detected: {file_path.name} (Hash: {f_hash[:8]})"
                     logger.warning(f"AUTO-DISPOSE: {reason}. Moving to duplicates/.")
                     # [PHASE 15] Trash Bin Logic: Move to duplicates and continue
-                    try: await aio_rename(file_path, DUPLICATES_DIR / file_path.name)
-                    except: pass
+                    try:
+                        await aio_rename(file_path, DUPLICATES_DIR / file_path.name)
+                    except Exception as e:
+                        logger.debug(f"Error during file processing: {e}")
                     continue # Skip to next file
                 
                 logger.info(f"TRACK A (Light): Processing {file_path.name} locally...")
                 content = await _process_locally(file_path, state, http_client)
                 
-                # Check for Quality Exception
+                # Check for Quality Exception and move to processed directory
                 try:
                     target_processed_dir = PROCESSED_BASE_DIR
                     if is_brain_file:
@@ -285,7 +351,8 @@ async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None)
 
                     await _ingest_content(file_path, content, state, http_client, rag_base_url, target_processed_dir, REVIEW_DIR)
                     # Mark as seen ONLY after successful ingestion
-                    _history_manager.mark_seen(f_hash)
+                    file_size = file_path.stat().st_size if file_path.exists() else None
+                    await _history_manager.mark_seen(f_hash, kb_id="default", file_path=str(file_path), file_size=file_size)
                     
                 except ValueError as ve:
                     # Quality Check Failed (raised by rag_helpers)
@@ -299,12 +366,16 @@ async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None)
                         # [RECURSION GUARD]
                         if "RECURSION" in str(ve):
                             logger.warning(f"RECURSION GUARD: Detected previously processed file. Moving to review/.")
-                            try: await aio_rename(file_path, REVIEW_DIR / file_path.name)
-                            except: pass
+                            try: 
+                                await aio_rename(file_path, REVIEW_DIR / file_path.name)
+                            except Exception as e:
+                                logger.warning(f"Failed to move {file_path} to review: {e}")
                             continue
                         # [PHASE 15] Trash Bin Logic: Move to rejected and continue
-                        try: await aio_rename(file_path, REJECTED_DIR / file_path.name)
-                        except: pass
+                        try: 
+                            await aio_rename(file_path, REJECTED_DIR / file_path.name)
+                        except Exception as e:
+                            logger.warning(f"Failed to move {file_path} to rejected: {e}")
                         continue # Skip to next file
                     else:
                         raise ve
@@ -314,16 +385,20 @@ async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None)
             except Exception as e:
                 logger.error(f"Failed local processing for {file_path.name}: {e}")
                 # Move to Review
-                try: await aio_rename(file_path, REVIEW_DIR / file_path.name)
-                except: pass
+                try: 
+                    await aio_rename(file_path, REVIEW_DIR / file_path.name)
+                except Exception as rename_e:
+                    logger.warning(f"Failed to move {file_path} to review after error: {rename_e}")
 
         # 4. PROCESSING - TRACK B: HEAVY FILES (Manual/Deferred)
         for file_path in heavy_batch:
             # Simple Triage: Heavy files always go to deferred (Waiting for manual action or future cloud worker)
             if file_path.parent != DEFERRED_DIR:
                 logger.info(f"TRACK B (Heavy): Deferring {file_path.name} (Too large for local)")
-                try: await aio_rename(file_path, DEFERRED_DIR / file_path.name)
-                except: pass
+                try: 
+                    await aio_rename(file_path, DEFERRED_DIR / file_path.name)
+                except Exception as e:
+                    logger.warning(f"Failed to move {file_path} to deferred: {e}")
         
         # 5. NIGHTLY GARDENER (The Truth Judge)
         # Runs once per night to verify facts.
@@ -357,3 +432,5 @@ async def rag_ingestion_task(rag_base_url: str = None, state: AgentState = None)
                     
                 except Exception as e:
                     logger.error(f"Gardener failed: {e}")
+
+

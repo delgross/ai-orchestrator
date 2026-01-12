@@ -6,93 +6,107 @@ from agent_runner.state import AgentState
 logger = logging.getLogger("agent_runner.tools.registry")
 
 async def tool_registry_list(state: AgentState) -> Dict[str, Any]:
-    """List all files in the Permanent Registry (Recursive)."""
+    """List all files in the Permanent Registry from database (source of truth)."""
     try:
-        registry_dir = os.path.join(state.agent_fs_root, "data", "permanent")
-        if not os.path.exists(registry_dir):
-            return {"ok": True, "files": []}
+        # Database is the source of truth - read from DB, not disk
+        if not hasattr(state, "memory") or not state.memory:
+            return {"ok": False, "error": "Memory server not available"}
         
-        file_list = []
-        for root, dirs, files in os.walk(registry_dir):
-            for file in files:
-                if file.endswith(".md") or file.endswith(".json"):
-                    # Return relative path from registry root (e.g. "projects/alpha.md")
-                    abs_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(abs_path, registry_dir)
-                    file_list.append(rel_path)
-                    
+        await state.memory.ensure_connected()
+        
+        # Get all sovereign files from database
+        sovereign_files = await state.memory.list_sovereign_files()
+        
+        # Extract kb_ids as file paths (add .md extension for compatibility)
+        file_list = [f"{f.get('kb_id')}.md" for f in sovereign_files if f.get('kb_id')]
+        
         return {"ok": True, "files": file_list}
     except Exception as e:
+        logger.error(f"Registry list error: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}
 
 async def tool_registry_read(state: AgentState, filename: str) -> Dict[str, Any]:
-    """Read a specific Registry file."""
+    """Read a specific Registry file from database (source of truth)."""
     try:
-        # Secure Path Joining
-        registry_dir = os.path.join(state.agent_fs_root, "data", "permanent")
-        path = os.path.abspath(os.path.join(registry_dir, filename))
+        # Database is the source of truth - read from DB, not disk
+        if not hasattr(state, "memory") or not state.memory:
+            return {"ok": False, "error": "Memory server not available"}
         
-        # Security: Prevent traversing out of permanent dir
-        if not path.startswith(registry_dir):
-             return {"ok": False, "error": "Access denied: Path outside registry."}
-
-        if not os.path.exists(path):
-            return {"ok": False, "error": f"File '{filename}' does not exist."}
+        await state.memory.ensure_connected()
         
-        with open(path, "r") as f:
-            content = f.read()
+        # Remove .md extension if present to get kb_id
+        kb_id = filename.replace(".md", "").strip()
+        
+        # Retrieve content from database
+        content = await state.memory.get_sovereign_file_content(kb_id)
+        
+        if content is None:
+            return {"ok": False, "error": f"File '{filename}' (kb_id: {kb_id}) does not exist in database."}
+        
         return {"ok": True, "content": content}
     except Exception as e:
+        logger.error(f"Registry read error: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}
 
 async def tool_registry_append(state: AgentState, filename: str, text: str) -> Dict[str, Any]:
-    """Append text to a Registry file (creating it and parent dirs if needed)."""
+    """Append text to a Registry file in database (source of truth)."""
     try:
-        registry_dir = os.path.join(state.agent_fs_root, "data", "permanent")
+        # Database is the source of truth - write to DB, then sync to disk if needed
+        if not hasattr(state, "memory") or not state.memory:
+            return {"ok": False, "error": "Memory server not available"}
         
-        # Handle Nested Paths
-        path = os.path.abspath(os.path.join(registry_dir, filename))
-        if not path.startswith(registry_dir):
-             return {"ok": False, "error": "Access denied: Path outside registry."}
-
-        # Ensure parent dir exists
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        await state.memory.ensure_connected()
         
-        # Ensure extension
-        if "." not in filename and not filename.endswith(".md"):
-            path += ".md"
-            
+        # Remove .md extension if present to get kb_id
+        kb_id = filename.replace(".md", "").strip()
+        
+        # Get existing content
+        existing_content = await state.memory.get_sovereign_file_content(kb_id) or ""
+        
+        # Append new text
         entry = f"\n- {text}"
+        new_content = existing_content + entry
         
-        with open(path, "a") as f:
-            f.write(entry)
-            
+        # Sync to database (this will wipe and replace)
+        res = await state.memory.sync_sovereign_file(kb_id, new_content)
+        
+        if not res.get("ok"):
+            return {"ok": False, "error": f"Failed to append to registry: {res.get('error', 'Unknown error')}"}
+        
+        # Invalidate cache
         if hasattr(state, "engine_ref") and state.engine_ref:
              if hasattr(state.engine_ref, "registry_cache"):
                  state.engine_ref.registry_cache = None
 
-        return {"ok": True, "message": f"Appended to {filename}"}
+        return {"ok": True, "message": f"Appended to {filename} in database"}
     except Exception as e:
+        logger.error(f"Registry append error: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}
 
 async def tool_registry_write(state: AgentState, filename: str, content: str) -> Dict[str, Any]:
-    """Overwrite a Registry file completely (creating parent dirs if needed)."""
+    """Overwrite a Registry file completely in database (source of truth)."""
     try:
-        registry_dir = os.path.join(state.agent_fs_root, "data", "permanent")
-        path = os.path.abspath(os.path.join(registry_dir, filename))
+        # Database is the source of truth - write to DB, then sync to disk if needed
+        if not hasattr(state, "memory") or not state.memory:
+            return {"ok": False, "error": "Memory server not available"}
         
-        if not path.startswith(registry_dir):
-             return {"ok": False, "error": "Access denied: Path outside registry."}
-             
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        await state.memory.ensure_connected()
         
-        with open(path, "w") as f:
-            f.write(content)
-            
+        # Remove .md extension if present to get kb_id
+        kb_id = filename.replace(".md", "").strip()
+        
+        # Sync to database (this will wipe and replace)
+        res = await state.memory.sync_sovereign_file(kb_id, content)
+        
+        if not res.get("ok"):
+            return {"ok": False, "error": f"Failed to write registry: {res.get('error', 'Unknown error')}"}
+        
+        # Invalidate cache
         if hasattr(state, "engine_ref") and state.engine_ref:
              if hasattr(state.engine_ref, "registry_cache"):
                  state.engine_ref.registry_cache = None
                  
-        return {"ok": True, "message": f"Wrote {filename}"}
+        return {"ok": True, "message": f"Wrote {filename} to database"}
     except Exception as e:
+        logger.error(f"Registry write error: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}

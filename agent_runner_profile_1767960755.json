@@ -1,0 +1,20 @@
+[
+  {
+    "component": "Memory Retrieval",
+    "duration": 0,
+    "success": false,
+    "error": "'MemoryServer' object has no attribute '_get_relevant_memories'"
+  },
+  {
+    "component": "Prompt Generation",
+    "duration": 0,
+    "success": false,
+    "error": "'MockState' object has no attribute 'internet_available'"
+  },
+  {
+    "component": "Tool Discovery",
+    "duration": 1.2159347534179688e-05,
+    "success": true,
+    "tool_count": 40
+  }
+]

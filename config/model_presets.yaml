@@ -1,0 +1,18 @@
+presets:
+  best_local:
+    description: "High intelligence using best available local models. Warning: High VRAM usage."
+    models:
+      agent_model: "ollama:llama3.3:70b-instruct-q8_0"
+      router_model: "ollama:mistral:latest"
+      task_model: "ollama:qwen3:30b"
+      vision_model: "ollama:llama3.2-vision:latest"
+      embedding_model: "ollama:mxbai-embed-large:latest"
+      mcp_model: "ollama:qwen3:30b"
+      summarization_model: "ollama:llama3.1:latest"
+      finalizer_model: "ollama:mistral:latest"
+      fallback_model: "ollama:mistral:latest"
+      intent_model: "ollama:mistral:latest"
+      pruner_model: "ollama:mistral:latest"
+      healer_model: "ollama:qwq:latest"
+      critic_model: "ollama:qwen3:30b"
+      query_refinement_model: "ollama:qwen2.5:7b-instruct"

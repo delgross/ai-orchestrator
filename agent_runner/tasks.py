@@ -15,11 +15,13 @@ async def health_check_task() -> None:
     await _robust_health_check()
 
 async def stdio_process_health_monitor(state: AgentState) -> None:
-    """Monitor and restart dead stdio processes."""
+    """Monitor and cleanup dead stdio processes. Runs periodically to prevent resource leaks."""
     from agent_runner.transports.stdio import cleanup_stdio_process
     
+    cleaned_count = 0
     for server, proc in list(state.stdio_processes.items()):
         if proc.returncode is not None:
+            logger.info(f"Dead stdio process detected for '{server}' (returncode={proc.returncode}), cleaning up...")
             track_health_event(
                 event="stdio_process_died",
                 message=f"Stdio process for '{server}' died (exit code: {proc.returncode})",
@@ -27,7 +29,14 @@ async def stdio_process_health_monitor(state: AgentState) -> None:
                 component="stdio_monitor",
                 metadata={"server": server, "returncode": proc.returncode}
             )
-            await cleanup_stdio_process(state, server)
+            try:
+                await cleanup_stdio_process(state, server)
+                cleaned_count += 1
+            except Exception as e:
+                logger.error(f"Failed to cleanup dead process '{server}': {e}", exc_info=True)
+    
+    if cleaned_count > 0:
+        logger.info(f"Cleaned up {cleaned_count} dead stdio process(es)")
 
 async def modal_heartbeat_task(state: AgentState) -> None:
     """Check if Cloud GPU (Modal) is actually warmed up and ready."""
@@ -65,3 +74,37 @@ async def modal_heartbeat_task(state: AgentState) -> None:
     except Exception as e:
         logger.error(f"Modal heartbeat check failed: {e}")
         state.cloud_gpu_ready = False
+
+async def thinking_session_cleanup_task(state: AgentState) -> None:
+    """Clean up old thinking sessions (older than 7 days). Runs daily."""
+    try:
+        if not hasattr(state, "memory") or not state.memory:
+            return
+        
+        await state.memory.ensure_connected()
+        
+        # Delete sessions older than 7 days
+        from datetime import datetime, timedelta
+        cutoff = datetime.now() - timedelta(days=7)
+        cutoff_timestamp = cutoff.timestamp()
+        
+        query = f"""
+        DELETE thinking_session 
+        WHERE timestamp < time::from_unix({cutoff_timestamp});
+        """
+        
+        from agent_runner.db_utils import run_query
+        result = await run_query(state, query)
+        deleted_count = len(result) if result else 0
+        
+        if deleted_count > 0:
+            logger.info(f"Cleaned up {deleted_count} old thinking session(s)")
+            track_event(
+                event="thinking_session_cleanup",
+                message=f"Cleaned up {deleted_count} old thinking sessions",
+                severity=EventSeverity.INFO,
+                category=EventCategory.MAINTENANCE,
+                metadata={"deleted_count": deleted_count}
+            )
+    except Exception as e:
+        logger.error(f"Thinking session cleanup failed: {e}", exc_info=True)

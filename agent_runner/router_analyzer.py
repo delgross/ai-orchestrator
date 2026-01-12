@@ -4,7 +4,7 @@ Router Model Analyzer - Intelligent query analysis for routing decisions.
 Uses a small, fast model (3B) to analyze queries and make intelligent routing decisions:
 - Tool selection (filter tools by relevance)
 - Model selection (route to best model for task)
-- Persona selection (auto-select best persona)
+
 - Context estimation (accurate token counting)
 - Query classification (intent, complexity, domain)
 """
@@ -43,10 +43,10 @@ except ImportError:
     EventSeverity = MockEventSeverity()
 
 # Router model configuration
-ROUTER_MODEL = os.getenv("ROUTER_MODEL", "ollama:qwen3:3b")  # Small, fast model
+ROUTER_MODEL = os.getenv("ROUTER_MODEL", "ollama:qwen2.5:7b-instruct")  # Upgraded 7B model for better routing quality
 ROUTER_ENABLED = os.getenv("ROUTER_ENABLED", "true").lower() == "true"
 ROUTER_CACHE_TTL = float(os.getenv("ROUTER_CACHE_TTL", "300.0"))  # 5 minutes cache
-ROUTER_TIMEOUT = float(os.getenv("ROUTER_TIMEOUT", "5.0"))  # 5 second timeout
+ROUTER_TIMEOUT = float(os.getenv("ROUTER_TIMEOUT", "15.0"))  # 15 second timeout for analysis
 ROUTER_MAX_RETRIES = int(os.getenv("ROUTER_MAX_RETRIES", "2"))  # Max retries for transient failures
 
 # Circuit breaker for router model
@@ -60,6 +60,8 @@ ROUTER_CIRCUIT_BREAKER_THRESHOLD = 5  # Disable after 5 failures
 ROUTER_CIRCUIT_BREAKER_RESET_TIME = 60.0  # Reset after 60 seconds
 
 # Thread-safe LRU cache for router analyses
+# NOTE: Cache invalidation framework available in agent_runner/cache_helpers.py
+# For now, using in-memory cache with TTL. Future: Integrate with DB timestamp validation.
 _router_cache: OrderedDict[str, tuple[float, 'RouterAnalysis']] = OrderedDict()
 _cache_lock = threading.Lock()
 _cache_max_size = 100
@@ -152,8 +154,7 @@ class RouterAnalysis:
     can_use_local: bool  # Whether local model is sufficient
     estimated_cost: float  # Estimated cost if using cloud model
     
-    # Persona selection
-    recommended_persona: Optional[str]  # Best persona for this query
+
     
     # Context estimation
     estimated_input_tokens: int
@@ -308,7 +309,8 @@ async def _call_router_model(
             last_error = f"Timeout after {timeout}s"
             if attempt < retries:
                 logger.debug(f"Router call timeout (attempt {attempt + 1}/{retries + 1}), retrying...")
-                await asyncio.sleep(0.1 * (attempt + 1))  # Brief backoff
+                from agent_runner.constants import SLEEP_BRIEF_BACKOFF_BASE
+                await asyncio.sleep(SLEEP_BRIEF_BACKOFF_BASE * (attempt + 1))  # Brief backoff
         except Exception as e:
             last_error = str(e)
             # Don't retry on 4xx errors (client errors)
@@ -317,7 +319,8 @@ async def _call_router_model(
                     break
             if attempt < retries:
                 logger.debug(f"Router call failed (attempt {attempt + 1}/{retries + 1}): {e}, retrying...")
-                await asyncio.sleep(0.1 * (attempt + 1))  # Brief backoff
+                from agent_runner.constants import SLEEP_BRIEF_BACKOFF_BASE
+                await asyncio.sleep(SLEEP_BRIEF_BACKOFF_BASE * (attempt + 1))  # Brief backoff
     
     # All retries failed
     _record_router_failure()
@@ -418,24 +421,25 @@ def _validate_router_analysis(data: Dict[str, Any]) -> Dict[str, Any]:
         except (ValueError, TypeError):
             optimal_context_window = None
     
+    # Provide defaults for simplified prompt (missing advanced fields)
     return {
         "complexity": complexity,
         "query_type": query_type,
         "domain": data.get("domain", "general"),
         "tool_categories": tool_categories,
-        "recommended_tools": recommended_tools,
-        "recommended_model": data.get("recommended_model"),
-        "can_use_local": bool(data.get("can_use_local", True)),
-        "estimated_cost": max(0.0, float(data.get("estimated_cost", 0.0))),
-        "recommended_persona": data.get("recommended_persona"),
-        "estimated_input_tokens": estimated_input_tokens,
-        "estimated_output_tokens": estimated_output_tokens,
-        "optimal_context_window": optimal_context_window,
-        "is_ambiguous": bool(data.get("is_ambiguous", False)),
-        "requires_clarification": bool(data.get("requires_clarification", False)),
-        "clarification_questions": data.get("clarification_questions", []) if isinstance(data.get("clarification_questions"), list) else [],
+        "recommended_tools": [],  # Simplified prompt doesn't ask for this
+        "recommended_model": None,  # Simplified prompt doesn't ask for this
+        "can_use_local": False,  # DISABLED: Always treat as requiring main agent (70B) to prevent 8B downgrade
+        "estimated_cost": 0.0,  # Simplified prompt doesn't estimate costs
+
+        "estimated_input_tokens": 0,  # Simplified prompt doesn't estimate tokens
+        "estimated_output_tokens": 0,  # Simplified prompt doesn't estimate tokens
+        "optimal_context_window": None,  # Simplified prompt doesn't optimize context
+        "is_ambiguous": False,  # Simplified prompt doesn't detect ambiguity
+        "requires_clarification": False,  # Simplified prompt doesn't handle clarification
+        "clarification_questions": [],  # Simplified prompt doesn't provide questions
         "confidence": confidence,
-        "reasoning": data.get("reasoning"),
+        "reasoning": data.get("reasoning", ""),
     }
 
 
@@ -463,7 +467,7 @@ def _parse_router_response(response: str) -> RouterAnalysis:
             recommended_model=None,
             can_use_local=True,
             estimated_cost=0.0,
-            recommended_persona=None,
+
             estimated_input_tokens=0,
             estimated_output_tokens=0,
             optimal_context_window=None,
@@ -476,26 +480,83 @@ def _parse_router_response(response: str) -> RouterAnalysis:
 
 
 def _create_cache_key(
-    query: str, 
+    query: str,
     messages: List[Dict[str, Any]],
     tool_count: int = 0,
     model_count: int = 0
 ) -> str:
-    """Create cache key from query, messages, and context."""
-    # Use first user message as primary key
-    query_text = query
+    """Create intelligent cache key using semantic similarity."""
+    # Extract core query intent (normalize for better cache hits)
+    query_text = query.lower().strip()
     if messages:
-        user_msgs = [m.get("content", "") for m in messages if m.get("role") == "user"]
+        user_msgs = [m.get("content", "").lower().strip() for m in messages if m.get("role") == "user"]
         if user_msgs:
             query_text = user_msgs[0]
-    
-    # Include context in cache key (tool/model availability affects routing)
-    key_data = f"{query_text}:{len(messages)}:t{tool_count}:m{model_count}"
+
+    # Normalize query by removing common variations
+    # This allows similar queries to share cache entries
+    normalized = _normalize_query_for_cache(query_text)
+
+    # Include context (tool availability affects routing decisions)
+    key_data = f"{normalized}:t{tool_count}:m{model_count}"
     return hashlib.md5(key_data.encode()).hexdigest()
 
+def _normalize_query_for_cache(query: str) -> str:
+    """Normalize query text for better cache hit rates."""
+    import re
 
-def _get_cached_analysis(cache_key: str) -> Optional['RouterAnalysis']:
-    """Thread-safe cache get."""
+    # Remove punctuation and extra whitespace
+    normalized = re.sub(r'[^\w\s]', ' ', query)
+    normalized = ' '.join(normalized.split())
+
+    # Extract key intent words (remove stop words)
+    stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them'}
+
+    words = [w for w in normalized.split() if w not in stop_words]
+
+    # Take first 5-7 significant words (enough to capture intent without being too specific)
+    intent_words = words[:7]
+
+    return ' '.join(intent_words)
+
+
+async def _get_cached_analysis(cache_key: str, memory_server: Optional[Any] = None) -> Optional['RouterAnalysis']:
+    """
+    Get cached analysis from database (source of truth) with in-memory fallback.
+    Database is checked first, in-memory cache is performance optimization.
+    """
+    # 1. Check database first (source of truth)
+    if memory_server:
+        try:
+            from agent_runner.db_utils import run_query_with_memory
+            query = """
+            SELECT analysis_json, created_at, expires_at 
+            FROM router_analysis_cache 
+            WHERE cache_key = $key 
+            AND (expires_at IS NONE OR expires_at > time::now())
+            LIMIT 1;
+            """
+            results = await run_query_with_memory(memory_server, query, {"key": cache_key})
+            if results and len(results) > 0:
+                row = results[0]
+                analysis_json = row.get("analysis_json")
+                if analysis_json:
+                    try:
+                        analysis_dict = json.loads(analysis_json)
+                        # Reconstruct RouterAnalysis from dict
+                        analysis = RouterAnalysis(**analysis_dict)
+                        # Update in-memory cache for fast access
+                        with _cache_lock:
+                            _router_cache[cache_key] = (time.time(), analysis)
+                            _router_cache.move_to_end(cache_key)
+                        logger.debug(f"Router cache hit from database: {cache_key[:8]}")
+                        return analysis
+                    except Exception as e:
+                        logger.warning(f"Failed to parse cached analysis from DB: {e}")
+        except Exception as e:
+            logger.debug(f"Database cache lookup failed, using in-memory: {e}")
+    
+    # 2. Fallback to in-memory cache (performance optimization)
     with _cache_lock:
         if cache_key in _router_cache:
             cached_time, cached_analysis = _router_cache[cache_key]
@@ -509,8 +570,53 @@ def _get_cached_analysis(cache_key: str) -> Optional['RouterAnalysis']:
     return None
 
 
-def _set_cached_analysis(cache_key: str, analysis: 'RouterAnalysis') -> None:
-    """Thread-safe cache set with LRU eviction."""
+async def _set_cached_analysis(cache_key: str, analysis: 'RouterAnalysis', memory_server: Optional[Any] = None) -> None:
+    """
+    Store cached analysis in database (source of truth) and update in-memory cache.
+    Database is primary, in-memory is performance optimization.
+    """
+    # 1. Store in database (source of truth)
+    if memory_server:
+        try:
+            from agent_runner.db_utils import run_query_with_memory
+            analysis_dict = {
+                "complexity": analysis.complexity,
+                "query_type": analysis.query_type,
+                "domain": analysis.domain,
+                "tool_categories": analysis.tool_categories,
+                "recommended_tools": analysis.recommended_tools,
+                "recommended_model": analysis.recommended_model,
+                "can_use_local": analysis.can_use_local,
+                "estimated_cost": analysis.estimated_cost,
+                "estimated_input_tokens": analysis.estimated_input_tokens,
+                "estimated_output_tokens": analysis.estimated_output_tokens,
+                "optimal_context_window": analysis.optimal_context_window,
+                "is_ambiguous": analysis.is_ambiguous,
+                "requires_clarification": analysis.requires_clarification,
+                "clarification_questions": analysis.clarification_questions,
+                "confidence": analysis.confidence,
+                "reasoning": analysis.reasoning,
+            }
+            analysis_json = json.dumps(analysis_dict)
+            expires_at = time.time() + ROUTER_CACHE_TTL
+            
+            query = """
+            UPSERT type::thing('router_analysis_cache', $key)
+            SET cache_key = $key,
+                analysis_json = $json,
+                created_at = time::now(),
+                expires_at = time::from_unix($expires);
+            """
+            await run_query_with_memory(memory_server, query, {
+                "key": cache_key,
+                "json": analysis_json,
+                "expires": expires_at
+            })
+            logger.debug(f"Router cache stored in database: {cache_key[:8]}")
+        except Exception as e:
+            logger.warning(f"Failed to store router cache in DB: {e}")
+    
+    # 2. Update in-memory cache (performance optimization)
     with _cache_lock:
         _router_cache[cache_key] = (time.time(), analysis)
         _router_cache.move_to_end(cache_key)
@@ -527,7 +633,7 @@ async def analyze_query(
     http_client: Any,
     available_tools: Optional[List[Dict[str, Any]]] = None,
     available_models: Optional[List[str]] = None,
-    available_personas: Optional[List[str]] = None,
+    memory_server: Optional[Any] = None,
     use_cache: bool = True,
     circuit_breaker_state: Optional[Dict[str, Dict[str, Any]]] = None
 ) -> RouterAnalysis:
@@ -541,7 +647,7 @@ async def analyze_query(
         http_client: HTTP client for making requests
         available_tools: List of available tools (for filtering)
         available_models: List of available models (for recommendations)
-        available_personas: List of available personas (for recommendations)
+
         use_cache: Whether to use cached results
     
     Returns:
@@ -558,7 +664,7 @@ async def analyze_query(
             recommended_model=None,
             can_use_local=True,
             estimated_cost=0.0,
-            recommended_persona=None,
+
             estimated_input_tokens=0,
             estimated_output_tokens=0,
             optimal_context_window=None,
@@ -574,7 +680,7 @@ async def analyze_query(
         tool_count = len(available_tools) if available_tools else 0
         model_count = len(available_models) if available_models else 0
         cache_key = _create_cache_key(query, messages, tool_count, model_count)
-        cached_analysis = _get_cached_analysis(cache_key)
+        cached_analysis = await _get_cached_analysis(cache_key, memory_server)
         if cached_analysis:
             logger.debug("Using cached router analysis for query")
             return cached_analysis
@@ -638,44 +744,24 @@ async def analyze_query(
         if negative_list:
             negative_examples_text = "\n\n⚠️ Important: Avoid misclassification. Examples of what NOT to do:\n" + "\n".join(negative_list)
     
-    prompt = f"""Analyze this user query and provide structured routing recommendations.
+    # Optimized shorter prompt for faster inference
+    prompt = f"""Analyze this query and return JSON routing recommendations.
 
 Query: {user_query}
 
-Available tools: {', '.join(tool_names[:20]) if tool_names else 'Many tools available'}
-Available models: {', '.join(available_models[:10]) if available_models else 'Multiple models available'}
-Available personas: {', '.join(available_personas) if available_personas else 'Multiple personas available'}{circuit_breaker_info}{category_examples_text}{negative_examples_text}
+Available tools: {', '.join(tool_names[:10]) if tool_names else 'Various tools available'}
 
-Provide a JSON response with this structure:
+Return JSON:
 {{
   "complexity": "simple|medium|complex|very_complex",
   "query_type": "coding|research|automation|analysis|creative|other",
   "domain": "technical|business|creative|general",
-  "tool_categories": ["web_search", "filesystem", "code", "browser", etc.],
-  "recommended_tools": ["specific_tool_name1", "specific_tool_name2"],
-  "recommended_model": "model_name_or_null",
-  "can_use_local": true|false,
-  "estimated_cost": 0.0,
-  "recommended_persona": "persona_name_or_null",
-  "estimated_input_tokens": 0,
-  "estimated_output_tokens": 0,
-  "optimal_context_window": null_or_number,
-  "is_ambiguous": false,
-  "requires_clarification": false,
-  "clarification_questions": [],
-  "confidence": 0.0_to_1.0,
+  "tool_categories": ["filesystem", "web_search", "code", "system"],
+  "confidence": 0.0-1.0,
   "reasoning": "brief explanation"
 }}
 
-Guidelines:
-- For simple queries (factual, straightforward), use local models
-- For complex reasoning, use cloud models
-- Select tool categories that match the query intent (use examples above as reference)
-- Avoid misclassification (see negative examples above)
-- Recommend persona only if query clearly matches a persona's mission
-- Estimate tokens conservatively
-- Set confidence based on how clear the query intent is
-"""
+Guidelines: Simple=local models, Complex=cloud models. Match tools to intent."""
     
     try:
         start_time = time.time()
@@ -698,7 +784,7 @@ Guidelines:
             tool_count = len(available_tools) if available_tools else 0
             model_count = len(available_models) if available_models else 0
             cache_key = _create_cache_key(query, messages, tool_count, model_count)
-            _set_cached_analysis(cache_key, analysis)
+            await _set_cached_analysis(cache_key, analysis, memory_server)
         
         logger.info(
             "router_analysis",
@@ -771,7 +857,7 @@ Guidelines:
             recommended_model=None,
             can_use_local=True,
             estimated_cost=0.0,
-            recommended_persona=None,
+
             estimated_input_tokens=0,
             estimated_output_tokens=0,
             optimal_context_window=None,
@@ -1291,9 +1377,7 @@ def filter_tools_by_router_analysis(
     return all_tools
 
 
-def get_persona_from_analysis(analysis: RouterAnalysis) -> Optional[str]:
-    """Get recommended persona from router analysis."""
-    return analysis.recommended_persona
+
 
 
 def get_model_from_analysis(

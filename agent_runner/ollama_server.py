@@ -26,13 +26,19 @@ HTTP_TIMEOUT = float(os.getenv("OLLAMA_HTTP_TIMEOUT", "300.0"))
 
 # Set up logging to stderr
 def log(msg: str, level: str = "INFO", exc_info: bool = False):
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    log_msg = f"{timestamp} {level} ollama_server {msg}"
+    """
+    Log a message using the logger.
+    
+    Args:
+        msg: Message to log
+        level: Log level (INFO, WARNING, ERROR, etc.)
+        exc_info: Whether to include exception traceback
+    """
+    log_level = getattr(logging, level.upper(), logging.INFO)
     if exc_info:
-        import traceback
-        log_msg += f"\n{traceback.format_exc()}"
-    sys.stderr.write(f"{log_msg}\n")
-    sys.stderr.flush()
+        logger.log(log_level, msg, exc_info=True)
+    else:
+        logger.log(log_level, msg)
 
 logger = logging.getLogger("ollama_server")
 logger.setLevel(logging.INFO)
@@ -64,13 +70,14 @@ class OllamaServer:
                 try:
                     error_json = r.json()
                     error_text = error_json.get("error", error_text)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse error JSON: {e}")
                 return {"ok": False, "error": error_text, "status_code": r.status_code}
             
             try:
                 return {"ok": True, "data": r.json()}
-            except:
+            except Exception as e:
+                logger.debug(f"Failed to parse response JSON, returning text: {e}")
                 return {"ok": True, "data": {"text": r.text}}
         except httpx.TimeoutException as e:
             log(f"Ollama API timeout: {e}", "ERROR")

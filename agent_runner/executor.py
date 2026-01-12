@@ -7,31 +7,98 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from agent_runner.state import AgentState
+from agent_runner.quality_tiers import QualityTier, get_tier_config
+from agent_runner.tool_categories import detect_query_capabilities, get_tools_for_capabilities, resolve_capability_conflicts
 from agent_runner.tools import fs as fs_tools
 from agent_runner.tools import mcp as mcp_tools
-from agent_runner.tools import system as system_tools
 from agent_runner.tools import system as system_tools
 # [PHASE 54] Introspection
 from agent_runner.tools import introspection as introspection_tools
 from agent_runner.tools import memory_edit as memory_edit_tools
+from agent_runner.tools import memory_tools
 # [PHASE 52]
 from agent_runner.tools import node as node_tools
 # [PHASE 53]
 from agent_runner.tools import admin as admin_tools
 # [PHASE 42]
 from agent_runner.tools import registry as registry_tools
+# Core Services
+from agent_runner.tools import time as time_tools
+from agent_runner.tools import location as location_tools
+from agent_runner.tools import web as web_tools
+from agent_runner.tools import admin_status as admin_status_tools
+from agent_runner.tools import latency as latency_tools
+from agent_runner.tools import tool_evaluation as tool_evaluation_tools
+from agent_runner.tools import thinking as thinking_tools
+from agent_runner.tools import advice as advice_tools
+from agent_runner.fast_selector import FastToolSelector
 
 from common.unified_tracking import track_event, EventSeverity, EventCategory
+# [PHASE 3] Performance Optimization
+from common.caching import MultiLayerCache, MCPToolCache, CacheStrategy
+from common.constants import TIMEOUT_MCP_DISCOVERY, TIMEOUT_MCP_DISCOVERY_RETRY, TIMEOUT_MCP_CORE_DISCOVERY
 
 logger = logging.getLogger("agent_runner.executor")
 
 class ToolExecutor:
     def __init__(self, state: AgentState):
         self.state = state
+        # MCP tool cache - stores discovered tools per server
+        # NOTE: Cache invalidation framework available in agent_runner/cache_helpers.py
+        # Future: Integrate with CacheInvalidator for automatic TTL and DB timestamp validation.
         self.mcp_tool_cache: Dict[str, List[Dict[str, Any]]] = {}
         self.tool_menu_summary = ""
         self.tool_impls = self._init_tool_impls()
-        self.tool_definitions = self._init_tool_definitions()
+
+        # [CONTEXT-DIET] Store definitions by category for dynamic loading
+        self.tool_categories = self._init_tool_categories()
+        
+        # [FIX] Filter disabled tools if configured
+        self.hide_disabled_tools = self.state.config.get("agent_runner", {}).get("hide_disabled_tools", True)
+
+        # [FIX] Valid Category Aliases for Context Diet
+        # Ensure 'control' maps to 'system' so tools are found when requested
+        if "control" not in self.tool_categories and "system" in self.tool_categories:
+            self.tool_categories["control"] = self.tool_categories["system"]
+        
+        # Helper to check if tool comes from disabled server
+        def is_tool_enabled(tool_def):
+             # Native tools are always enabled
+             # MCP tools might be disabled
+             # But here we are initing native tools.
+             # MCP tools are loaded dynamically via _sync_mcp_tools usually.
+             return True
+
+        # Flat list for legacy support / fallback
+        self.tool_definitions = [t for cats in self.tool_categories.values() for t in cats]
+        
+        # [PHASE 3] Performance Optimization: Multi-layer caching
+        underlying_cache = MultiLayerCache(
+            max_size=10000,
+            default_ttl=300.0,  # 5 minutes for MCP tools
+            strategy=CacheStrategy.LRU
+        )
+        self.mcp_response_cache = MCPToolCache(underlying_cache)
+    
+    def invalidate_mcp_cache(self, server_name: Optional[str] = None):
+        """
+        Invalidate MCP tool response cache.
+        
+        Args:
+            server_name: If provided, invalidate cache for specific server.
+                         If None, invalidate entire MCP cache.
+        """
+        if server_name:
+            # Invalidate specific server's cache
+            invalidated = self.mcp_response_cache.cache.invalidate(
+                namespace=self.mcp_response_cache.namespace,
+                key=None  # Will invalidate all keys in namespace
+            )
+            logger.info(f"Invalidated {invalidated} cache entries for MCP server: {server_name}")
+        else:
+            # Invalidate all MCP cache
+            self.mcp_response_cache.cache.clear()
+            logger.info("Cleared entire MCP response cache")
 
     def _init_tool_impls(self) -> Dict[str, Any]:
         return {
@@ -74,6 +141,10 @@ class ToolExecutor:
             "registry_read": registry_tools.tool_registry_read,
             "registry_append": registry_tools.tool_registry_append,
             "registry_write": registry_tools.tool_registry_write,
+            # Advice Utils
+            "consult_advice": advice_tools.tool_consult_advice,
+            "view_last_system_prompt": advice_tools.tool_debug_view_last_prompt,
+            "view_active_advice": advice_tools.tool_debug_view_active_advice,
             # Introspection Tools
             "get_service_status": introspection_tools.tool_get_service_status,
             "get_component_map": introspection_tools.tool_get_component_map,
@@ -85,550 +156,955 @@ class ToolExecutor:
             "register_trigger": system_tools.tool_register_trigger,
             "remove_trigger": system_tools.tool_remove_trigger,
             "list_triggers": system_tools.tool_list_triggers,
+            # Quality Tier Management
+            "set_quality_tier": system_tools.tool_set_quality_tier,
+            "get_quality_tier": system_tools.tool_get_quality_tier,
+            "get_quality_tier_comparison": system_tools.tool_get_quality_tier_comparison,
+            # Core Services: Time and Location
+            "get_current_time": time_tools.tool_get_current_time,
+            "convert_time": time_tools.tool_convert_time,
+            "get_location": location_tools.tool_get_location,
+            
+            # [MEMORY] Native Memory Tools (Decoupled from MCP)
+            "memory_store_fact": memory_tools.tool_memory_store_fact,
+            "memory_query_facts": memory_tools.tool_memory_query_facts,
+            "memory_search_semantic": memory_tools.tool_memory_search_semantic,
+            "memory_consolidate": memory_tools.tool_memory_consolidate,
+            
+            # System Control
+            "restart_agent": system_tools.tool_restart_agent,
+            "get_boot_status": system_tools.tool_get_boot_status,
+            # System Tools (Additional)
+            "set_mode": system_tools.tool_set_mode,
+            "query_logs": system_tools.tool_query_logs,
+            "add_lexicon_entry": system_tools.tool_add_lexicon_entry,
+            "manage_secret": system_tools.tool_manage_secret,
+            "clear_boot_status": system_tools.tool_clear_boot_status,
+            "set_quality_tier": system_tools.tool_set_quality_tier,
+            "get_quality_tier": system_tools.tool_get_quality_tier,
+            "control_refinement": system_tools.tool_control_refinement,
+            "set_context_prune_limit": system_tools.tool_set_context_prune_limit,
+            "filter_tools_by_category": system_tools.tool_filter_tools_by_category,
+            "get_layer_status": system_tools.tool_get_layer_status,
+            # Web Tools
+            "search_web": web_tools.tool_search_web,
+            # Admin Status Tools
+            "get_circuit_breaker_status": admin_status_tools.tool_get_circuit_breaker_status,
+            "get_memory_status": admin_status_tools.tool_get_memory_status,
+            "get_ingestion_status": admin_status_tools.tool_get_ingestion_status,
+            "pause_ingestion": admin_status_tools.tool_pause_ingestion,
+            "resume_ingestion": admin_status_tools.tool_resume_ingestion,
+            "clear_ingestion_problem": admin_status_tools.tool_clear_ingestion_problem,
+            "reset_circuit_breaker": admin_status_tools.tool_reset_circuit_breaker,
+            "reset_all_circuit_breakers": admin_status_tools.tool_reset_all_circuit_breakers,
+            "get_background_tasks_status": admin_status_tools.tool_get_background_tasks_status,
+            "get_task_health": admin_status_tools.tool_get_task_health,
+            "get_registry_health": admin_status_tools.tool_get_registry_health,
+            "get_mcp_server_status": admin_status_tools.tool_get_mcp_server_status,
+            "get_system_diagnostics": admin_status_tools.tool_get_system_diagnostics,
+            "toggle_mcp_server": admin_status_tools.tool_toggle_mcp_server,
+            "reset_mcp_servers": admin_status_tools.tool_reset_mcp_servers,
+            "reload_mcp_servers": admin_status_tools.tool_reload_mcp_servers,
+            "trigger_memory_consolidation": admin_status_tools.tool_trigger_memory_consolidation,
+            "trigger_backup": admin_status_tools.tool_trigger_backup,
+            "update_model_config": admin_status_tools.tool_update_model_config,
+            "get_chat_functionality_analysis": admin_status_tools.tool_get_chat_functionality_analysis,
+            "list_all_available_tools": admin_status_tools.tool_list_all_available_tools,
+            "get_system_prompt": admin_status_tools.tool_get_system_prompt,
+            "get_memory_facts": admin_status_tools.tool_get_memory_facts,
+            "get_llm_roles": admin_status_tools.tool_get_llm_roles,
+            "get_detailed_system_status": admin_status_tools.tool_get_detailed_system_status,
+            "get_system_metrics": admin_status_tools.tool_get_system_metrics,
+            "inspect_system_prompt": admin_status_tools.tool_inspect_system_prompt,
+            "analyze_query_classification": admin_status_tools.tool_analyze_query_classification,
+            "evaluate_response_quality": admin_status_tools.tool_evaluate_response_quality,
+            # Latency Tools
+            "investigate_system_performance": latency_tools.tool_investigate_system_performance,
+            "run_chat_latency_test": latency_tools.tool_run_chat_latency_test,
+            "run_latency_tests": latency_tools.tool_run_latency_tests,
+            # Tool Evaluation Tools
+            "evaluate_tool_health": tool_evaluation_tools.tool_evaluate_tool_health,
+            "get_tool_health_dashboard": tool_evaluation_tools.tool_get_tool_health_dashboard,
+            "deprecate_tool": tool_evaluation_tools.tool_deprecate_tool,
+            "record_tool_usage": tool_evaluation_tools.tool_record_tool_usage,
+            # Thinking Tools
+            "sequential_thinking": thinking_tools.tool_sequential_thinking,
+            "get_thinking_history": thinking_tools.tool_get_thinking_history,
+            "start_thinking_session": thinking_tools.tool_start_thinking_session,
+            "start_thinking_branch": thinking_tools.tool_start_thinking_branch,
+            "get_thinking_progress": thinking_tools.tool_get_thinking_progress,
+            "analyze_thinking_efficiency": thinking_tools.tool_analyze_thinking_efficiency,
+        }
+    
+    def _init_tool_categories(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Initialize tools grouped by category for Context Diet."""
+        return {
+            "core": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_time",
+                        "description": "Get current time in ISO format or specific timezone.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "timezone": {"type": "string", "description": "Timezone e.g. 'America/New_York'"}
+                            }
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_location",
+                        "description": "Get current physical location of the server/agent.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "convert_time",
+                        "description": "Convert time between timezones.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "time_str": {"type": "string", "description": "Time string"},
+                                "source_tz": {"type": "string"},
+                                "target_tz": {"type": "string"}
+                            },
+                             "required": ["time_str", "target_tz"]
+                        }
+                    }
+                }
+            ],
+            "filesystem": [
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "list_dir",
+                        "description": "List contents of a directory in the sandboxed workspace.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "Relative path (default '.')"},
+                                "recursive": {"type": "boolean", "default": False},
+                                "max_depth": {"type": "integer", "default": 2}
+                            }
+                        }
+                    }
+                },
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "read_text",
+                        "description": "Read text file content.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "Path to file"},
+                                "start_line": {"type": "integer"},
+                                "end_line": {"type": "integer"}
+                            },
+                            "required": ["path"]
+                        }
+                    }
+                },
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "write_text",
+                        "description": "Write text to file (overwrites).",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "Path to file"},
+                                "content": {"type": "string", "description": "Content to write"}
+                            },
+                            "required": ["path", "content"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "append_text",
+                        "description": "Append text to file.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"}
+                            },
+                            "required": ["path", "content"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "make_dir",
+                        "description": "Create directory recursively.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"}
+                            },
+                            "required": ["path"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "path_info",
+                        "description": "Get file/directory metadata.",
+                        "parameters": {
+                             "type": "object",
+                             "properties": { "path": {"type": "string"} },
+                             "required": ["path"]
+                        }
+                    }
+                },
+                {
+                     "type": "function",
+                     "function": {
+                         "name": "find_files",
+                         "description": "Find files matching pattern.",
+                         "parameters": {
+                             "type": "object",
+                             "properties": {
+                                 "path": {"type": "string"},
+                                 "pattern": {"type": "string", "description": "Glob pattern e.g. '*.py'"}
+                             },
+                             "required": ["path", "pattern"]
+                         }
+                     }
+                }
+            ],
+            "system": [
+                {
+                    "type": "function",
+                     "function": {
+                         "name": "run_command",
+                         "description": "Execute shell command (Sandboxed).",
+                         "parameters": {
+                             "type": "object",
+                             "properties": {
+                                 "command": {"type": "string"},
+                                 "timeout": {"type": "integer", "default": 60},
+                                 "background": {"type": "boolean", "default": False}
+                             },
+                             "required": ["command"]
+                         }
+                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "run_node",
+                        "description": "Execute Node.js script.",
+                        "parameters": {
+                             "type": "object",
+                             "properties": { "script": {"type": "string"} },
+                             "required": ["script"]
+                        }
+                    }
+                },
+                {
+                     "type": "function",
+                     "function": {
+                        "name": "check_system_health",
+                        "description": "Run diagnostic health check.",
+                        "parameters": {"type": "object", "properties": {}}
+                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "restart_agent",
+                        "description": "Restart the Agent Runner service.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                     "type": "function",
+                     "function": {
+                         "name": "manage_secret",
+                         "description": "Securely save/retrieve API keys.",
+                         "parameters": {
+                             "type": "object",
+                             "properties": {
+                                 "action": {"type": "string", "enum": ["set", "get", "delete"]},
+                                 "key": {"type": "string"},
+                                 "value": {"type": "string"}
+                             },
+                             "required": ["action", "key"]
+                         }
+                     }
+                }
+            ],
+            "memory": [
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "memory_store_fact",
+                        "description": "Store a fact in long-term memory.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string", "description": "fact content"},
+                                "category": {"type": "string", "default": "general"},
+                                "confidence": {"type": "number", "default": 1.0}
+                            },
+                            "required": ["content"]
+                        }
+                    }
+                },
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "memory_query_facts",
+                        "description": "Retrieve facts from long-term memory.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "Natural language query"},
+                                "limit": {"type": "integer", "default": 5}
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "memory_search_semantic",
+                        "description": "Semantic search over memory episodes.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string"},
+                                "limit": {"type": "integer", "default": 10},
+                                "threshold": {"type": "number", "default": 0.7}
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "memory_consolidate",
+                        "description": "Trigger memory consolidation/cleanup.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                }
+            ],
+            "thinking": [
+                 {
+                    "type": "function",
+                    "function": {
+                        "name": "sequential_thinking",
+                        "description": "Internal Chain of Thought engine.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "thought": {"type": "string"},
+                                "needs_more_time": {"type": "boolean"}
+                            },
+                             "required": ["thought", "needs_more_time"]
+                        }
+                    }
+                }
+            ],
+            "admin": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "unlock_session",
+                        "description": "Unlock admin session with password.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"password": {"type": "string"}},
+                            "required": ["password"]
+                        }
+                    }
+                },
+                {
+                     "type": "function",
+                     "function": {
+                         "name": "set_policy",
+                         "description": "Update security policy.",
+                         "parameters": {
+                             "type": "object",
+                             "properties": {
+                                 "entity": {"type": "string"},
+                                 "policy": {"type": "string"}
+                             },
+                             "required": ["entity", "policy"]
+                         }
+                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                         "name": "check_admin_status",
+                         "description": "Check current admin privileges.",
+                         "parameters": {"type": "object", "properties": {}}
+                    }
+                }
+            ],
+            "cleanup": [
+                {
+                    "type": "function",
+                    "function": {
+                         "name": "remove_file",
+                         "description": "Delete file.",
+                         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                         "name": "remove_dir",
+                         "description": "Delete directory.",
+                         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+                    }
+                }
+            ],
+            "exploration": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_component_map",
+                        "description": "List all system roles and their assigned models. Use to answer questions about models, inventory all LLMs, list all internal models, or what model is the Router using. Returns data from database (source of truth).",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_active_configuration",
+                        "description": "Read the current system configuration from database, including all model assignments (AGENT_MODEL, ROUTER_MODEL, etc.). Use to answer questions about models, inventory all LLMs, or show system configuration. Secrets are masked. Database is source of truth.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_all_available_tools",
+                        "description": "List all available tools in the system by category.",
+                        "parameters": {"type": "object", "properties": {"category": {"type": "string", "description": "Optional category filter"}}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_system_prompt",
+                        "description": "Get the current system prompt being used.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_memory_facts",
+                        "description": "Get facts from memory.",
+                        "parameters": {"type": "object", "properties": {"entity": {"type": "string"}, "relation": {"type": "string"}, "limit": {"type": "integer"}}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_llm_roles",
+                        "description": "Get LLM role assignments.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_system_toggles",
+                        "description": "List system toggles and their current states.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_system_config",
+                        "description": "Get a specific system configuration value.",
+                        "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}
+                    }
+                }
+            ]
         }
 
-    def _init_tool_definitions(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_dir",
-                    "description": "List contents of a directory in the sandboxed workspace. Returns file names, sizes, and types.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "Relative path to list (default '.')"},
-                            "recursive": {"type": "boolean", "description": "Whether to list subdirectories", "default": False},
-                            "max_depth": {"type": "integer", "description": "Max recursion depth", "default": 2}
-                        }
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_text",
-                    "description": "Read the text content of a file from the workspace.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "Path to the file to read."},
-                            "max_bytes": {"type": "integer", "description": "Optional limit on bytes to read."}
-                        },
-                        "required": ["path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "write_text",
-                    "description": "Create a new file or overwrite an existing one with text content.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "Path to create/overwrite."},
-                            "content": {"type": "string", "description": "The text content to write."},
-                            "overwrite": {"type": "boolean", "description": "Whether to allow overwriting existing files.", "default": False}
-                        },
-                        "required": ["path", "content"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "mcp_proxy",
-                    "description": "Call a tool on an MCP (Model Context Protocol) server. Useful for external capabilities like weather, search, or specialized databases.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "server": {"type": "string", "description": "The name of the MCP server to call."},
-                            "tool": {"type": "string", "description": "The name of the tool on that server."},
-                            "arguments": {"type": "object", "description": "The arguments to pass to the tool."}
-                        },
-                        "required": ["server", "tool", "arguments"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "query_static_resources",
-                    "description": "Search or read documentation and reference materials from the 'Static Resources' folder.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Optional keyword search query."},
-                            "resource_name": {"type": "string", "description": "Specific file name to read."},
-                            "list_all": {"type": "boolean", "description": "List all available resources."}
-                        }
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "knowledge_search",
-                    "description": "Deep search across uploaded PDFs, manuals, and long-form documents in your knowledge bases (RAG). Use this for complex questions that require more than just short facts.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "The specific question or topic to search for."},
-                            "kb_id": {"type": "string", "description": "The specific knowledge base to search (default 'default')."},
-                            "filters": {"type": "object", "description": "Optional metadata filters (e.g. {'brand': 'TIME', 'visual_credibility': {'$gt': 0.8}})."}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search",
-                    "description": "The ultimate search tool. It automatically checks your short-term facts (SurrealDB) AND your deep-knowledge bases (RAG). Use this first for any question about your project, farm, or past conversations.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "The question or topic to search for."}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "ingest_knowledge",
-                    "description": "Store a piece of text into the deep knowledge base (RAG). Use this for permanent business logic, farm specs, or medical protocols.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "text": {"type": "string", "description": "The content to remember."},
-                            "kb_id": {"type": "string", "description": "Knowledge base ID (default 'default')."},
-                            "source_name": {"type": "string", "description": "Friendly name for the source (e.g. 'Farm Policy 2025')."}
-                        },
-                        "required": ["text"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "ingest_file",
-                    "description": "Take an existing file from the uploads folder and ingest it into the deep knowledge base.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "Path to the file (e.g. 'uploads/data.txt')."},
-                            "kb_id": {"type": "string", "description": "Knowledge base ID (default 'default')."}
-                        },
-                        "required": ["path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "run_command",
-                    "description": "Execute a shell command. Use this for running scripts, refactoring tools, or system operations. Requires 'enable_command_execution' in config.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {"type": "string", "description": "The shell command to run."},
-                            "background": {"type": "boolean", "description": "Run in background (async).", "default": False},
-                            "dry_run": {"type": "boolean", "description": "Simulate safety checks without execution. Use for impact analysis.", "default": False}
-                        },
-                        "required": ["command"]
-                    }
-                }
-            },
-            # Phase 52: Node Tools
-            {
-                "type": "function",
-                "function": {
-                    "name": "run_node",
-                    "description": "Execute JavaScript code using the Node.js runtime. Useful for web scraping, data processing, or testing JS/TS logic.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string", "description": "The JavaScript code to execute."},
-                            "dependency_check": {"type": "boolean", "description": "Check for basic dependencies (default True)."}
-                        },
-                        "required": ["code"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "run_npm",
-                    "description": "Run NPM commands (install, init, etc) in the current workspace.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {"type": "string", "description": "The NPM command args (e.g. 'install axios'). Do not include 'npm' prefix."}
-                        },
-                        "required": ["command"]
-                    }
-                }
-            },
-            # Phase 53: Admin Tools
-            {
-                "type": "function",
-                "function": {
-                    "name": "unlock_session",
-                    "description": "Unlock 'God Mode' for the current session. Requires password ('lloovies').",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "password": {"type": "string", "description": "The secret passphrase."}
-                        },
-                        "required": ["password"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "set_policy",
-                    "description": "Override ANY system policy (e.g. 'internet', 'safety', 'limits'). Requires active session unlock OR password.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "policy": {"type": "string", "description": "Name of policy (e.g. 'internet', 'safety', 'limits')."},
-                            "value": {"type": "string", "description": "New value (e.g. 'true', 'infinity')."},
-                            "password": {"type": "string", "description": "Optional: override password if session not unlocked."}
-                        },
-                        "required": ["policy", "value"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "check_admin_status",
-                    "description": "Check the current admin override status and internet policy.",
-                    "parameters": {"type": "object", "properties": {}},
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "trigger_task",
-                    "description": "Trigger a background task to run immediately.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "task_name": {"type": "string", "description": "The name of the task (e.g. 'night_shift_refactor', 'cloud_refactor_audit')."}
-                        },
-                        "required": ["task_name"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "report_missing_tool",
-                    "description": "Call this when you CANNOT complete a task because you lack a specific tool.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "tool_name": {"type": "string", "description": "Name of the hypothetical tool you need."},
-                            "reason": {"type": "string", "description": "Explanation of why existing tools are insufficient."}
-                        },
-                        "required": ["tool_name", "reason"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "run_memory_consolidation",
-                    "description": "Trigger the memory consolidation process manually.",
-                    "parameters": {"type": "object", "properties": {}},
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "remove_memory_from_file",
-                    "description": "Surgically 'Forget' a fact by identifying and removing the concept from a source file (preserving formatting).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "target_text": {"type": "string", "description": "The concept or fact to forget (e.g. 'Remove the definition of Uplink')."},
-                            "file_path": {"type": "string", "description": "The path to the source file (e.g. 'brain/system_lexicon.md')."}
-                        },
-                        "required": ["target_text", "file_path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "check_system_health",
-                    "description": "Check the health status of the entire Orchestrator (Router, Agent, Circuit Breakers). Use this if the user asks about 'system status', 'health', or 'breakers'.",
-                    "parameters": {"type": "object", "properties": {}},
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "import_mcp_config",
-                    "description": "Smartly import MCP server configurations from raw text or JSON. Use this when the user pastes a config or asks to 'install this server'.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "raw_text": {"type": "string", "description": "The raw text, JSON, or URL snippet provided by the user."}
-                        },
-                        "required": ["raw_text"]
-                    }
-                }
-            },
-            # --- INTROSPECTION TOOLS ---
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_service_status",
-                    "description": "Get a health report of all system services (Router, Agent, RAG, DB). Use for diagnosis.",
-                    "parameters": {"type": "object", "properties": {}}
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_component_map",
-                    "description": "List all system roles and their assigned models. Use to answer 'What model is the Router?'",
-                    "parameters": {"type": "object", "properties": {}}
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_active_configuration",
-                    "description": "Read the current system configuration and environment variables (secrets masked).",
-                    "parameters": {"type": "object", "properties": {}}
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_system_toggles",
-                    "description": "List all interactive system toggles (e.g. Router Mode, Internet) and their current values.",
-                    "parameters": {"type": "object", "properties": {}}
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_system_config",
-                    "description": "Get the value of a specific system setting (e.g. 'router_mode').",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "key": {"type": "string", "description": "The config key to fetch."}
-                        },
-                        "required": ["key"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "set_system_config",
-                    "description": "Update a system setting dynamically (e.g. switch 'router_mode' to 'async').",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "key": {"type": "string", "description": "The config key to update."},
-                            "value": {"type": "string", "description": "The new value."}
-                        },
-                        "required": ["key", "value"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "sentinel_authorize",
-                    "description": "Authorize a command pattern that was blocked by the Sentinel security system.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {"type": "string", "description": "The command string to whitelist (e.g. 'rm -rf ./temp')."}
-                        },
-                        "required": ["command"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "register_trigger",
-                    "description": "Register a new dynamic trigger/keyword/slash-command. Add new modes on the fly.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "pattern": {"type": "string", "description": "Keyword to listen for (e.g. 'verbose_mode')."},
-                            "action_type": {"type": "string", "description": "Action type: 'control_ui', 'menu', 'system_prompt'."},
-                            "action_data": {"type": "string", "description": "JSON string of parameters."},
-                            "description": {"type": "string", "description": "Human readable help text."}
-                        },
-                        "required": ["pattern", "action_type"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "remove_trigger",
-                    "description": "Remove a dynamic trigger/mode.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "pattern": {"type": "string", "description": "The trigger keyword to remove."}
-                        },
-                        "required": ["pattern"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_triggers",
-                    "description": "List all active dynamic triggers and modes.",
-                    "parameters": {"type": "object", "properties": {}}
-                }
-            }
-        ]
-
-    async def discover_mcp_tools(self):
-        """Discover tools from all configured MCP servers."""
-        logger.info(f"Starting MCP discovery. Servers: {list(self.state.mcp_servers.keys())}")
-        for server_name in list(self.state.mcp_servers.keys()):
-            cfg = self.state.mcp_servers[server_name]
+    async def _disable_failed_server(self, server_name: str, reason: str):
+        """Helper to disable a failing server and log the reason.
+           Updates both runtime state and database.
+        """
+        import time
+        logger.warning(f"[{server_name}] Disabling server due to failure: {reason}")
+        
+        # Mark as disabled in Runtime State
+        if hasattr(self.state, "toggle_mcp_server"):
+             await self.state.toggle_mcp_server(server_name, False, persist=True)  # Now persist to DB
+        else:
+             # Fallback if method signature doesn't match yet
+             self.state.mcp_servers[server_name]["enabled"] = False
+             self.state.mcp_servers[server_name]["disabled_reason"] = "discovery_failed"
+             
+             # Update database immediately (discovery failures are rare, no debouncing needed)
+             if hasattr(self.state, "config_manager") and self.state.config_manager:
+                 try:
+                     config = self.state.mcp_servers[server_name].copy()
+                     await self.state.config_manager.update_mcp_server(server_name, config)
+                     logger.info(f"[{server_name}] Updated database - disabled due to discovery failure")
+                 except Exception as e:
+                     logger.warning(f"[{server_name}] Failed to update database: {e}")
+             
+        # Record in Circuit Breaker
+        if hasattr(self.state, "mcp_circuit_breaker"):
+            self.state.mcp_circuit_breaker.record_failure(server_name, error=reason)
             
-            # Skip Disabled Servers
-            if not cfg.get("enabled", True):
-                if server_name in self.mcp_tool_cache:
-                    del self.mcp_tool_cache[server_name]
-                logger.info(f"Skipping disabled MCP server: {server_name}")
-                continue
+        # Notify
+        if hasattr(self.state, "system_event_queue"):
+            await self.state.system_event_queue.put({
+                "event": {
+                    "type": "system_status",
+                    "content": f"MCP Server '{server_name}' disabled: {reason}",
+                    "severity": "warning"
+                },
+                "request_id": None,
+                "timestamp": time.time()
+            })
 
-            # Skip Block Removed (Dynamic Timeout Handling Implemented)
+    async def _discover_single_server(self, server_name: str, cfg: dict, attempt: int = 1, max_attempts: int = 3, disable_on_failure: bool = True) -> bool:
+        """Discover tools from a single MCP server with retry logic.
+        
+        Args:
+            server_name: Name of the MCP server
+            cfg: Server configuration
+            attempt: Current attempt number
+            max_attempts: Maximum number of attempts
+            disable_on_failure: If True, disable server on failure. If False, only log the failure.
+                               Use False for periodic refreshes to avoid disabling servers temporarily.
+        
+        Returns True if successful, False otherwise.
+        """
+        from agent_runner.tools.mcp import tool_mcp_proxy
+        from agent_runner.constants import CORE_MCP_SERVERS
+        
+        is_core = server_name in CORE_MCP_SERVERS
 
-            logger.info(f"Discovering tools for {server_name}. Config: {cfg}")
-            try:
-                from agent_runner.tools.mcp import tool_mcp_proxy
-                # [Optimization] Shield discovery with a strict timeout (5 seconds)
-                # This prevents one bad MCP from hanging the entire agent startup.
-                try:
-                    res = await asyncio.wait_for(
-                        tool_mcp_proxy(self.state, server_name, "tools/list", {}, bypass_circuit_breaker=True),
-                        timeout=5.0
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"MCP Discovery TIMEOUT for '{server_name}'. Marking as failed.")
-                    # [Fix] Can optionally disable it here to prevent future retries
-                    continue
+        # Fast-path: if already initialized with cached tools, skip rediscovery
+        if cfg.get("enabled", True) and server_name in self.mcp_tool_cache and self.state.stdio_process_initialized.get(server_name, False):
+            logger.info(f"[{server_name}] Already initialized with cached tools; skipping rediscovery.")
+            return True
 
-                if res.get("ok"):
-                    data = res.get("result", res)
-                    remote_tools = data.get("tools", [])
-                    defs = []
-                    for rt in remote_tools:
-                        defs.append({
-                            "type": "function",
-                            "function": {
-                                "name": rt.get("name"),
-                                "description": rt.get("description"),
-                                "parameters": rt.get("inputSchema", {"type": "object", "properties": {}})
-                            }
-                        })
-                    self.mcp_tool_cache[server_name] = defs
-                    logger.info(f"Discovered {len(defs)} tools from MCP server '{server_name}'")
-            except Exception as e:
-                logger.warning(f"Failed discovery for {server_name}: {e}")
+        # Protect caches: if we already have tools cached for this server, avoid disabling on refresh failures
+        effective_disable_on_failure = disable_on_failure
+        if server_name in self.mcp_tool_cache:
+            effective_disable_on_failure = False
+
+
+        
+        # [FIX] Intelligent timeout: longer for first attempt, shorter for retries
+        # First attempt gets 45s (for locally heavy setups), retries get 30s
+        timeout = TIMEOUT_MCP_DISCOVERY if attempt == 1 else TIMEOUT_MCP_DISCOVERY_RETRY
+        # Core services get extra time
+        if is_core and attempt == 1:
+            timeout = TIMEOUT_MCP_CORE_DISCOVERY
+        
+        # [FIX] Pre-flight validation
+        if attempt == 1:
+            # Check if command exists
+            cmd = cfg.get("cmd", cfg.get("command"))
+            if cmd:
+                import shutil
+                first_cmd = cmd[0] if isinstance(cmd, list) else cmd
+                if not shutil.which(first_cmd):
+                    error_msg = f"Command not found: {first_cmd}"
+                    logger.error(f"[{server_name}] {error_msg}")
+                    if not is_core:
+                        await self._disable_failed_server(server_name, error_msg)
+                    return False
+        
+        logger.info(f"[{server_name}] Discovery attempt {attempt}/{max_attempts} (timeout={timeout}s)")
+        
+        try:
+            res = await asyncio.wait_for(
+                tool_mcp_proxy(self.state, server_name, "tools/list", {}, bypass_circuit_breaker=True),
+                timeout=timeout
+            )
+            
+            # Safety check: ensure res is not None
+            if res is None:
+                logger.error(f"[{server_name}] tool_mcp_proxy returned None")
+                if not is_core and disable_on_failure:
+                    await self._disable_failed_server(server_name, "Discovery returned None")
+                return False
+            
+            if res.get("ok"):
+                data = res.get("result", res)
+                remote_tools = data.get("tools", [])
+                defs = []
+                for rt in remote_tools:
+                    defs.append({
+                        "type": "function",
+                        "function": {
+                            "name": rt.get("name"),
+                            "description": rt.get("description"),
+                            "parameters": rt.get("inputSchema", {"type": "object", "properties": {}})
+                        }
+                    })
+                self.mcp_tool_cache[server_name] = defs
+                logger.info(f"✅ Discovered {len(defs)} tools from MCP server '{server_name}'")
+                return True
+            else:
+                error_msg = res.get("error", "Unknown error")
+                logger.warning(f"[{server_name}] Discovery returned error: {error_msg}")
+                if attempt < max_attempts:
+                    # Retry with exponential backoff
+                    backoff = min(2.0 ** (attempt - 1), 5.0)  # 1s, 2s, 4s max
+                    logger.info(f"[{server_name}] Retrying in {backoff}s...")
+                    await asyncio.sleep(backoff)
+                    return await self._discover_single_server(server_name, cfg, attempt + 1, max_attempts, disable_on_failure)
+                else:
+                    # All retries exhausted
+                    if not is_core and disable_on_failure:
+                        await self._disable_failed_server(server_name, f"Discovery failed after {max_attempts} attempts: {error_msg}")
+                    elif is_core:
+                        logger.error(f"🚨 CRITICAL: Core service '{server_name}' failed after {max_attempts} attempts: {error_msg}")
+                        self.state.mcp_circuit_breaker.record_failure(server_name, weight=1, error=error_msg)
+                    return False
+                    
+        except asyncio.TimeoutError:
+            error_msg = f"Discovery timeout ({timeout}s)"
+            logger.warning(f"[{server_name}] {error_msg}")
+            if attempt < max_attempts:
+                # Retry with exponential backoff
+                backoff = min(2.0 ** (attempt - 1), 5.0)
+                logger.info(f"[{server_name}] Retrying after timeout in {backoff}s...")
+                await asyncio.sleep(backoff)
+                return await self._discover_single_server(server_name, cfg, attempt + 1, max_attempts)
+            else:
+                # All retries exhausted
+                if not is_core and disable_on_failure:
+                    await self._disable_failed_server(server_name, f"{error_msg} after {max_attempts} attempts")
+                elif is_core:
+                    logger.error(f"🚨 CRITICAL: Core service '{server_name}' {error_msg} after {max_attempts} attempts")
+                    self.state.mcp_circuit_breaker.record_failure(server_name, weight=1, error=error_msg)
+                return False
+                
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning(f"[{server_name}] Discovery exception: {error_msg}", exc_info=True)
+            
+            # [FIX] Enhanced error logging - capture more context
+            import traceback
+            error_details = {
+                "error": error_msg,
+                "traceback": traceback.format_exc(),
+                "config": {k: v for k, v in cfg.items() if k != "env"}  # Don't log env vars
+            }
+            logger.debug(f"[{server_name}] Full error context: {error_details}")
+            
+            if attempt < max_attempts:
+                # Retry with exponential backoff
+                backoff = min(2.0 ** (attempt - 1), 5.0)
+                logger.info(f"[{server_name}] Retrying after exception in {backoff}s...")
+                await asyncio.sleep(backoff)
+                return await self._discover_single_server(server_name, cfg, attempt + 1, max_attempts)
+            else:
+                # All retries exhausted
+                if not is_core and effective_disable_on_failure:
+                    await self._disable_failed_server(server_name, f"Discovery exception after {max_attempts} attempts: {error_msg}")
+                elif is_core:
+                    logger.error(f"🚨 CRITICAL: Core service '{server_name}' discovery exception after {max_attempts} attempts: {error_msg}")
+                    self.state.mcp_circuit_breaker.record_failure(server_name, weight=1, error=error_msg)
+                
                 # [Fix] Notify user via Unified Tracking
                 try:
                     from common.unified_tracking import track_mcp_event, EventSeverity
                     track_mcp_event(
                         event="mcp_discovery_failed",
                         server=server_name,
-                        message=f"Failed to discover tools: {e}",
-                        severity=EventSeverity.HIGH, # High severity triggers notification
+                        message=f"Failed to discover tools after {max_attempts} attempts: {error_msg}",
+                        severity=EventSeverity.CRITICAL if is_core else EventSeverity.HIGH,
                         error=e,
                         component="executor"
                     )
                 except ImportError:
                     pass
-        
-        menu_lines = []
-        core_servers = {"project-memory", "time", "weather", "thinking", "system-control"}
-        
-        for srv, tools in self.mcp_tool_cache.items():
-            if not tools:
-                continue
-            if srv in core_servers:
-                continue
-            
-            # Improve Menu: Include first tool description for context
-            desc = ""
-            if tools:
-                desc = tools[0]["function"].get("description", "")[:60] + "..."
-            
-            t_names = [t["function"]["name"] for t in tools[:5]]
-            line = f"- Server '{srv}': {desc}\n  Tools: {', '.join(t_names)}"
-            menu_lines.append(line)
-        
-        if menu_lines:
-            self.tool_menu_summary = "\n".join(menu_lines)
-        else:
-            self.tool_menu_summary = "(No external tools available)"
-            
-        logger.info(f"Generated Maître d' Menu: {self.tool_menu_summary}")
-        
-        # [FEATURE REQUEST]: Formally track all functions.
-        # We persist the full registry to disk so the Agent can "read about itself".
-        try:
-            registry_path = os.path.join(self.state.agent_fs_root, "system", "tool_registry.json")
-            os.makedirs(os.path.dirname(registry_path), exist_ok=True)
-            
-            full_registry = {
-                "timestamp": time.time(),
-                "native_tools": self.tool_definitions,
-                "mcp_tools": self.mcp_tool_cache
-            }
-            
-            with open(registry_path, "w") as f:
-                json.dump(full_registry, f, indent=2)
-                
-            logger.info(f"Persisted Tool Registry to {registry_path}")
-        except Exception as e:
-            logger.warning(f"Failed to persist tool registry: {e}")
+                return False
 
-    async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-        """Combine built-in tools with discovered MCP tools, filtering by Intent Menu."""
-        tools = list(self.tool_definitions)
+    async def discover_mcp_tools(self):
+        """Discover tools from all configured MCP servers with improved error handling and retries."""
+        logger.info(f"Starting MCP discovery. Servers: {list(self.state.mcp_servers.keys())}")
         
+        # [FIX] Discover servers with limited parallelism to prevent resource exhaustion
+        import asyncio
+        semaphore = asyncio.Semaphore(1)  # Max 1 concurrent discovery (Sequential Startup to prevent stdio deadlocks)
+
+        # [FIX] Prevent concurrent discovery runs in the same process
+        if not hasattr(self.state, "mcp_discovery_lock"):
+            self.state.mcp_discovery_lock = asyncio.Lock()
+        if self.state.mcp_discovery_lock.locked():
+            logger.info("MCP discovery already in progress; skipping duplicate run.")
+            return
+        await self.state.mcp_discovery_lock.acquire()
+
+        try:
+            async def discover_with_semaphore(server_name: str, cfg: dict):
+                async with semaphore:
+                    return await self._discover_single_server(server_name, cfg)
+            
+            # Create discovery tasks
+            tasks = []
+            for server_name in list(self.state.mcp_servers.keys()):
+                cfg = self.state.mcp_servers[server_name]
+                
+                # Skip Disabled Servers
+                if not cfg.get("enabled", True):
+                    if server_name in self.mcp_tool_cache:
+                        del self.mcp_tool_cache[server_name]
+                    logger.info(f"Skipping disabled MCP server: {server_name}")
+                    continue
+                
+                tasks.append(discover_with_semaphore(server_name, cfg))
+            
+            # Execute discoveries in parallel (with semaphore limit)
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                successful = sum(1 for r in results if r is True)
+                logger.info(f"MCP Discovery complete: {successful}/{len(tasks)} servers succeeded")
+            
+            menu_lines = []
+            from agent_runner.constants import CORE_MCP_SERVERS
+            core_servers = CORE_MCP_SERVERS
+            
+            for srv, tools in self.mcp_tool_cache.items():
+                if not tools:
+                    continue
+                if srv in core_servers:
+                    continue
+                
+                # Improve Menu: Include first tool description for context
+                desc = ""
+                if tools:
+                    desc = tools[0]["function"].get("description", "")[:60] + "..."
+                
+                t_names = [t["function"]["name"] for t in tools[:5]]
+                line = f"- Server '{srv}': {desc}\n  Tools: {', '.join(t_names)}"
+                menu_lines.append(line)
+            
+            if menu_lines:
+                self.tool_menu_summary = "\n".join(menu_lines)
+            else:
+                self.tool_menu_summary = "(No external tools available)"
+                
+            logger.info(f"Generated Maître d' Menu: {self.tool_menu_summary}")
+            
+            # [FEATURE REQUEST]: Formally track all functions.
+            # We persist the full registry to disk so the Agent can "read about itself".
+            try:
+                registry_path = os.path.join(self.state.agent_fs_root, "system", "tool_registry.json")
+                os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+                
+                full_registry = {
+                    "timestamp": time.time(),
+                    "native_tools": self.tool_definitions,
+                    "mcp_tools": self.mcp_tool_cache
+                }
+                
+                with open(registry_path, "w") as f:
+                    json.dump(full_registry, f, indent=2)
+                    
+                logger.info(f"Persisted Tool Registry to {registry_path}")
+            except Exception as e:
+                logger.warning(f"Failed to persist tool registry: {e}")
+
+            # [FAST-SELECTOR] Sync tools to vector DB for fast retrieval
+            try:
+                if self.tool_definitions and hasattr(self.state, "memory"):
+                     logger.info("Syncing tools to FastSelector (Vector DB)...")
+                     # Fire and forget / Background task? 
+                     # For now await to ensure consistency on first run. 
+                     # FastSelector checks existence so it's cheap on restarts.
+                     await FastToolSelector.sync_tools(self.tool_definitions, self.state.memory)
+            except Exception as e:
+                logger.warning(f"FastSelector Sync Failed: {e}")
+
+        finally:
+            # Release discovery lock
+            if hasattr(self.state, "mcp_discovery_lock") and self.state.mcp_discovery_lock.locked():
+                self.state.mcp_discovery_lock.release()
+
+    async def _analyze_query_with_router(self, user_query: str, messages: List[Dict[str, Any]], quality_tier: Optional['QualityTier'] = None) -> Optional[Any]:
+        """Pre-analyze query with router for parallel processing."""
+        try:
+            from agent_runner.router_analyzer import analyze_query
+            import httpx
+
+            headers = {}
+            if self.state.router_auth_token:
+                headers["Authorization"] = f"Bearer {self.state.router_auth_token}"
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), headers=headers) as http_client:
+                return await analyze_query(
+                    query=user_query,
+                    messages=messages,
+                    gateway_base=self.state.gateway_base,
+                    http_client=http_client,
+                    available_tools=[],  # Will be filled in later
+                    available_models=getattr(self.state, 'available_models', [])
+                )
+        except Exception as e:
+            logger.debug(f"Parallel router analysis failed: {e}")
+            return None
+
+    async def get_capability_based_tools(self, query: str, quality_tier: Optional['QualityTier'] = None) -> Dict[str, Any]:
+        """
+        Get tools based on capability detection for a query.
+        Returns capability analysis and recommended tool categories/tools.
+        """
+        # Detect capabilities in the query
+        detected_capabilities = detect_query_capabilities(query)
+
+        if not detected_capabilities:
+            # Fallback to minimal tool set if no capabilities detected
+            return {
+                "capabilities": {},
+                "categories": ["core", "thinking", "exploration", "admin"],
+                "priority_tools": [],
+                "confidence_breakdown": {},
+                "tool_selection": [],
+                "quality_tier": "fallback",
+                "conflicts_resolved": False
+            }
+
+        # Resolve capability conflicts to prevent resource competition
+        capabilities = resolve_capability_conflicts(detected_capabilities)
+
+        # Log conflict resolution if any changes were made
+        if capabilities != detected_capabilities:
+            resolved_count = len(capabilities)
+            original_count = len(detected_capabilities)
+            logger.info(f"⚖️ Resolved capability conflicts: {original_count} → {resolved_count} capabilities")
+
+        # Get quality tier configuration
+        max_tools = 50  # Default
+        quality_tier_name = "balanced"  # Default
+
+        if quality_tier:
+            from agent_runner.quality_tiers import get_tier_config
+            tier_config = get_tier_config(quality_tier)
+            max_tools = tier_config.get("max_tools", 50)
+            quality_tier_name = quality_tier.name.lower()
+
+        # Get tool recommendations with enhanced priority selection
+        tool_recommendations = get_tools_for_capabilities(
+            capabilities,
+            max_tools=max_tools,
+            quality_tier=quality_tier_name
+        )
+
+        # Add conflict resolution metadata
+        tool_recommendations["conflicts_resolved"] = capabilities != detected_capabilities
+        tool_recommendations["original_capabilities"] = detected_capabilities
+
+        return tool_recommendations
+
+    async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None, precomputed_intent: Optional[Dict[str, Any]] = None, quality_tier: Optional['QualityTier'] = None, precomputed_router_analysis: Optional[Any] = None, capability_analysis: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Combine built-in tools with discovered MCP tools, filtering by Intent Menu via Context Diet.
+        
+        Args:
+            precomputed_intent: If provided, use this instead of classifying again (for parallelism)
+        """
+        # [CONTEXT-DIET] Start with minimal core set
+        # Always include CORE (Time/Location), THINKING (Internal Monologue), and EXPLORATION (self-awareness tools)
+        tools = []
+        tools.extend(self.tool_categories.get("core", []))
+        tools.extend(self.tool_categories.get("thinking", []))
+        tools.extend(self.tool_categories.get("memory", []))
+        # Always include exploration tools (get_component_map, get_active_configuration, get_llm_roles) so AI can answer questions about itself
+        tools.extend(self.tool_categories.get("exploration", []))
+        # Always include admin tools for system introspection and configuration
+        tools.extend(self.tool_categories.get("admin", []))
+                
         target_servers = set()
-        if messages:
+        capability_analysis = None
+
+        if precomputed_intent:
+            # [OPTIMIZATION] Use precomputed intent result (from parallel execution)
+            target_servers = set(precomputed_intent.get("target_servers", []))
+        elif messages:
             last_user_msg = next((m for m in reversed(messages) if m.get("role") == "user"), None)
             if last_user_msg:
+                query_text = str(last_user_msg.get("content", ""))
+
+                # [CAPABILITY ENHANCEMENT] Use precomputed capability analysis if available
+                if not capability_analysis:
+                    capability_analysis = await self.get_capability_based_tools(query_text, quality_tier)
+
+                # Use capability-based categories as additional target servers
+                capability_categories = set(capability_analysis.get("categories", []))
+                target_servers.update(capability_categories)
+
+                # [LEGACY] Also run Maître d' intent classification for backward compatibility
                 from agent_runner.intent import classify_search_intent
-                intent_res = await classify_search_intent(str(last_user_msg.get("content", "")), self.state, self.tool_menu_summary)
-                target_servers = set(intent_res.get("target_servers", []))
+                intent_res = await classify_search_intent(query_text, self.state, self.tool_menu_summary)
+                target_servers.update(set(intent_res.get("target_servers", [])))
+
+                logger.info(f"🎯 CAPABILITY ANALYSIS: {len(capability_analysis.get('capabilities', {}))} capabilities detected, {len(target_servers)} target servers")
         else:
             # BROAD DISCOVERY: If no messages, expose EVERYTHING (for external MCP clients/Cursor)
             target_servers = set(self.mcp_tool_cache.keys())
+            # Also expose all system categories for broad discovery
+            target_servers.add("filesystem")
+            target_servers.add("system")
+            target_servers.add("admin")
+            target_servers.add("memory")
+            target_servers.add("cleanup")
+            
+        # [CONTEXT-DIET] Dynamic Category Loading based on Maître d' Request + Capability Analysis
+        # Priority loading based on capability detection
+        if capability_analysis:
+            # Load categories detected by capability analysis first (higher priority)
+            capability_categories = capability_analysis.get("categories", [])
+            for category in capability_categories:
+                if category in self.tool_categories and category not in ["core", "thinking", "exploration", "admin", "memory"]:
+                    tools.extend(self.tool_categories.get(category, []))
+                    logger.debug(f"Loaded capability-detected category: {category}")
+
+        # Legacy Maître d' based loading (fallback/compatibility)
+        if "filesystem" in target_servers:
+            tools.extend(self.tool_categories.get("filesystem", []))
+            tools.extend(self.tool_categories.get("cleanup", [])) # Cleanup usually goes with filesystem
+
+        if "system" in target_servers or "admin" in target_servers:
+             tools.extend(self.tool_categories.get("system", []))
+             tools.extend(self.tool_categories.get("admin", []))
+
+        if "memory" in target_servers or "project-memory" in target_servers: # 'project-memory' is the MCP name, 'memory' is the category
+             tools.extend(self.tool_categories.get("memory", []))
                 
         for server_name, server_tools in self.mcp_tool_cache.items():
             server_cfg = self.state.mcp_servers.get(server_name, {})
+            
+            # [FIX] Filter out disabled servers - don't expose their tools to LLM
+            # (If hide_disabled_tools is True, we skip. If False, we might show them but they'll fail)
+            if self.hide_disabled_tools and not server_cfg.get("enabled", True):
+                logger.debug(f"Skipping disabled server tools: {server_name}")
+                continue  # Skip disabled servers
+            
             if server_cfg.get("requires_internet") and not self.state.internet_available:
                 continue
 
-            is_core = server_name in ["project-memory", "time", "weather", "system-control", "thinking"]
+            from agent_runner.constants import CORE_MCP_SERVERS
+            is_core = server_name in CORE_MCP_SERVERS
             if is_core or (server_name in target_servers):
                 for t in server_tools:
                     orig_func = t.get("function", {})
@@ -641,12 +1117,235 @@ class ToolExecutor:
                         }
                     }
                     tools.append(wrapped)
+
+        # [CAPABILITY ENHANCEMENT] Advanced priority-based tool selection
+        if capability_analysis:
+            priority_tools = capability_analysis.get("priority_tools", [])
+            tool_priority_scores = capability_analysis.get("tool_priority_scores", {})
+
+            if priority_tools or tool_priority_scores:
+                # Enhanced prioritization using confidence scores
+                tool_priority_map = {}
+
+                # Assign priority scores to tools
+                for tool in tools:
+                    func_name = tool.get("function", {}).get("name", "")
+                    priority_score = 0
+
+                    # Direct priority tool match (highest priority)
+                    for priority_tool in priority_tools:
+                        if priority_tool in func_name:
+                            priority_score = max(priority_score, 100)  # High priority
+
+                    # Confidence-based scoring
+                    for scored_tool, score in tool_priority_scores.items():
+                        if scored_tool in func_name:
+                            priority_score = max(priority_score, score * 50)  # Scale to 0-50 range
+
+                    tool_priority_map[func_name] = priority_score
+
+                # Sort tools by priority score (highest first)
+                tools.sort(key=lambda t: tool_priority_map.get(t.get("function", {}).get("name", ""), 0), reverse=True)
+
+                # Log prioritization results
+                high_priority_count = sum(1 for score in tool_priority_map.values() if score > 50)
+                if high_priority_count > 0:
+                    logger.info(f"🎯 Prioritized {high_priority_count} high-priority tools, {len(tools)} total tools available")
+
+        # SEMANTIC TOOL FILTERING: Use Router Analyzer for intelligent selection
+        logger.info(f"🔍 ROUTER ANALYZER: Checking conditions - messages: {len(messages) if messages else 0}, quality_tier: {quality_tier}, MAXIMUM: {QualityTier.MAXIMUM}")
+        
+        # [LATENCY OPTIMIZATION] Adaptive Logic: Skip Router for Smart Models
+        is_smart_model = self.state.is_high_tier_model(self.state.agent_model)
+        if is_smart_model:
+            logger.info(f"⚡ Adaptive Logic: Skipping Router Analyzer for High-Tier Model ({self.state.agent_model})")
+        
+
+        
+        # [FAST-SELECTOR] Enabled for all tiers (except critical overrides) because it's <50ms.
+        # This saves tokens and context for the 70B model too.
+        elif messages and quality_tier != QualityTier.MAXIMUM:  # Keep tier check if desired, or remove to standardize. 
+            # User request: "Preserve it but reduce latency".
+            # We'll allow it for now.
+            try:
+                user_query = messages[-1].get("content", "")
+                if user_query:
+                    # Bypassed slow router_analyzer. Using FastToolSelector.
+                    logger.info(f"⚡ FastSelector: Filtering {len(tools)} tools for query '{user_query[:30]}...'")
+                    
+                    filtered_tools = await FastToolSelector.select_tools(
+                        user_query, 
+                        tools, 
+                        self.state.memory, 
+                        limit=15 # Balanced limit
+                    )
+                    
+                    original_count = len(tools)
+                    tools = filtered_tools
+                    logger.info(f"⚡ FastSelector: Reduced {original_count} -> {len(tools)} tools")
+                    
+            except Exception as e:
+                logger.warning(f"FastSelector Filtering Failed: {e}")
+                
+        # Legacy Router Analyzer Block (Commented Out / Removed)
+        # elif False and messages ...
+
+
+                # Get semantic analysis of the query
+                user_query = messages[-1].get("content", "") if messages else ""
+                if user_query:  # Only analyze if we have a query
+                    # Use precomputed router analysis if available (parallel processing optimization)
+                    if precomputed_router_analysis:
+                        logger.info("Using precomputed router analysis (parallel processing)")
+                        router_analysis = precomputed_router_analysis
+                    else:
+                        logger.info(f"🔍 ROUTER ANALYZER: Analyzing query: '{user_query[:50]}...'")
+
+                        # Create HTTP client for router analyzer
+                        import httpx
+                        headers = {}
+                        if self.state.router_auth_token:
+                            headers["Authorization"] = f"Bearer {self.state.router_auth_token}"
+                        
+                        # [LATENCY-FIX] Temporarily bypass Router Analysis to fix 4s latency
+                        # async with httpx.AsyncClient(timeout=httpx.Timeout(25.0), headers=headers) as http_client:
+                        #     router_analysis = await analyze_query(
+                        #         query=user_query,
+                        #         messages=messages,
+                        #         gateway_base=self.state.gateway_base,
+                        #         http_client=http_client,
+                        #         available_tools=tools,
+                        #         available_models=getattr(self.state, 'available_models', [])
+                        #     )
+                        router_analysis = None
+
+                    # Apply intelligent filtering based on semantic analysis
+                    original_count = len(tools)
+                    if router_analysis:
+                        tools = filter_tools_by_router_analysis(
+                            all_tools=tools,
+                            router_analysis=router_analysis,
+                            mode="moderate",  # Balanced approach
+                            min_confidence=0.7,
+                            max_tools_aggressive=8,   # Very selective when high confidence
+                            max_tools_moderate=15     # Reasonable limit when category-based
+                        )
+
+                    reduction = original_count - len(tools)
+                    if reduction > 0:
+                        logger.info(
+                            "semantic_tool_filtering",
+                            extra={
+                                "original_tools": original_count,
+                                "filtered_tools": len(tools),
+                                "reduction": reduction,
+                                "confidence": router_analysis.confidence,
+                                "categories": router_analysis.tool_categories,
+                                "recommended_tools": router_analysis.recommended_tools[:5]  # Log first 5
+                            }
+                        )
+
+            except Exception as e:
+                logger.warning(f"Router analyzer failed, implementing enhanced fallback: {e}")
+
+                # Enhanced error recovery strategy
+                fallback_applied = False
+                try:
+                    # Strategy 1: Try cached analysis for similar queries
+                    cached_fallback = await self._get_cached_router_analysis_for_similar_query(user_query)
+                    if cached_fallback:
+                        logger.info("Using cached router analysis as fallback")
+                        tools = filter_tools_by_router_analysis(
+                            all_tools=tools,
+                            router_analysis=cached_fallback,
+                            mode="moderate",
+                            min_confidence=0.6,  # Lower threshold for cached results
+                            max_tools_aggressive=10,
+                            max_tools_moderate=20
+                        )
+                        reduction = original_count - len(tools)
+                        if reduction > 0:
+                            logger.info(f"Applied cached semantic filtering: {original_count} → {len(tools)} tools")
+                        fallback_applied = True
+
+                    # Strategy 2: Keyword-based filtering as intelligent fallback
+                    if not fallback_applied:
+                        keyword_filtered_tools = self._filter_tools_by_keywords(user_query, tools)
+                        if len(keyword_filtered_tools) < len(tools):
+                            logger.info(f"Applied keyword-based filtering: {len(tools)} → {len(keyword_filtered_tools)} tools")
+                            tools = keyword_filtered_tools
+                            fallback_applied = True
+
+                    # Strategy 3: Domain-specific filtering
+                    if not fallback_applied:
+                        domain_filtered_tools = self._filter_tools_by_domain(user_query, tools)
+                        if len(domain_filtered_tools) < len(tools):
+                            logger.info(f"Applied domain-based filtering: {len(tools)} → {len(domain_filtered_tools)} tools")
+                            tools = domain_filtered_tools
+                            fallback_applied = True
+
+                except Exception as fallback_error:
+                    logger.error(f"All fallback strategies failed: {fallback_error}")
+
+                # Final fallback: Continue with numeric filtering as safety net
+                logger.info("Using numeric filtering as final fallback")
+
+        # Apply quality tier filtering (safety net)
+        if quality_tier is not None:
+            tier_config = get_tier_config(quality_tier)
+            tool_config = tier_config.get("tool_filtering", {})
+            max_tools = tool_config.get("max_tools", self.state.max_tool_count)  # Default to maximum
+
+            # Apply max_tools limit
+            if len(tools) > max_tools:
+                tools = tools[:max_tools]
+
         return tools
 
-    async def execute_tool_call(self, tool_call: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_tool_call(self, tool_call: Dict[str, Any], request_id: Optional[str] = None, user_query: str = "") -> Dict[str, Any]:
         fn = tool_call.get("function") or {}
         name = fn.get("name")
         args_str = fn.get("arguments") or "{}"
+        
+        # Parse arguments for security check
+        try:
+            if isinstance(args_str, str):
+                args_dict = json.loads(args_str)
+            else:
+                args_dict = args_str
+        except json.JSONDecodeError:
+            args_dict = {}
+        
+        # Extract password if provided (for admin tools)
+        password = args_dict.pop("password", None) if isinstance(args_dict, dict) else None
+
+        # Phase 3: Structured tool validation (Pydantic-style)
+        if name and not str(name).startswith("mcp__"):
+            if not isinstance(args_dict, dict):
+                return {"ok": False, "error": "Tool arguments must be a JSON object"}
+            validation_error = self._validate_tool_args(name, args_dict)
+            if validation_error:
+                return {"ok": False, "error": validation_error}
+        
+        # Check security before execution (including MCP proxy tools)
+        from agent_runner.tools.system import check_tool_security
+        
+        # For MCP proxy tools, extract server name for security check
+        if name and str(name).startswith("mcp__"):
+            # MCP tools: check if server requires admin (future: server-level config)
+            # For now, allow MCP tools but log for audit
+            logger.debug(f"MCP proxy tool call: {name} (security check deferred to server level)")
+        else:
+            # Built-in tools: check security
+            security_check = await check_tool_security(self.state, name, password)
+            
+            if not security_check["allowed"]:
+                return {
+                    "ok": False,
+                    "error": f"Access Denied: {security_check['reason']}",
+                    "requires_admin": security_check.get("requires_admin", False),
+                    "hint": security_check.get("hint", "")
+                }
         
         if name and str(name).startswith("mcp__"):
             parts = str(name).split("__")
@@ -664,8 +1363,21 @@ class ToolExecutor:
                         metadata={"server": server, "tool": tool, "arguments": args},
                         request_id=request_id
                     )
-                    from agent_runner.tools.mcp import tool_mcp_proxy
-                    result = await tool_mcp_proxy(self.state, server, tool, args)
+                    
+                    # [PHASE 3] Use cache for deterministic tools
+                    tool_full_name = f"{server}_{tool}"
+                    
+                    async def execute_mcp_tool():
+                        from agent_runner.tools.mcp import tool_mcp_proxy
+                        return await tool_mcp_proxy(self.state, server, tool, args)
+                    
+                    result = await self.mcp_response_cache.get_or_execute(
+                        tool_name=tool_full_name,
+                        arguments=args,
+                        executor_func=execute_mcp_tool,
+                        ttl=300.0  # 5 minutes
+                    )
+                    
                     track_event(
                         event="mcp_proxy_ok",
                         message=f"MCP tool success: {server}::{tool}",
@@ -677,10 +1389,17 @@ class ToolExecutor:
                     )
                     
                     try:
-                        # [TODO] Record success once messages/query is available in executor
-                        pass
+                        # Record tool success for maître d' learning system
+                        success = result.get("ok", False)
+                        if success and user_query and len(user_query.strip()) > 3:
+                            from agent_runner.feedback import record_tool_success
+
+                            # Skip core servers that are always available
+                            if server not in ["project-memory", "location", "thinking", "system-control"]:
+                                await record_tool_success(user_query.strip(), server, state=self.state)
+                                logger.debug(f"Maître d' learned: '{user_query[:40]}...' → {server}")
                     except Exception as e:
-                        logger.warning(f"Failed to record learning: {e}")
+                        logger.debug(f"Failed to record maître d' learning: {e}")
 
                     return result
                 except Exception as e:
@@ -745,9 +1464,69 @@ class ToolExecutor:
             )
             return {"ok": False, "error": str(e)}
 
+    def _validate_tool_args(self, name: str, args: Dict[str, Any]) -> Optional[str]:
+        """
+        Lightweight validation of tool args against known JSON schema (native + MCP).
+        Returns an error string if validation fails, otherwise None.
+        """
+        schema = self._find_tool_schema(name)
+        if not schema:
+            return None  # No schema available -> skip validation
+
+        required = schema.get("required", [])
+        properties = schema.get("properties", {})
+
+        for req_field in required:
+            if req_field not in args:
+                return f"Missing required parameter: '{req_field}'"
+
+        # Best-effort type checks
+        for field, spec in properties.items():
+            if field in args and isinstance(spec, dict):
+                expected_type = spec.get("type")
+                if expected_type == "string" and not isinstance(args[field], str):
+                    return f"Parameter '{field}' must be a string"
+                if expected_type == "integer" and not isinstance(args[field], int):
+                    return f"Parameter '{field}' must be an integer"
+                if expected_type == "number" and not isinstance(args[field], (int, float)):
+                    return f"Parameter '{field}' must be a number"
+                if expected_type == "boolean" and not isinstance(args[field], bool):
+                    return f"Parameter '{field}' must be a boolean"
+
+        return None
+
+    def _find_tool_schema(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        Locate the JSON schema for a tool by name from native tool definitions or MCP cache.
+        """
+        # Native tool definitions
+        for t in self.tool_definitions:
+            fn = t.get("function", {})
+            if fn.get("name") == name:
+                return fn.get("parameters", {})
+
+        # MCP tool definitions
+        for server_name, tools in self.mcp_tool_cache.items():
+            # [FIX] Respect hidden tools flag
+            if self.hide_disabled_tools:
+                 server_cfg = self.state.mcp_servers.get(server_name, {})
+                 if not server_cfg.get("enabled", True):
+                     continue
+
+            for t in tools or []:
+                fn = t.get("function", {})
+                if fn.get("name") == name:
+                    return fn.get("parameters", {})
+
+        return None
+
     async def tool_knowledge_search(self, state: AgentState, query: str, kb_id: str = "default", filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Query the RAG server for deep content."""
-        rag_url = "http://127.0.0.1:5555/query"
+        from agent_runner.constants import DEFAULT_RAG_URL, DEFAULT_RAG_QUERY_PATH
+        
+        # Get RAG URL from config or use default
+        rag_base = state.config.get("rag", {}).get("url", DEFAULT_RAG_URL)
+        rag_url = f"{rag_base.rstrip('/')}{DEFAULT_RAG_QUERY_PATH}"
         try:
             async with httpx.AsyncClient() as client:
                 payload = {"query": query, "kb_id": kb_id, "limit": 7}
@@ -873,7 +1652,11 @@ class ToolExecutor:
 
     async def tool_ingest_knowledge(self, state: AgentState, text: str, kb_id: str = "default", source_name: str = "Chat") -> Dict[str, Any]:
         """Manually push text into RAG."""
-        rag_url = "http://127.0.0.1:5555/ingest"
+        from agent_runner.constants import DEFAULT_RAG_URL, DEFAULT_RAG_INGEST_PATH
+        
+        # Get RAG URL from config or use default
+        rag_base = state.config.get("rag", {}).get("url", DEFAULT_RAG_URL)
+        rag_url = f"{rag_base.rstrip('/')}{DEFAULT_RAG_INGEST_PATH}"
         try:
             payload = {
                 "content": text,
@@ -906,3 +1689,100 @@ class ToolExecutor:
             return await self.tool_ingest_knowledge(state, content, kb_id, source_name=os.path.basename(path))
         except Exception as e:
             return {"ok": False, "error": f"Ingestion failed: {str(e)}"}
+
+    async def _get_cached_router_analysis_for_similar_query(self, query: str):
+        """Get cached router analysis for similar queries as fallback."""
+        try:
+            # Simple similarity check - look for queries with same key terms
+            key_terms = set(query.lower().split()[:3])  # First 3 words
+
+            # This is a simplified implementation - in production, you'd want
+            # a more sophisticated similarity algorithm and proper cache
+            # For now, return None to trigger other fallbacks
+            return None
+
+        except Exception as e:
+            logger.debug(f"Cache similarity check failed: {e}")
+            return None
+
+    def _filter_tools_by_keywords(self, query: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filter tools based on keyword matching in query."""
+        query_lower = query.lower()
+        filtered_tools = []
+
+        # Define keyword mappings to tool categories
+        keyword_mappings = {
+            'file': ['filesystem', 'file'],
+            'directory': ['filesystem', 'file'],
+            'list': ['filesystem', 'file'],
+            'read': ['filesystem', 'file'],
+            'write': ['filesystem', 'file'],
+            'search': ['search', 'web_search'],
+            'find': ['search', 'filesystem'],
+            'weather': ['weather'],
+            'time': ['system', 'utility'],
+            'date': ['system', 'utility'],
+            'run': ['system', 'execution'],
+            'execute': ['system', 'execution'],
+            'code': ['code', 'programming'],
+            'python': ['code', 'programming'],
+            'memory': ['memory', 'knowledge'],
+            'remember': ['memory', 'knowledge'],
+            'recall': ['memory', 'knowledge']
+        }
+
+        # Find relevant categories
+        relevant_categories = set()
+        for keyword, categories in keyword_mappings.items():
+            if keyword in query_lower:
+                relevant_categories.update(categories)
+
+        # If no keywords found, return all tools (no filtering)
+        if not relevant_categories:
+            return tools
+
+        # Filter tools by category
+        for tool in tools:
+            tool_name = tool.get('function', {}).get('name', '').lower()
+            tool_desc = tool.get('function', {}).get('description', '').lower()
+
+            # Check if tool matches relevant categories
+            for category in relevant_categories:
+                if category in tool_name or category in tool_desc:
+                    filtered_tools.append(tool)
+                    break
+
+        # If no tools matched, return a reasonable subset (top 15)
+        if not filtered_tools:
+            filtered_tools = tools[:15]
+
+        return filtered_tools
+
+    def _filter_tools_by_domain(self, query: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filter tools based on query domain analysis."""
+        query_lower = query.lower()
+
+        # Domain detection
+        if any(word in query_lower for word in ['file', 'directory', 'read', 'write', 'list']):
+            # File system domain
+            domain_tools = [t for t in tools if 'file' in t.get('function', {}).get('name', '').lower()]
+            return domain_tools[:12] if domain_tools else tools[:12]
+
+        elif any(word in query_lower for word in ['search', 'find', 'look']):
+            # Search domain
+            domain_tools = [t for t in tools if 'search' in t.get('function', {}).get('name', '').lower()]
+            return domain_tools[:10] if domain_tools else tools[:10]
+
+        elif any(word in query_lower for word in ['weather', 'temperature', 'forecast']):
+            # Weather domain
+            domain_tools = [t for t in tools if 'weather' in t.get('function', {}).get('name', '').lower()]
+            return domain_tools[:5] if domain_tools else tools[:5]
+
+        elif any(word in query_lower for word in ['run', 'execute', 'code']):
+            # Execution domain
+            domain_tools = [t for t in tools if any(x in t.get('function', {}).get('name', '').lower()
+                                                   for x in ['run', 'execute', 'code'])]
+            return domain_tools[:8] if domain_tools else tools[:8]
+
+        # Default: return top tools
+        return tools[:15]

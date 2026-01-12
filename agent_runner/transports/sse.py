@@ -14,8 +14,9 @@ async def call_sse_mcp(state: AgentState, server: str, url: str, rpc_body: Dict[
     sse_headers["Accept"] = "text/event-stream, application/json"
     sse_headers["Cache-Control"] = "no-cache"
     
-    max_retries = 3
-    base_delay = 0.1
+    from agent_runner.constants import DEFAULT_RETRY_ATTEMPTS, SLEEP_BRIEF_BACKOFF_BASE
+    max_retries = DEFAULT_RETRY_ATTEMPTS
+    base_delay = SLEEP_BRIEF_BACKOFF_BASE
     
     for attempt in range(max_retries):
         try:

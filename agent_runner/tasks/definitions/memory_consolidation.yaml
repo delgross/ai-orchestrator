@@ -1,6 +1,6 @@
 name: memory_consolidation
 type: agent
-enabled: true
+enabled: false
 schedule: "*/15 minutes" # Every 15 minutes # Every 15 minutes
 priority: medium
 idle_only: true

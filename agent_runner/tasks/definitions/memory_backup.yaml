@@ -1,6 +1,6 @@
 name: memory_backup
 type: agent
-enabled: true
+enabled: false
 schedule: "*/1 hours" # Every 1 hour
 priority: low
 idle_only: true

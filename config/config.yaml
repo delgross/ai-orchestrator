@@ -6,17 +6,17 @@ agent_runner:
       module: agent_runner.maintenance_tasks
       function: graph_optimization_task
       schedule: '86400'
-      enabled: true
+      enabled: false
       description: Nightly Graph Gardening (Llama 3.3)
     stale_pruner:
       type: module
       module: agent_runner.maintenance_tasks
       function: stale_memory_pruner_task
       interval: 604800
-      enabled: true
+      enabled: false
       description: Weekly Fact Pruning (Grok)
   fallback:
-    model: ollama:mistral:latest
+    model: ollama:llama3.1:latest
 mcp_servers: {}
 model_intelligence:
   agent:mcp:
@@ -28,21 +28,7 @@ model_intelligence:
     - Long-term Memory Access
     weaknesses:
     - Operational overhead
-  ollama:llama3.3:70b-instruct-q8_0:
-    preferred_for:
-    - architect
-    - mission_controller
-    skills:
-    - Super-Intelligence
-    - Infinite Context Management
-  ollama:llama3.1:latest:
-    preferred_for:
-    - interface_designer
-    - mechanic
-    skills:
-    - Fast Response
-    - Clean Summarization
-  ollama:llama3.3:70b-instruct-q8_0:
+  ollama:llama3.3:70b:
     preferred_for:
     - automator
     - pollinator
@@ -50,6 +36,13 @@ model_intelligence:
     skills:
     - Omni-modal Intelligence
     - Perfect Tool Following
+  ollama:llama3.1:latest:
+    preferred_for:
+    - interface_designer
+    - mechanic
+    skills:
+    - Fast Response
+    - Clean Summarization
   openai:o1:
     preferred_for:
     - architect
@@ -64,13 +57,13 @@ personas:
   architect:
     mission: Expert in project structure, modular design, and high-level coding standards.
     name: The Architect
-    preferred_model: ollama:llama3.3:70b-instruct-q8_0
+    preferred_model: ollama:llama3.3:70b
     tools:
     - list_dir
     - read_text
     - write_text
     - path_info
-    - mcp__thinking__sequentialthinking
+    - sequential_thinking
     - run_command
     - trigger_task
     - report_missing_tool
@@ -93,7 +86,8 @@ personas:
     - run_command
     - list_dir
     - read_text
-    - mcp__project_memory__check_health
+    - get_memory_status
+    - check_system_health
     - trigger_task
     - report_missing_tool
 providers:
@@ -115,7 +109,7 @@ router:
       max_read_bytes: 50000000
       max_tool_steps: 20
     url: http://127.0.0.1:5460
-  auth_token: 9sYBjBLjAHKG8g8ZzzsUeBOvtzgQFHmX7oIeygdpzic
+  auth_token: antigravity_router_token_2025
   base_url: http://127.0.0.1:5455
   host: 127.0.0.1
   http_timeout: 300
@@ -135,24 +129,23 @@ router:
         temperature: 0.7
         top_k: 20
         top_p: 0.8
-    num_ctx: 32768
+    num_ctx: 8192
     router:
       enabled: true
-      model: ollama:llama3.3:70b-instruct-q8_0
+      model: ollama:qwen3:30b
       tool_filtering:
         enabled: true
-        min_confidence: 0.8
-        mode: moderate
+        min_confidence: 0.95
+        mode: core_only
+        max_tools: 10
   port: 5455
   preferred_models:
   - xai:grok-3
-  - ollama:llama3.3:70b-instruct-q8_0
+  - ollama:llama3.3:70b
   - ollama:llama3.1:latest
   - openai:gpt-4o-mini
   - agent:mcp
-
   - ollama:qwq:latest
-  - ollama:mistral:latest
   - gemini-1.5-pro
   - gemini-exp-1206
   - grok-4-1-fast-reasoning
@@ -164,26 +157,23 @@ system:
   alert_file_path: ~/Desktop/Antigravity_Alerts.md
   dev_mode: true
   internet_check_interval: 5
-  location:
-    city: Newark
-    country: United States
-    enabled: true
-    lat: 40.0732
-    lon: -82.4017
-    region: Ohio
-    timezone: America/New_York
   log_level: INFO
   persistence_dir: ~/ai/agent_data
-  agent_model: xai:grok-3
-  router_model: ollama:mistral:latest
-  vision_model: ollama:llama3.2-vision
-  task_model: xai:grok-3
-  summarization_model: ollama:mistral:latest
-  mcp_model: xai:grok-3
-  finalizer_model: ollama:mistral:latest
-  critic_model: ollama:llama3.3:70b-instruct-q8_0
-  healer_model: ollama:llama3.3:70b-instruct-q8_0
-  fallback_model: ollama:mistral:latest
-  intent_model: ollama:mistral:latest
-  pruner_model: ollama:mistral:latest
+  agent_model: ollama:llama3.3:70b
+  router_model: ollama:llama3.1:latest
+  vision_model: ollama:llama3.2-vision:latest
+  task_model: ollama:llama3.1:latest
+  summarization_model: ollama:llama3.1:latest
+  mcp_model: ollama:llama3.3:70b
+  finalizer_model: ollama:llama3.1:latest
+  critic_model: ollama:llama3.1:latest
+  healer_model: ollama:qwq:latest
+  fallback_model: ollama:llama3.1:latest
+  intent_model: ollama:llama3.1:latest
+  pruner_model: ollama:llama3.1:latest
   embedding_model: ollama:mxbai-embed-large:latest
+  query_refinement_model: ollama:llama3.2
+  finalizer_enabled: true
+  router_enabled: true
+  fallback_enabled: true
+# force sync 2 (Pivoting to 8B for Maître d')
