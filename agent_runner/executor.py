@@ -31,12 +31,10 @@ from agent_runner.tools import latency as latency_tools
 from agent_runner.tools import tool_evaluation as tool_evaluation_tools
 from agent_runner.tools import thinking as thinking_tools
 from agent_runner.tools import advice as advice_tools
-from agent_runner.fast_selector import FastToolSelector
 
 from common.unified_tracking import track_event, EventSeverity, EventCategory
 # [PHASE 3] Performance Optimization
 from common.caching import MultiLayerCache, MCPToolCache, CacheStrategy
-from common.constants import TIMEOUT_MCP_DISCOVERY, TIMEOUT_MCP_DISCOVERY_RETRY, TIMEOUT_MCP_CORE_DISCOVERY
 
 logger = logging.getLogger("agent_runner.executor")
 
@@ -51,24 +49,12 @@ class ToolExecutor:
         self.tool_impls = self._init_tool_impls()
 
         # [CONTEXT-DIET] Store definitions by category for dynamic loading
+        # [CONTEXT-DIET] Store definitions by category for dynamic loading
         self.tool_categories = self._init_tool_categories()
         
-        # [FIX] Filter disabled tools if configured
-        self.hide_disabled_tools = self.state.config.get("agent_runner", {}).get("hide_disabled_tools", True)
-
-        # [FIX] Valid Category Aliases for Context Diet
-        # Ensure 'control' maps to 'system' so tools are found when requested
-        if "control" not in self.tool_categories and "system" in self.tool_categories:
-            self.tool_categories["control"] = self.tool_categories["system"]
+        # [AUTODISCOVERY] Find and recover orphans (tools in Registry but not in Menu)
+        self._auto_discover_orphans()
         
-        # Helper to check if tool comes from disabled server
-        def is_tool_enabled(tool_def):
-             # Native tools are always enabled
-             # MCP tools might be disabled
-             # But here we are initing native tools.
-             # MCP tools are loaded dynamically via _sync_mcp_tools usually.
-             return True
-
         # Flat list for legacy support / fallback
         self.tool_definitions = [t for cats in self.tool_categories.values() for t in cats]
         
@@ -79,6 +65,11 @@ class ToolExecutor:
             strategy=CacheStrategy.LRU
         )
         self.mcp_response_cache = MCPToolCache(underlying_cache)
+
+        # [VECTOR-SEARCH] Trigger background indexing of tools
+        if hasattr(self.state, "vector_store"):
+            asyncio.create_task(self.state.vector_store.index_tools(self.tool_definitions))
+
     
     def invalidate_mcp_cache(self, server_name: Optional[str] = None):
         """
@@ -129,6 +120,10 @@ class ToolExecutor:
             "remove_memory_from_file": memory_edit_tools.tool_remove_memory_from_file,
             "check_system_health": system_tools.tool_check_system_health,
             "import_mcp_config": mcp_tools.tool_import_mcp_config,
+            "add_mcp_server": mcp_tools.tool_add_mcp_server,
+            "install_mcp_package": mcp_tools.tool_install_mcp_package,
+            "investigate_system_performance": latency_tools.tool_investigate_system_performance,
+            "run_latency_tests": latency_tools.tool_run_latency_tests,
             # Phase 52: Node Tools
             "run_node": node_tools.run_node,
             "run_npm": node_tools.run_npm,
@@ -234,6 +229,10 @@ class ToolExecutor:
             "start_thinking_branch": thinking_tools.tool_start_thinking_branch,
             "get_thinking_progress": thinking_tools.tool_get_thinking_progress,
             "analyze_thinking_efficiency": thinking_tools.tool_analyze_thinking_efficiency,
+             "get_thinking_progress": thinking_tools.tool_get_thinking_progress,
+            "analyze_thinking_efficiency": thinking_tools.tool_analyze_thinking_efficiency,
+            # Graph Tools (Stub)
+            "get_graph_snapshot": self.tool_get_graph_snapshot,
         }
     
     def _init_tool_categories(self) -> Dict[str, List[Dict[str, Any]]]:
@@ -274,6 +273,22 @@ class ToolExecutor:
                                 "target_tz": {"type": "string"}
                             },
                              "required": ["time_str", "target_tz"]
+                        }
+                    }
+                }
+            ],
+            "graph": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_graph_snapshot",
+                        "description": "Get a snapshot of the knowledge graph (nodes/edges).",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "limit": {"type": "integer", "description": "Max nodes (default 100)"},
+                                "format": {"type": "string", "enum": ["json", "mermaid"], "default": "json"}
+                            }
                         }
                     }
                 }
@@ -590,6 +605,71 @@ class ToolExecutor:
                         "parameters": {"type": "object", "properties": {}}
                     }
                 },
+                # [SYSTEM UNIFICATION] - Bringing Orphans Home
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_web",
+                        "description": "Search the web for real-time information.",
+                         "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string"},
+                                "domain": {"type": "string", "description": "Optional domain filter"}
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "consult_advice",
+                        "description": "Consult the Advice Subsystem/Critic.",
+                        "parameters": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                         "name": "run_latency_tests",
+                         "description": "Run system latency diagnostics.",
+                         "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                         "name": "get_circuit_breaker_status",
+                         "description": "Check circuit breaker health.",
+                         "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+                {
+                     "type": "function",
+                     "function": {
+                         "name": "ingest_knowledge",
+                         "description": "Ingest raw text/markdown into Sovereign Memory.",
+                         "parameters": {
+                             "type": "object", 
+                             "properties": {
+                                 "content": {"type": "string"},
+                                 "source": {"type": "string"},
+                                 "category": {"type": "string"}
+                             },
+                             "required": ["content", "source"]
+                         }
+                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_mcp_server_status",
+                        "description": "Get status of all MCP servers (enabled/disabled, tool counts). Use this to debug missing tools.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                },
+
                 {
                     "type": "function",
                     "function": {
@@ -640,6 +720,42 @@ class ToolExecutor:
                 }
             ]
         }
+        
+    def _auto_discover_orphans(self):
+        """
+        Identify tools present in `_init_tool_impls` but missing from `_init_tool_categories`.
+        Automatically register them in an 'auto_discovered' category to fail-safe against invisibility.
+        """
+        registered = set(self.tool_impls.keys())
+        categorized = set()
+        
+        for cat_tools in self.tool_categories.values():
+            for t in cat_tools:
+                categorized.add(t["function"]["name"])
+                
+        orphans = registered - categorized
+        
+        if not orphans:
+            return
+            
+        logger.warning(f"⚠️ [AUTODISCOVERY] Found {len(orphans)} orphaned tools! Auto-registering them to 'auto_discovered'.")
+        
+        auto_discovered = []
+        for name in orphans:
+            func = self.tool_impls[name]
+            doc = (func.__doc__ or "No description provided.").strip().split("\n")[0]
+            
+            auto_discovered.append({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": f"[AUTO] {doc}",
+                    "parameters": {"type": "object", "properties": {}} # Default to empty schema if unknown
+                }
+            })
+            logger.info(f"  + Adopted Orphan: {name}")
+            
+        self.tool_categories["auto_discovered"] = auto_discovered
 
     async def _disable_failed_server(self, server_name: str, reason: str):
         """Helper to disable a failing server and log the reason.
@@ -709,14 +825,30 @@ class ToolExecutor:
         if server_name in self.mcp_tool_cache:
             effective_disable_on_failure = False
 
+        from agent_runner.tools.mcp import perform_pulse_check, PulseCheckFailed, tool_mcp_proxy # Added imports
+
+        # [DARWINIAN DISCOVERY] Pulse Check
+        # Run strict startup check to ensure server is actually viable (has API keys, etc)
+        # We only do this on the PRIMARY attempt (attempt 1) to avoid spamming process spawns on retry
+        if attempt == 1 and cfg.get("enabled", True):
+            try:
+                await perform_pulse_check(self.state, server_name, cfg)
+            except PulseCheckFailed as e:
+                logger.error(f"[Darwinian] Server '{server_name}' FAILED pulse check: {e}")
+                if disable_on_failure:
+                    await self._disable_failed_server(server_name, f"Darwinian Pulse Check Failed: {e}")
+                    return False
+                else:
+                    logger.warning(f"[{server_name}] Pulse check failed but disable_on_failure=False. Proceeding with caution.")
+
 
         
         # [FIX] Intelligent timeout: longer for first attempt, shorter for retries
         # First attempt gets 45s (for locally heavy setups), retries get 30s
-        timeout = TIMEOUT_MCP_DISCOVERY if attempt == 1 else TIMEOUT_MCP_DISCOVERY_RETRY
+        timeout = 45.0 if attempt == 1 else 30.0
         # Core services get extra time
         if is_core and attempt == 1:
-            timeout = TIMEOUT_MCP_CORE_DISCOVERY
+            timeout = 60.0
         
         # [FIX] Pre-flight validation
         if attempt == 1:
@@ -761,7 +893,20 @@ class ToolExecutor:
                         }
                     })
                 self.mcp_tool_cache[server_name] = defs
+
                 logger.info(f"✅ Discovered {len(defs)} tools from MCP server '{server_name}'")
+                
+                # [FIX] Explicitly mark healthy so execution doesn't fail later
+                current_failures = self.state.mcp_server_health.get(server_name, {}).get("consecutive_failures", 0)
+                self.state.mcp_server_health[server_name] = {
+                    "healthy": True,
+                    "error": None,
+                    "last_check": time.time(),
+                    "last_success": time.time(),
+                    "last_failure": self.state.mcp_server_health.get(server_name, {}).get("last_failure"),
+                    "consecutive_failures": 0 
+                }
+                
                 return True
             else:
                 error_msg = res.get("error", "Unknown error")
@@ -883,14 +1028,16 @@ class ToolExecutor:
                 logger.info(f"MCP Discovery complete: {successful}/{len(tasks)} servers succeeded")
             
             menu_lines = []
+            
             from agent_runner.constants import CORE_MCP_SERVERS
             core_servers = CORE_MCP_SERVERS
             
             for srv, tools in self.mcp_tool_cache.items():
                 if not tools:
                     continue
-                if srv in core_servers:
-                    continue
+                # [FIX] Include ALL servers (including Core) in the menu
+                # if srv in core_servers:
+                #    continue
                 
                 # Improve Menu: Include first tool description for context
                 desc = ""
@@ -927,17 +1074,6 @@ class ToolExecutor:
             except Exception as e:
                 logger.warning(f"Failed to persist tool registry: {e}")
 
-            # [FAST-SELECTOR] Sync tools to vector DB for fast retrieval
-            try:
-                if self.tool_definitions and hasattr(self.state, "memory"):
-                     logger.info("Syncing tools to FastSelector (Vector DB)...")
-                     # Fire and forget / Background task? 
-                     # For now await to ensure consistency on first run. 
-                     # FastSelector checks existence so it's cheap on restarts.
-                     await FastToolSelector.sync_tools(self.tool_definitions, self.state.memory)
-            except Exception as e:
-                logger.warning(f"FastSelector Sync Failed: {e}")
-
         finally:
             # Release discovery lock
             if hasattr(self.state, "mcp_discovery_lock") and self.state.mcp_discovery_lock.locked():
@@ -949,10 +1085,7 @@ class ToolExecutor:
             from agent_runner.router_analyzer import analyze_query
             import httpx
 
-            headers = {}
-            if self.state.router_auth_token:
-                headers["Authorization"] = f"Bearer {self.state.router_auth_token}"
-            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), headers=headers) as http_client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as http_client:
                 return await analyze_query(
                     query=user_query,
                     messages=messages,
@@ -1078,26 +1211,55 @@ class ToolExecutor:
                 if category in self.tool_categories and category not in ["core", "thinking", "exploration", "admin", "memory"]:
                     tools.extend(self.tool_categories.get(category, []))
                     logger.debug(f"Loaded capability-detected category: {category}")
+        
+        # [FIX] Deduplicate tools by name to prevent Context Window pollution
+        unique_tools = {}
+        for t in tools:
+            t_name = t.get("function", {}).get("name")
+            if t_name and t_name not in unique_tools:
+                unique_tools[t_name] = t
+        tools = list(unique_tools.values())
+
+        
+        # [FEATURE: SYSTEM AWARENESS] Inject Context Tags
+        # We classify tools by origin (Local vs Remote) to help Agent reasoning.
+        def _tag_tools(tool_list: List[Dict[str, Any]], tag: str) -> List[Dict[str, Any]]:
+            tagged = []
+            for t in tool_list:
+                # Deep copy to avoid mutating cache
+                if not t: continue
+                new_t = t.copy()
+                if "function" in new_t:
+                    new_t["function"] = new_t["function"].copy()
+                    desc = new_t["function"].get("description", "")
+                    # Prevent double tagging
+                    if not desc.startswith("["):
+                        new_t["function"]["description"] = f"{tag} {desc}"
+                tagged.append(new_t)
+            return tagged
 
         # Legacy Maître d' based loading (fallback/compatibility)
         if "filesystem" in target_servers:
-            tools.extend(self.tool_categories.get("filesystem", []))
-            tools.extend(self.tool_categories.get("cleanup", [])) # Cleanup usually goes with filesystem
+            tools.extend(_tag_tools(self.tool_categories.get("filesystem", []), "[LOCAL SYSTEM]"))
+            tools.extend(_tag_tools(self.tool_categories.get("cleanup", []), "[LOCAL SYSTEM]"))
 
         if "system" in target_servers or "admin" in target_servers:
-             tools.extend(self.tool_categories.get("system", []))
-             tools.extend(self.tool_categories.get("admin", []))
+             tools.extend(_tag_tools(self.tool_categories.get("system", []), "[LOCAL SYSTEM]"))
+             tools.extend(_tag_tools(self.tool_categories.get("admin", []), "[LOCAL SYSTEM]"))
+             
+             # Also add Graph tools if system/admin is requested, or if "graph" is explicit
+             if "graph" in target_servers or "system" in target_servers:
+                 tools.extend(_tag_tools(self.tool_categories.get("graph", []), "[VISUALIZATION]"))
 
-        if "memory" in target_servers or "project-memory" in target_servers: # 'project-memory' is the MCP name, 'memory' is the category
-             tools.extend(self.tool_categories.get("memory", []))
+        if "memory" in target_servers or "project-memory" in target_servers:
+             # Memory is internal but safe, maybe [MEMORY] tag? For now leave generic or [INTERNAL]
+             tools.extend(_tag_tools(self.tool_categories.get("memory", []), "[INTERNAL MEMORY]"))
                 
         for server_name, server_tools in self.mcp_tool_cache.items():
             server_cfg = self.state.mcp_servers.get(server_name, {})
             
             # [FIX] Filter out disabled servers - don't expose their tools to LLM
-            # (If hide_disabled_tools is True, we skip. If False, we might show them but they'll fail)
-            if self.hide_disabled_tools and not server_cfg.get("enabled", True):
-                logger.debug(f"Skipping disabled server tools: {server_name}")
+            if not server_cfg.get("enabled", True):
                 continue  # Skip disabled servers
             
             if server_cfg.get("requires_internet") and not self.state.internet_available:
@@ -1106,13 +1268,26 @@ class ToolExecutor:
             from agent_runner.constants import CORE_MCP_SERVERS
             is_core = server_name in CORE_MCP_SERVERS
             if is_core or (server_name in target_servers):
-                for t in server_tools:
+                # MCP Tools are harder to classify. Core ones like 'fetch' are REMOTE.
+                # Project-specific ones might be Local.
+                # For now, we default to [MCP] to distinguish them.
+                # If specific server is known, we could tag better.
+                tag = "[MCP]"
+                if server_name in ["fetch", "tavily-search", "github"]:
+                    tag = "[REMOTE]"
+                elif server_name in ["postgres", "filesystem-mcp"]: # hypothetical
+                    tag = "[LOCAL SYSTEM]"
+                
+                # Wrap and Tag
+                tagged_mcp = _tag_tools(server_tools, tag)
+                
+                for t in tagged_mcp:
                     orig_func = t.get("function", {})
                     wrapped = {
                         "type": "function",
                         "function": {
                             "name": f"mcp__{server_name}__{orig_func.get('name')}",
-                            "description": orig_func.get("description"),
+                            "description": orig_func.get("description"), # Already tagged by helper
                             "parameters": orig_func.get("parameters")
                         }
                     }
@@ -1154,42 +1329,10 @@ class ToolExecutor:
 
         # SEMANTIC TOOL FILTERING: Use Router Analyzer for intelligent selection
         logger.info(f"🔍 ROUTER ANALYZER: Checking conditions - messages: {len(messages) if messages else 0}, quality_tier: {quality_tier}, MAXIMUM: {QualityTier.MAXIMUM}")
-        
-        # [LATENCY OPTIMIZATION] Adaptive Logic: Skip Router for Smart Models
-        is_smart_model = self.state.is_high_tier_model(self.state.agent_model)
-        if is_smart_model:
-            logger.info(f"⚡ Adaptive Logic: Skipping Router Analyzer for High-Tier Model ({self.state.agent_model})")
-        
-
-        
-        # [FAST-SELECTOR] Enabled for all tiers (except critical overrides) because it's <50ms.
-        # This saves tokens and context for the 70B model too.
-        elif messages and quality_tier != QualityTier.MAXIMUM:  # Keep tier check if desired, or remove to standardize. 
-            # User request: "Preserve it but reduce latency".
-            # We'll allow it for now.
+        if False and messages and quality_tier != QualityTier.MAXIMUM:  # [TUNING] Disabled for Latency (Formula 1 Mode)
             try:
-                user_query = messages[-1].get("content", "")
-                if user_query:
-                    # Bypassed slow router_analyzer. Using FastToolSelector.
-                    logger.info(f"⚡ FastSelector: Filtering {len(tools)} tools for query '{user_query[:30]}...'")
-                    
-                    filtered_tools = await FastToolSelector.select_tools(
-                        user_query, 
-                        tools, 
-                        self.state.memory, 
-                        limit=15 # Balanced limit
-                    )
-                    
-                    original_count = len(tools)
-                    tools = filtered_tools
-                    logger.info(f"⚡ FastSelector: Reduced {original_count} -> {len(tools)} tools")
-                    
-            except Exception as e:
-                logger.warning(f"FastSelector Filtering Failed: {e}")
-                
-        # Legacy Router Analyzer Block (Commented Out / Removed)
-        # elif False and messages ...
-
+                logger.info(f"🔍 ROUTER ANALYZER: Starting semantic tool filtering for {len(tools)} tools")
+                from agent_runner.router_analyzer import analyze_query, filter_tools_by_router_analysis
 
                 # Get semantic analysis of the query
                 user_query = messages[-1].get("content", "") if messages else ""
@@ -1203,33 +1346,26 @@ class ToolExecutor:
 
                         # Create HTTP client for router analyzer
                         import httpx
-                        headers = {}
-                        if self.state.router_auth_token:
-                            headers["Authorization"] = f"Bearer {self.state.router_auth_token}"
-                        
-                        # [LATENCY-FIX] Temporarily bypass Router Analysis to fix 4s latency
-                        # async with httpx.AsyncClient(timeout=httpx.Timeout(25.0), headers=headers) as http_client:
-                        #     router_analysis = await analyze_query(
-                        #         query=user_query,
-                        #         messages=messages,
-                        #         gateway_base=self.state.gateway_base,
-                        #         http_client=http_client,
-                        #         available_tools=tools,
-                        #         available_models=getattr(self.state, 'available_models', [])
-                        #     )
-                        router_analysis = None
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as http_client:
+                            router_analysis = await analyze_query(
+                                query=user_query,
+                                messages=messages,
+                                gateway_base=self.state.gateway_base,
+                                http_client=http_client,
+                                available_tools=tools,
+                                available_models=getattr(self.state, 'available_models', [])
+                            )
 
                     # Apply intelligent filtering based on semantic analysis
                     original_count = len(tools)
-                    if router_analysis:
-                        tools = filter_tools_by_router_analysis(
-                            all_tools=tools,
-                            router_analysis=router_analysis,
-                            mode="moderate",  # Balanced approach
-                            min_confidence=0.7,
-                            max_tools_aggressive=8,   # Very selective when high confidence
-                            max_tools_moderate=15     # Reasonable limit when category-based
-                        )
+                    tools = filter_tools_by_router_analysis(
+                        all_tools=tools,
+                        router_analysis=router_analysis,
+                        mode="moderate",  # Balanced approach
+                        min_confidence=0.7,
+                        max_tools_aggressive=8,   # Very selective when high confidence
+                        max_tools_moderate=15     # Reasonable limit when category-based
+                    )
 
                     reduction = original_count - len(tools)
                     if reduction > 0:
@@ -1418,6 +1554,45 @@ class ToolExecutor:
                     return {"ok": False, "error": str(e)}
 
         if name not in self.tool_impls:
+            # [REGISTRY LOOKUP] Fallback: Check if this is a known MCP tool (Clean Name Routing)
+            # This enables Vector Search results (which return clean names) to be executed correctly.
+            found_server = None
+            
+            # 1. Fast Lookup (Optimization would be a separate dict, but iteration is fine for <1000 tools)
+            for server_name, tools in self.mcp_tool_cache.items():
+                for t in tools:
+                    if t["function"]["name"] == name:
+                        found_server = server_name
+                        break
+                if found_server:
+                    break
+            
+            if found_server:
+                # ROUTING SUCCESS: We found the server for this tool.
+                # Now we recursively call ourselves (or specific proxy logic) with the resolved route.
+                # But since we are already inside execute_tool_call, let's just use the logic above.
+                # Construct a "Prefixed" name to trigger the MCP Logic Block? 
+                # OR just call tool_mcp_proxy directly here. Calling proxy is cleaner.
+                
+                logger.info(f"🔄 Registry Routing: '{name}' -> '{found_server}'")
+                
+                try:
+                    # Parse args if likely string
+                    parsed_args = {}
+                    if isinstance(args_str, str):
+                        try:
+                            parsed_args = json.loads(args_str)
+                        except:
+                            parsed_args = {}
+                    elif isinstance(args_str, dict):
+                        parsed_args = args_str
+
+                    from agent_runner.tools.mcp import tool_mcp_proxy
+                    return await tool_mcp_proxy(self.state, found_server, name, parsed_args)
+                except Exception as e:
+                    return {"ok": False, "error": f"Routed Execution Failed: {e}"}
+
+            # If still not found, then it effectively doesn't exist.
             return {"ok": False, "error": f"Unknown tool '{name}'"}
             
         try:
@@ -1506,13 +1681,7 @@ class ToolExecutor:
                 return fn.get("parameters", {})
 
         # MCP tool definitions
-        for server_name, tools in self.mcp_tool_cache.items():
-            # [FIX] Respect hidden tools flag
-            if self.hide_disabled_tools:
-                 server_cfg = self.state.mcp_servers.get(server_name, {})
-                 if not server_cfg.get("enabled", True):
-                     continue
-
+        for tools in self.mcp_tool_cache.values():
             for t in tools or []:
                 fn = t.get("function", {})
                 if fn.get("name") == name:
@@ -1786,3 +1955,14 @@ class ToolExecutor:
 
         # Default: return top tools
         return tools[:15]
+
+    async def tool_get_graph_snapshot(self, limit: int = 100, format: str = "json") -> Dict[str, Any]:
+        """Tool wrapper for GraphService.get_graph_snapshot."""
+        if not hasattr(self.state, "graph"):
+            return {"error": "GraphService not initialized"}
+            
+        if format == "mermaid":
+            diagram = await self.state.graph.render_mermaid()
+            return {"diagram": diagram}
+            
+        return await self.state.graph.get_graph_snapshot(limit=limit)

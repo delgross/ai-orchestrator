@@ -31,20 +31,12 @@ def require_auth(request: Request) -> None:
     auth = request.headers.get("authorization")
     if not auth or not auth.lower().startswith("bearer "):
         logger.warning(f"Auth failed: missing bearer token. Header: '{auth[:50] if auth else 'None'}'")
-        raise HTTPException(status_code=401, detail="missing bearer token")
+        raise HTTPException(status_code=401, detail={"error": "Missing or invalid authorization header"})
 
     token = auth.split(" ", 1)[1].strip()
     
-    # [DEBUG] Log token details for troubleshooting
     if token != auth_token:
-        logger.warning(f"Auth failed: Token mismatch!")
-        logger.warning(f"  Expected (len={len(auth_token)}): '{auth_token}'")
-        logger.warning(f"  Received (len={len(token)}): '{token}'")
-        logger.warning(f"  Match: {token == auth_token}")
-        # Show hex comparison for first/last chars
-        if auth_token and token:
-            logger.warning(f"  First chars: expected={ord(auth_token[0])}, got={ord(token[0])}")
-            logger.warning(f"  Last chars: expected={ord(auth_token[-1])}, got={ord(token[-1])}")
+        logger.warning(f"Auth failed: Token mismatch (Expected len={len(auth_token)}, Got len={len(token)})")
         raise HTTPException(status_code=403, detail="invalid token")
 
 class RequestIDMiddleware(BaseHTTPMiddleware):

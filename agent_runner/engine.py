@@ -14,12 +14,14 @@ from agent_runner.executor import ToolExecutor
 from common.notifications import notify_critical
 from common.budget import get_budget_tracker
 from common.constants import (
-    OBJ_MODEL, ROLE_SYSTEM, ROLE_TOOL, 
+    OBJ_MODEL, ROLE_SYSTEM, ROLE_TOOL,
     DEFAULT_FALLBACK_MODEL, DEFAULT_CONTEXT_PRUNE_LIMIT
 )
 from agent_runner.prompts import get_healer_prompt, get_base_system_instructions, get_service_alerts
 from agent_runner.memory_server import MemoryServer
 from agent_runner.nexus import Nexus
+from agent_runner.hallucination_detector import HallucinationDetector, DetectorConfig
+from agent_runner.knowledge_base import KnowledgeBase
 import math
 
 logger = logging.getLogger("agent_runner")
@@ -30,6 +32,20 @@ class AgentEngine:
         self.executor = ToolExecutor(state)
         self.memory = MemoryServer(state)
         self.nexus = Nexus(state, self)
+
+        # Initialize hallucination detection system
+        detector_config = DetectorConfig(
+            enabled=self.state.hallucination_detection_enabled,
+            fact_check_enabled=True,
+            math_verification_enabled=True,
+            temporal_check_enabled=True,
+            learning_enabled=True,
+            feedback_collection_enabled=True
+        )
+        logger.info(f"Initializing hallucination detector with config: enabled={detector_config.enabled}")
+        self.hallucination_detector = HallucinationDetector(state, detector_config)
+        self.knowledge_base = KnowledgeBase(state)
+        logger.info("Hallucination detection system initialized successfully")
 
     def _resolve_model_endpoint(self, model: str) -> Tuple[str, str]:
         """
@@ -175,8 +191,26 @@ class AgentEngine:
             payload.update(kwargs)
 
             # [Optimization] Inject Context Window Limit
-            # Default to 32768 to match Resident Model Policy (Formula 1)
-            target_ctx = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
+            # Smart Context Sizing: Allocate VRAM where it matters (Brain) and save it elsewhere.
+            # Smart Context Sizing: Allocate VRAM where it matters (Brain) and save it elsewhere.
+            CONTEXT_WINDOW_MAP = {
+                "llama3.3:70b": 32768,      # Brain (Deep Context)
+                "ollama:llama3.3:70b": 32768, # Brain (Deep Context - Prefix Variant)
+                "qwen2.5:32b": 32768,        # 32k Unified
+                "ollama:qwen2.5:32b": 32768,
+                "llama3.1:latest": 32768,    # 32k Unified
+                "ollama:llama3.1:latest": 32768,
+                "llama3.2:latest": 32768,    # 32k Unified
+                "ollama:llama3.2:latest": 32768,
+                "llama3.2-vision:latest": 32768, # 32k Unified
+                "ollama:llama3.2-vision:latest": 32768,
+                "qwen2.5:7b-instruct": 32768, # 32k Unified
+                "ollama:qwen2.5:7b-instruct": 32768,
+            }
+
+            # Determine target context: Use Map -> Fallback to Env -> Default 32k
+            target_ctx = CONTEXT_WINDOW_MAP.get(final_model, int(os.getenv("OLLAMA_NUM_CTX", "32768")))
+
             if "options" not in payload:
                 payload["options"] = {"num_ctx": target_ctx}
             elif "num_ctx" not in payload["options"]:
@@ -187,7 +221,7 @@ class AgentEngine:
                 # Basic string length heuristic is sufficient for logging
                 est_msg_tok = sum(len(str(m)) for m in messages) // 4
                 est_tool_tok = sum(len(str(t)) for t in (tools or self.executor.tool_definitions)) // 4
-                logger.info(f"[COST-AUDIT] Model: {attempt_model} | Msgs: ~{est_msg_tok} toks | Tools: ~{est_tool_tok} toks | Total Est: ~{est_msg_tok + est_tool_tok}")
+                logger.info(f"[COST-AUDIT] Model: {attempt_model} | Context Limit: {target_ctx} | Est Load: ~{est_msg_tok + est_tool_tok} toks")
             except Exception as e:
                 logger.debug(f"Cost audit logging failed: {e}")
             
@@ -265,6 +299,8 @@ class AgentEngine:
             
         memory_facts = ""
         memory_status_msg = ""
+        arch_ctx = ""
+        
         if user_messages:
             try:
                 # Use LLM to generate a context-aware search query
@@ -280,7 +316,6 @@ class AgentEngine:
                 from agent_runner.tools.mcp import tool_mcp_proxy
                 
                 # 1. Fetch Architecture (Fast, cached ideally, but for now direct)
-                arch_ctx = ""
                 try:
                     t0_arch = time.time()
                     arch_res = await tool_mcp_proxy(self.state, "project-memory", "query_facts", {"kb_id": "system_architecture", "limit": 50}, bypass_circuit_breaker=True)
@@ -401,39 +436,92 @@ class AgentEngine:
                 logger.warning(f"Failed to list uploads for prompt: {e}")
 
         # Location Context
-        location_str = "Unknown Location"
+        location_str = "Granville, OH"
         if self.state.location and self.state.location.get("city") != "Unknown":
             loc = self.state.location
             # e.g. "New York, New York, US (Lat: 40.7, Lon: -74.0)"
             location_str = f"{loc.get('city')}, {loc.get('region')}, {loc.get('country')}"
             
+        # [CUSTOM PROMPT SYSTEM]
+        # Check if a custom template is defined in sovereign.yaml
+        custom_template = self.state.config.get("prompts", {}).get("system_template")
+        
+        # --- USER-DEFINED SYSTEM PROMPT (SINGLE SOURCE OF TRUTH) ---
+        import datetime
+        current_time_str = time.strftime("%Y-%m-%d %H:%M")
+        try:
+            current_tz = time.tzname[0]
+        except:
+            current_tz = "Local"
+
+        # Base Prompt
         prompt = (
-            "You are Antigravity, a powerful agentic AI assistant running inside the Orchestrator.\n"
-            f"Current System Time: {current_time_str}\n"
-            f"Current Location: {location_str}\n"
-            f"Active Mode: {self.state.active_mode.upper()}  <-- ADAPT YOUR BEHAVIOR TO THIS MODE.\n"
-            f"{env_instructions}\n"
-            f"{service_alerts}\n"
-            "You are a helpful, intelligent assistant. Engage naturally with the user.\n"
-            "When you use a tool, weave the result or confirmation naturally into your answer. Avoid robotic 'I have done X' statements unless necessary for clarity. Be concise.\n"
-            "Use the tools provided to you to be the most helpful assistant possible. Do not explain which tools you are using or mention anything about tools.\n"
-            "IMPORTANT: Focus on the user's LATEST message. Do not maintain context from unrelated previous topics.\n"
-            f"{'STYLE: Do NOT use ANY emojis in your response. Keep tone professional/dry.' if self.state.config.get('preferences', {}).get('suppress_emoji') else ''}\n"
-            "MEMORY CONSTRAINT: You have access to retrieved memory/facts below. Do NOT mention them unless they are DIRECTLY relevant to answering the CURRENT question. Do not say 'Regarding X...' if the user didn't ask about X."
-            f"{memory_facts}\n"
-            f"{arch_ctx}"
-            f"{files_info}\n"
-            "\n### SHELL SAFETY PROTOCOL (Command Execution)\n"
-            "You have full shell access (Developer Mode). This is a POWERFUL privilege.\n"
-            "1. CONFINEMENT: Favor executing commands within the workspace ('state.agent_fs_root').\n"
-            "2. DESTRUCTIVENESS: NEVER run destructive commands (rm -rf, mkfs) outside the workspace without explicit user confirmation.\n"
-            "3. PURPOSE: Only generate commands necessary for the requested task. Do not explore the user's system idly.\n"
-            "4. APPLESCRIPT: You MAY use 'osascript' if the user asks for macOS automation, but verify it is safe first.\n"
+            "Context:\n"
+            f"- Now: {current_time_str} {current_tz}\n"
+            f"- Location: {location_str} (do not assume)\n"
+            "- Locale: en-US; units: imperial; currency: USD\n"
+            "\n"
+            "Role & tone:\n"
+            "- Be professional, succinct, and conversational.\n"
+            "- Use direct language. No fluff, no hype, no long disclaimers.\n"
+            "\n"
+            "Truthfulness & accuracy:\n"
+            "- Do not invent facts, quotes, numbers, names, timelines, citations, or capabilities.\n"
+            "- If uncertain, say so briefly and either (a) ask the minimum questions, or (b) offer a best-effort answer clearly labeled as an assumption.\n"
+            "- When it matters, separate: (1) Known, (2) Inferred, (3) Uncertain.\n"
+            "\n"
+            "User-specific vs public facts:\n"
+            "- For user-specific questions ('my...', 'what I said...', personal files/settings): rely on the conversation context and user-provided info. Do not web-browse for private/user-specific facts unless the user explicitly asks.\n"
+            "- For public factual questions: use web verification only when needed (see Verified mode).\n"
+            "\n"
+            "Verified mode (enter when any of these apply):\n"
+            "- The user asks for: 'latest/current/today/this week', news, prices, laws/regulations, schedules, product specs, leadership/office-holders, statistics, medical/safety guidance, or anything where being wrong is costly.\n"
+            "- Or you are not confident in the answer from general knowledge.\n"
+            "\n"
+            "Verified mode rules:\n"
+            "- Ask 1–3 clarifying questions only if required to verify correctly.\n"
+            "- Verify with current reputable sources when available; cite 3–5 key sources and tie each major claim to evidence.\n"
+            "- If you cannot verify, say what is missing and provide the safest/most conservative answer.\n"
+            "\n"
+            "Default output (non-Verified mode):\n"
+            "- Answer directly in short paragraphs or 3–8 bullets.\n"
+            "- No mandatory sections; keep it natural.\n"
+            "\n"
+            "Verified mode output:\n"
+            "- Answer (bullets)\n"
+            "- Evidence/Sources (links/citations tied to key claims)\n"
+            "- Unknowns/Assumptions (brief)\n"
+            "- Next steps (optional, brief)\n"
+            "\n"
+            "Tooling behavior:\n"
+            "- Use available tools when verification is needed. Do not narrate tool usage ('I will use...'); just incorporate results.\n"
+            "- Prefer primary/reputable sources for verification.\n"
+            "\n"
+            "Privacy & security:\n"
+            "- Do not request or reveal secrets. Redact credentials/PII if present.\n"
         )
+        
+        # Append Dynamic Context (RAG/Alerts) - Essential for functionality
+        # We append these invisibly at the end so they are available to the model but don't clutter the core prompt instructions.
+        context_appendix = []
+        if service_alerts:
+             context_appendix.append(f"\n[SYSTEM ALERTS]\n{service_alerts}")
+        # if memory_facts:
+        #      context_appendix.append(f"\n[MEMORY CONTEXT]\n{memory_facts}")
+        if arch_ctx:
+             context_appendix.append(f"\n[SYSTEM ARCHITECTURE]\n{arch_ctx}")
+        if files_info:
+             context_appendix.append(f"\n[AVAILABLE FILES]\n{files_info}")
+             
+        if context_appendix:
+            prompt += "\n\n" + "\n".join(context_appendix)
+
         return prompt
 
     async def agent_loop(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, request_id: Optional[str] = None, skip_refinement: bool = False, quality_tier: Optional[Any] = None) -> Dict[str, Any]:
-        
+        print(f"🔍🔍🔍 AGENT_LOOP STARTED: {len(user_messages)} messages, model={model}, request_id={request_id}")
+        logger.warning(f"🔍 AGENT_LOOP STARTED: {len(user_messages)} messages, model={model}, request_id={request_id}")
+
         # [FEATURE] Quality Tier Override
         # If provided, temporarily override the state's quality tier for this request.
         original_tier = None
@@ -517,16 +605,89 @@ class AgentEngine:
 
         while steps < self.state.max_tool_steps:
             steps += 1
+            logger.info(f"[TOOL_LOOP] Step {steps}/{self.state.max_tool_steps}: Calling {active_model} with {len(active_tools)} tools")
+            logger.info(f"[TOOL_LOOP] Active tools: {[t['function']['name'] for t in active_tools]}")
+
             response = await self.call_gateway_with_tools(messages, active_model, active_tools)
             choice = response["choices"][0]
             message = choice["message"]
-            
+
+            logger.info(f"[TOOL_LOOP] Raw response message: role={message.get('role')}, content_length={len(message.get('content', ''))}, tool_calls={len(message.get('tool_calls', []))}")
+
+            if message.get("content"):
+                content_preview = message["content"][:200] + "..." if len(message["content"]) > 200 else message["content"]
+                logger.info(f"[TOOL_LOOP] Content preview: {content_preview}")
+
+                # Check for hallucinated tool calls in content
+                content_str = message["content"].strip()
+                if (content_str.startswith("{") and "name" in content_str and "parameters" in content_str) or \
+                   (content_str.startswith("[") and "name" in content_str):
+                    logger.warning(f"[TOOL_LOOP] ⚠️  DETECTED HALLUCINATED TOOL CALL IN CONTENT: {content_str}")
+
+            if message.get("tool_calls"):
+                logger.info(f"[TOOL_LOOP] Structured tool calls found: {len(message['tool_calls'])}")
+                for tc in message["tool_calls"]:
+                    logger.info(f"[TOOL_LOOP] Tool call: {tc['function']['name']} with args: {tc['function']['arguments']}")
+
             messages.append(message)
             
             # [VERIFICATION CHEAT CODE] - Hallucination Converter
             # Llama 3 often outputs raw text (hallucination) instead of JSON tool calls.
             # We detect the trigger in the TEXT content and force it into a Tool Call.
             if not message.get("tool_calls"):
+                logger.info(f"[TOOL_LOOP] No structured tool_calls found, checking for hallucinations in content")
+
+                # Check if the content contains tool call JSON
+                content = message.get("content", "").strip()
+                if content:
+                    # Try to parse the entire content as JSON first
+                    if content.startswith("{") and content.endswith("}"):
+                        try:
+                            parsed_content = json.loads(content)
+                            if isinstance(parsed_content, dict) and "name" in parsed_content and "parameters" in parsed_content:
+                                logger.warning(f"[TOOL_LOOP] DETECTED HALLUCINATED TOOL CALL JSON: {parsed_content}")
+
+                                # Convert to proper tool call format
+                                hallucinated_tool_call = {
+                                    "id": f"hallucinated_{int(time.time()*1000)}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": parsed_content.get("name", "unknown_tool"),
+                                        "arguments": json.dumps(parsed_content.get("parameters", {}))
+                                    }
+                                }
+
+                                # Instead of converting to tool calls (which would cause another loop iteration),
+                                # clean up the response and let the finalizer handle it
+                                message["content"] = "[Tool call detected but not properly formatted. Please rephrase your request or use available tools.]"
+                                logger.info(f"[TOOL_LOOP] CLEANED UP HALLUCINATED TOOL CALL CONTENT")
+                                # Don't continue - let this be treated as a regular response that goes to finalizer
+
+                        except json.JSONDecodeError:
+                            pass  # Not valid JSON, continue with other checks
+
+                    # Pattern 2: function_name(parameters) style
+                    import re
+                    func_match = re.search(r'(\w+)\s*\(\s*([^)]*)\s*\)', content)
+                    if func_match:
+                        func_name = func_match.group(1)
+                        func_args = func_match.group(2)
+                        logger.warning(f"[TOOL_LOOP] DETECTED FUNCTION CALL PATTERN: {func_name}({func_args})")
+
+                        # Convert to proper tool call format
+                        hallucinated_tool_call = {
+                            "id": f"hallucinated_{int(time.time()*1000)}",
+                            "type": "function",
+                            "function": {
+                                "name": func_name,
+                                "arguments": f'{{"args": "{func_args}"}}'
+                            }
+                        }
+
+                        message["tool_calls"] = [hallucinated_tool_call]
+                        message["content"] = content.replace(func_match.group(0), "").strip()
+                        logger.info(f"[TOOL_LOOP] CONVERTED FUNCTION PATTERN TO TOOL CALL: {func_name}")
+                        continue
                 
                 # [LATENCY OPTIMIZATION] Adaptive Logic: Skip Finalizer for Smart Models
                 is_smart_model = self.state.is_high_tier_model(active_model)
@@ -576,6 +737,46 @@ class AgentEngine:
                     except Exception as e:
                         logger.warning(f"Failed to store episode for request {request_id}: {e}")
 
+                # ===== HALLUCINATION DETECTION =====
+                # Analyze the final response for hallucinations before returning
+                try:
+                    logger.debug("Starting hallucination detection on final response")
+                    final_message = response["choices"][0]["message"]
+                    response_text = final_message.get("content", "")
+                    logger.debug(f"Hallucination detection: response length = {len(response_text)}")
+
+                    if response_text:  # Only check non-empty responses
+                        detection_context = {
+                            "response": response_text,
+                            "user_query": user_messages[-1].get("content", "") if user_messages else None,
+                            "conversation_history": user_messages[:-1] if len(user_messages) > 1 else [],
+                            "model_info": {"model": active_model}
+                        }
+
+                        detection_result = await self.hallucination_detector.detect_hallucinations(**detection_context)
+
+                        # Log detection results
+                        if detection_result.is_hallucination:
+                            logger.warning(f"HALLUCINATION DETECTED in response: severity={detection_result.severity.value}, confidence={detection_result.confidence:.2f}")
+
+                            # Add hallucination warning to response metadata
+                            if "metadata" not in response:
+                                response["metadata"] = {}
+                            response["metadata"]["hallucination_detection"] = detection_result.to_dict()
+
+                            # For high-confidence hallucinations, add warning to the response content
+                            if detection_result.confidence > 0.8 and detection_result.severity in [HallucinationSeverity.HIGH, HallucinationSeverity.CRITICAL]:
+                                warning_msg = "\n\n⚠️ **Content Warning**: This response may contain inaccuracies. Please verify critical information independently."
+                                final_message["content"] = response_text + warning_msg
+                        else:
+                            logger.debug(f"Hallucination check passed: confidence={detection_result.confidence:.2f}")
+
+                except Exception as e:
+                    logger.warning(f"Hallucination detection failed: {e}")
+                    # Continue with normal response - don't block due to detection failure
+
+                # DEBUG: Log that we're about to return response
+                logger.warning(f"AGENT_LOOP: About to return response with content length: {len(response.get('choices', [{}])[0].get('message', {}).get('content', ''))}")
                 return response
             
             # [FEATURE-9] TELEMETRY: Log Selection Precision
@@ -660,6 +861,7 @@ class AgentEngine:
                                     active_tools,
                                     keep_alive=0 # Force Unload
                                 ) 
+                                
                                 # Healer returns a chat completion response
                                 healer_msg = healer_res["choices"][0]["message"]
                                 content = json.dumps({"ok": False, "error": f"Escalated to Healer. Healer says: {healer_msg['content']}", "healed": True})
@@ -671,6 +873,15 @@ class AgentEngine:
                             except Exception as h_err:
                                 logger.error(f"Healer failed: {h_err}")
                                 content = json.dumps({"ok": False, "error": f"Healer Failed: {str(h_err)} | Original: {error_str}"})
+                            
+                            finally:
+                                # [SAFETY] Ensure QwQ is unloaded even if call fails/crashes
+                                try:
+                                    # Ideally we would call an unload API here.
+                                    # For now, we rely on the implementation of call_gateway_with_tools having sent keep_alive=0
+                                    pass 
+                                except Exception:
+                                    pass
                         else:
                             # Standard Error Report
                             content = json.dumps({"ok": False, "error": error_str})
@@ -994,6 +1205,67 @@ class AgentEngine:
             # But first, append ANY content we received to history as the assistant message.
             assistant_msg = {"role": "assistant", "content": current_content}
             
+            # [HALLUCINATION FIX]
+            # Llama 3.1 (8B) often streams raw JSON text instead of using the tool_calls API.
+            # We catch this pattern and convert it into a valid tool call execution.
+            if not current_tool_calls and current_content.strip():
+                stripped = current_content.strip()
+                # Check for characteristic JSON signatures (allow generic text prefix)
+                json_start = stripped.find("{")
+                list_start = stripped.find("[")
+                
+                candidate = None
+                if json_start != -1 and (list_start == -1 or json_start < list_start):
+                    candidate = stripped[json_start:]
+                elif list_start != -1:
+                    candidate = stripped[list_start:]
+                
+                if candidate and '"name"' in candidate:
+                    try:
+                        # Attempt to clean potential markdown
+                        cleaned = candidate
+                        if cleaned.startswith("```"):
+                            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+                        if cleaned.endswith("```"):
+                            cleaned = cleaned.rsplit("\n", 1)[0]
+                        cleaned = cleaned.strip("`").strip()
+                        if cleaned.startswith("json"):
+                            cleaned = cleaned[4:].strip()
+                        
+                        data = json.loads(cleaned)
+                        if isinstance(data, dict): data = [data]
+                        parsed_calls = []
+                        for item in data:
+                            if isinstance(item, dict) and "name" in item:
+                                 # [PATCH] Fuzzy Name Matching for Llama 3.1
+                                 t_name = item["name"]
+                                 if t_name == "get_time": t_name = "get_current_time"
+                                  
+                                 # Normalize arguments
+                                 args = item.get("parameters", item.get("arguments", {}))
+                                 if isinstance(args, str):
+                                     try:
+                                         args = json.loads(args)
+                                     except:
+                                         pass # Keep as string if parsing fails, let executor handle it
+
+                                 parsed_calls.append({
+                                    "index": len(parsed_calls),
+                                    "id": f"call_h_{int(time.time())}_{len(parsed_calls)}",
+                                    "function": {
+                                        "name": t_name,
+                                        "arguments": json.dumps(args) if isinstance(args, dict) else str(args)
+                                    }
+                                 })
+                         
+                        if parsed_calls:
+                            logger.warning(f"HALLUCINATION CONVERTED: Transformed raw text into {len(parsed_calls)} tool calls")
+                            current_tool_calls = parsed_calls
+                            # Note: We already yielded the text tokens, so the user sees the JSON.
+                            # This is acceptable; we just ensure the ACTION happens.
+                    except Exception as e:
+                        logger.debug(f"Hallucination check failed (not valid JSON): {e}")
+
             if current_tool_calls:
                 # Reconstruct tool_calls array for the message history
                 tool_calls_payload = []

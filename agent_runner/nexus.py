@@ -33,6 +33,14 @@ class Nexus:
             "ui_control": {"active": True, "opacity": 1.0, "visible": False}
         }
 
+    def _format_tool_output(self, data: Any) -> str:
+        """
+        Format tool output into Markdown for the Chat UI.
+        Delegates to the universal ResponseFormatter service.
+        """
+        from agent_runner.services.formatter import ResponseFormatter
+        return ResponseFormatter.format_tool_output(data)
+
     async def dispatch(self, user_message: str, request_id: str, context: Optional[list] = None) -> AsyncGenerator[Dict[str, Any], None]:
         """
         The Only Gate for User Input.
@@ -74,7 +82,12 @@ class Nexus:
                 pass
         
         # 1. Trigger Check
+        logger.warning(f"NEXUS: Checking triggers for message: '{user_message[:50]}...'")
         trigger_result = await self._check_and_execute_trigger(user_message)
+        if trigger_result:
+            logger.warning(f"NEXUS: ✅ Trigger activated: {trigger_result.get('name', 'unknown')}")
+        else:
+            logger.warning("NEXUS: ❌ No trigger matched, proceeding to agent loop")
         
         # 2. Additive Context Construction
         # Use provided context (history) or start fresh
@@ -96,6 +109,12 @@ class Nexus:
             if trigger_result.get("action") == "diagnostic":
                  # Diagnostic actions (Prompt, Help) act as blocking answers.
                  # We treat them as part of the "system" layer but render them as output.
+                 # [FIX] Ensure tool_start is yielded so frontend renders the block
+                 yield {
+                     "type": "tool_start", 
+                     "tool": "nexus_trigger", 
+                     "input": {"trigger": trigger_result["name"]}
+                 }
                  yield {
                      "type": "tool_end",
                      "tool": "nexus_trigger",
@@ -218,6 +237,16 @@ class Nexus:
             triggers = get_sovereign_triggers()
             
             # [FIX] Handle Multi-modal Content (List of blocks)
+            # Input might be a list OR a string representation of a list
+            raw_text = text
+            if isinstance(text, str) and (text.strip().startswith("[") or text.strip().startswith("{")):
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, list):
+                        text = parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass # Keep as string
+
             if isinstance(text, list):
                 # Extract first text block
                 text_content = ""
@@ -225,12 +254,121 @@ class Nexus:
                     if isinstance(block, dict) and block.get("type") == "text":
                         text_content += block.get("text", "") + " "
                 lower_text = text_content.strip().lower()
-            elif isinstance(text, str):
-                lower_text = text.lower().strip()
             else:
-                lower_text = str(text).lower().strip()
+                lower_text = str(raw_text).lower().strip()
 
             
+            # [FIX] Reordered for Efficiency: Check sovereign triggers FIRST (cheap), then Maître d' (expensive)
+            logger.info(f"Nexus: Checking {len(triggers)} sovereign triggers for query: '{text[:50]}...'")
+            # 1. Sovereign Triggers (Pattern Matching - Fast)
+            for trig_def in triggers:
+                # In Sovereign YAML, triggers are a list of dicts with 'pattern' key
+                name = trig_def.get("pattern", "unknown") # Name is the pattern for now, or we infer it
+                pattern = trig_def.get("pattern")
+
+                # [FIX] Regex Pattern Matching
+                import re
+                try:
+                    # Case-insensitive regex search
+                    # We treat the 'pattern' from yaml as a regex
+                    if re.search(pattern, lower_text, re.IGNORECASE):
+                        matches = True
+                    else:
+                        matches = False
+                except re.error as e:
+                    logger.warning(f"Invalid regex pattern in sovereign trigger '{name}': {e}")
+                    matches = False
+
+                if matches:
+                    logger.info(f"Nexus: ✅ Sovereign Trigger Matched '{name}' for query: '{text[:50]}...'")
+
+                    # Execute sovereign trigger
+                    action_type = trig_def.get("action_type")
+                    action_data = trig_def.get("action_data", {})
+
+                    # A. Tool Call Action
+                    if action_type == "tool_call":
+                        tool_name = action_data.get("tool")
+                        args = action_data.get("args", {})
+
+                        if tool_name and hasattr(self.engine, "executor"):
+                             # Construct generic tool call
+                             tool_tuple = {
+                                 "function": {
+                                     "name": tool_name,
+                                     "arguments": json.dumps(args)
+                                 }
+                             }
+
+                             # Execute via ToolExecutor
+                             try:
+                                 result = await self.engine.executor.execute_tool_call(tool_tuple, f"trigger-{name}")
+                                 output = self._format_tool_output(result)
+
+                                 return {
+                                     "name": f"Trigger: {name}",
+                                     "action": "tool_result",
+                                     "output": output,
+                                     "tool_call": tool_tuple
+                                 }
+                             except Exception as e:
+                                 logger.error(f"Trigger tool execution failed: {e}")
+                                 return {
+                                     "name": f"Trigger: {name}",
+                                     "action": "error",
+                                     "output": f"Tool execution failed: {e}"
+                                 }
+
+                    # B. Control UI Action
+                    elif action_type == "control_ui":
+                        # Send signal to frontend
+                        return {
+                            "name": f"Trigger: {name}",
+                            "action": "control_ui",
+                            "target": action_data.get("target"),
+                            "action_data": action_data,
+                            "output": f"UI Control: Opening {action_data.get('target', 'interface')}"
+                        }
+
+                    # C. Menu Action
+                    elif action_type == "menu":
+                        menu_items = action_data.get("items", [])
+                        menu_text = action_data.get("title", "Menu") + "\n"
+                        for item in menu_items:
+                            menu_text += f"- {item}\n"
+
+                        return {
+                            "name": f"Trigger: {name}",
+                            "action": "menu",
+                            "output": menu_text.strip()
+                        }
+
+                    # D. System Prompt Action
+                    elif action_type == "system_prompt":
+                        # Modify system prompt settings
+                        key = action_data.get("key")
+                        value = action_data.get("value")
+                        # This would modify the system prompt context
+                        return {
+                            "name": f"Trigger: {name}",
+                            "action": "system_config",
+                            "output": f"System setting updated: {key} = {value}",
+                            "config_change": {"key": key, "value": value}
+                        }
+
+            # [PHASE 62] User Visibility: Explicit Trigger Miss Logging
+            # Users want to know when a Nexus trigger fails to catch a command.
+            if len(lower_text.split()) > 0:
+                first_word = lower_text.split()[0]
+                common_command_verbs = ["add", "install", "update", "remove", "delete", "create", "start", "stop", "restart", "enable", "disable"]
+                
+                if first_word in common_command_verbs:
+                     logger.warning(f"Nexus: ⚠️ POTENTIAL TRIGGER MISS for query: '{text[:100]}...'")
+                     logger.warning(f"Nexus: Input started with command verb '{first_word}' but matched NO defined sovereign trigger.")
+                     logger.warning(f"Nexus: Falling back to Maître d' (Agentic Selection). Check 'sovereign.yaml' definitions.")
+
+            # 2. Maître d' Intent Classification (Expensive - Only if no trigger match)
+            logger.info(f"Nexus: ❌ No sovereign trigger matched, calling Maître d' for: '{text[:50]}...'")
             # [FEATURE] Maître d' Integration for Natural Language Commands
             # Use Local LLM to classify intent before proceeding to Agent.
             # This enables "Show me prompt" to be handled locally.
@@ -239,17 +377,17 @@ class Nexus:
                 # Assuming Nexus runs after startup.
                 if hasattr(self.engine, "_classify_search_intent"):
                     intent = await self.engine._classify_search_intent(text)
-                    
+
                     # [FIX] Handle List Return from Maître d' (Multi-intent support)
                     if isinstance(intent, list) and len(intent) > 0:
                         intent = intent[0] # Take primary intent
-                    
+
                     sys_action = intent.get("system_action")
 
-                    
+
                     if sys_action:
                         logger.info(f"Nexus: Maître d' selected system action '{sys_action}'")
-                        
+
                         if sys_action == "prompt":
                              prompt_content = await self.engine.get_system_prompt()
                              return {
@@ -290,12 +428,12 @@ class Nexus:
                                  "target_layer": "emoji",
                                  "output": "🐝✨🚀"
                              }
-                        
+
                         # [FEATURE] Layer Control
                         elif sys_action.startswith("disable_") or sys_action.startswith("enable_"):
                             target = sys_action.split("_")[1] # e.g. "emoji"
                             is_enable = sys_action.startswith("enable_")
-                            
+
                             if target in self.layers:
                                 self.layers[target]["active"] = is_enable
                                 status = "Enabled" if is_enable else "Disabled"
@@ -308,15 +446,64 @@ class Nexus:
                                         "active": is_enable
                                     }
                                 }
+
+                    # [AUTO-EXECUTE] Maître d' ordered immediate execution
+                    if "auto_execute" in intent and intent["auto_execute"]:
+                        execution_plan = intent["auto_execute"]
+                        if isinstance(execution_plan, dict):
+                            execution_plan = [execution_plan] # Normalize to list
+                        
+                        outputs = []
+                        for tool_info in execution_plan:
+                            tool_name = tool_info.get("tool")
+                            args = tool_info.get("args", {})
+                            
+                            if tool_name:
+                                # Construct tool call tuple
+                                tool_tuple = {
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": json.dumps(args)
+                                    }
+                                }
+                                
+                                logger.info(f"Nexus: Maître d' Auto-Execute '{tool_name}'")
+                                try:
+                                    # Execute via Engine -> Executor -> Registry Lookup
+                                    res = await self.engine.executor.execute_tool_call(tool_tuple, request_id="auto-exec")
+                                    
+                                    # Format Output (Table/List)
+                                    formatted = self._format_tool_output(res)
+                                    outputs.append(formatted)
+                                    
+                                except Exception as e:
+                                    logger.error(f"Nexus Auto-Execute Failed for {tool_name}: {e}")
+                                    outputs.append(f"Error executing {tool_name}: {e}")
+                        
+                        # Combine all outputs
+                        final_output = "\n\n".join(outputs)
+                        
+                        return {
+                            "name": "Auto-Execute",
+                            "action": "diagnostic",
+                            "output": final_output
+                        }
             except Exception as e:
                 logger.warning(f"Nexus intent check failed: {e}")
-
-            for trig_def in triggers:
                 # In Sovereign YAML, triggers are a list of dicts with 'pattern' key
                 name = trig_def.get("pattern", "unknown") # Name is the pattern for now, or we infer it
                 pattern = trig_def.get("pattern")
                 
-                if lower_text == pattern.lower() or lower_text.startswith(f"{pattern.lower()} "):
+                # More flexible pattern matching: exact match, starts with, or contains as phrase
+                pattern_lower = pattern.lower()
+                matches = (
+                    lower_text == pattern_lower or  # exact match
+                    lower_text.startswith(f"{pattern_lower} ") or  # starts with pattern + space
+                    f" {pattern_lower} " in lower_text or  # contains pattern as word
+                    lower_text.endswith(f" {pattern_lower}")  # ends with space + pattern
+                )
+
+                if matches:
                     logger.info(f"Nexus: Trigger Matched '{name}'")
                     
                     # Execute
@@ -333,21 +520,35 @@ class Nexus:
                     if action_type == "tool_call":
                         tool_name = action_data.get("tool")
                         args = action_data.get("args", {})
-                        
+
                         if tool_name and hasattr(self.engine, "executor"):
-                             # Construct generic tool call
-                             # We use a special request_id to indicate system origin
-                             tool_tuple = {
-                                 "function": {
-                                     "name": tool_name,
-                                     "arguments": json.dumps(args) 
-                                 }
-                             }
-                             try:
-                                 res = await self.engine.executor.execute_tool_call(tool_tuple, request_id=f"trigger-{name}", user_query="")
-                                 output = json.dumps(res, indent=2)
-                             except Exception as e:
-                                 output = f"Trigger Error: {e}"
+                            # [FIX] Query tool registry to validate tool exists before execution
+                            try:
+                                available_tools = await self.engine.get_all_tools()
+                                tool_names = [t.get("function", {}).get("name") for t in available_tools if t.get("function")]
+
+                                if tool_name not in tool_names:
+                                    logger.warning(f"Nexus: Tool '{tool_name}' not found in registry. Available tools: {tool_names[:10]}...")
+                                    return {
+                                        "name": f"Trigger: {name}",
+                                        "action": "error",
+                                        "output": f"Tool '{tool_name}' is not available in the system."
+                                    }
+
+                                # Tool exists, proceed with execution
+                                tool_tuple = {
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": json.dumps(args)
+                                    }
+                                }
+                                logger.info(f"Nexus: Executing validated tool '{tool_name}' from trigger '{name}'")
+                                res = await self.engine.executor.execute_tool_call(tool_tuple, request_id=f"trigger-{name}", user_query="")
+                                output = self._format_tool_output(res)
+
+                            except Exception as e:
+                                logger.error(f"Nexus: Tool execution failed for '{tool_name}': {e}")
+                                output = f"Trigger Error: {e}"
 
                     # B. System Prompt Injection (e.g. debug_mode)
                     elif action_type == "system_prompt":

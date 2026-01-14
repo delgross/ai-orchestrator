@@ -46,51 +46,69 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
 
     from agent_runner.feedback import get_suggested_servers
 
+    # [FEATURE-VEHICLE] Semantic Tool Search (Vector Router)
+    # Replaces static constraint patching with dynamic retrieval
+    vector_results = []
+    vector_context_str = ""
+    try:
+        if hasattr(state, "vector_store") and state.vector_store:
+            # We search for potentially relevant tools
+            # "limit=3" ensures we only fetch high-signal tools
+            vector_results = await state.vector_store.search_tools(query, limit=5)
+            if vector_results:
+                vector_context_str = "Relevant Tools Found via Search:\n"
+                for tool in vector_results:
+                    vector_context_str += f"- {tool['name']}: {tool['description']}\n"
+                vector_context_str += "\n"
+                logger.info(f"Vector Router found tools: {[t['name'] for t in vector_results]}")
+    except Exception as e:
+        logger.warning(f"Vector search failed: {e}")
+
     # [FEATURE-9] Learning Loop: Inject suggestions from history
     suggestions_str = ""
-    try:
-        suggestions = await get_suggested_servers(query, state=state)
-        if suggestions:
-            # We limit to top 3 to avoid bias
-            suggestions_str = f"Recall: User usage history suggests these servers are relevant: {', '.join(suggestions[:3])}\n"
-    except Exception as e:
-        logger.debug(f"Maître d' suggestion retrieval failed: {e}")
+    # try:
+    #     suggestions = await get_suggested_servers(query, state=state)
+    #     if suggestions:
+    #         # We limit to top 3 to avoid bias
+    #         suggestions_str = f"Recall: User usage history suggests these servers are relevant: {', '.join(suggestions[:3])}\n"
+    # except Exception as e:
+    #     logger.debug(f"Maître d' suggestion retrieval failed: {e}")
         
     # [FEATURE-ADVICE] Advice Menu
     advice_str = ""
-    if advice_menu_list:
-        advice_str = (
-            "Available Advice Topics:\n"
-            f"- {', '.join(advice_menu_list)}\n\n"
-        )
+    # if advice_menu_list:
+    #     advice_str = (
+    #         "Available Advice Topics:\n"
+    #         f"- {', '.join(advice_menu_list)}\n\n"
+    #     )
+    
+    # We prepend dynamic vector results to the static menu
+    # This allows the Maître d' to see relevant tools that might not be in the static summary
+    combined_menu = f"{vector_context_str}{tool_menu_summary}"
+
+    # [UNIVERSAL CONTEXT] Inject Time/Location so Maître d' makes context-aware decisions
+    import datetime
+    try:
+        current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %Z")
+    except:
+        current_time_str = str(datetime.datetime.now())
+        
+    location_str = "Unknown"
+    if hasattr(state, "location") and state.location:
+        location_str = f"{state.location.get('city', 'Unknown')}, {state.location.get('region', '')}"
+
+    env_context = f"Current Time: {current_time_str}\nCurrent Location: {location_str}"
 
     prompt = (
-        "SYSTEM DIRECTIVE: YOU ARE A JSON GENERATOR. OUTPUT ONLY JSON. NO EXPLANATION.\n"
-        f"User Query: '{query}'\n\n"
-        "Menu:\n"
-        f"{tool_menu_summary}\n\n"
-        f"{advice_str}"
-        f"{suggestions_str}"
-        "Task: Return the list of servers and advice topics required.\n"
-        "Constraint 1: Core tools (Time) are pre-loaded. Do NOT select them.\n"
-        "Constraint 3: If 'fetch', 'browse', 'weather' are needed, select them.\n"
-        "Constraint 9: [WEB SEARCH] If user asks for current news, headlines, recent events, latest information, today's news, or Google/Bing news, select 'tavily-search'.\n"
-        "Constraint 10: [WEB SEARCH] If user asks for real-time information, current events, breaking news, or time-sensitive data, select 'tavily-search'.\n"
-        "Constraint 4: [SYSTEM TOOLS] If user needs to read/write/list files, select 'filesystem'.\n"
-        "Constraint 5: [SYSTEM TOOLS] If user needs to run commands, check system health, or manage config, select 'system' and 'admin'.\n"
-        "Constraint 5.5: [SYSTEM INTROSPECTION] If user asks about internal system configuration, model assignments, how the system works, or technical architecture ('What models are running?', 'How does it work?', 'Show me the configuration'), select 'system' and 'admin'.\n"
-        "Constraint 11: [MEMORY] If user asks about previous conversations, stored information, preferences, what was discussed before, or wants to recall/remember something ('What have we talked about?', 'Do you remember?', 'What are my preferences?'), select 'memory'.\n"
-        "Constraint 6: [ADVICE] If the query relates to an Available Advice Topic, include it in 'advice_topics'.\n"
-        "Constraint 7: [LOCAL ACTION] If user asks for 'help' (commands), 'system prompt' (instructions), 'restart', or 'emojis', set 'system_action' to 'help', 'prompt', 'restart', or 'emoji'.\n"
-        "Constraint 8: [LAYER CONTROL] If user asks to enable/disable layers (e.g. 'disable emoji layer'), set 'system_action' to 'enable_emoji', 'disable_emoji', 'enable_chat', etc.\n\n"
+        "Menu (Available Tools):\n"
+        f"{tool_menu_summary}\n\n"   # [OPTIMIZATION] Static Content FIRST (Prefix Cache)
+        f"{vector_context_str}\n\n"  # Dynamic Content Second
+        f"{env_context}\n\n"         # Dynamic Content Third
+        "Task: Analyze the query and select tools from the Menu. Return valid JSON only.\n"
         "Example Output:\n"
-        "{\"target_servers\": [\"tavily-search\"], \"advice_topics\": [], \"system_action\": null}  // For: 'What are today's news headlines?'\n"
-        "{\"target_servers\": [\"tavily-search\"], \"advice_topics\": [], \"system_action\": null}  // For: 'Latest breaking news'\n"
-        "{\"target_servers\": [\"tavily-search\"], \"advice_topics\": [], \"system_action\": null}  // For: 'What happened recently in politics?'\n"
-        "{\"target_servers\": [\"memory\"], \"advice_topics\": [], \"system_action\": null}  // For: 'What have we talked about before?'\n"
-        "{\"target_servers\": [\"memory\"], \"advice_topics\": [], \"system_action\": null}  // For: 'Do you remember my preferences?'\n"
-        "{\"target_servers\": [], \"advice_topics\": [], \"system_action\": \"prompt\"}\n"
-        "{\"target_servers\": [], \"advice_topics\": [], \"system_action\": \"disable_emoji\"}\n\n"
+        "{\"target_servers\": [], \"complexity\": \"low\", \"auto_execute\": [{\"tool\": \"get_current_time\", \"args\": {}}]}\n"
+        "{\"target_servers\": [\"tavily-search\"], \"complexity\": \"high\", \"auto_execute\": null}\n\n"
+        f"User Query: '{query}'\n"
         "YOUR RESPONSE (JSON ONLY):"
     )
 
@@ -112,7 +130,7 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "response_format": {"type": "json_object"},
-                "options": {"num_ctx": 32768}  # [FIX] Match Resident Model Context
+                "options": {"num_ctx": 32768}  # [FIX] Unified 32k Context (User Requirement)
             }
             
             # [Optimization] Direct Lane for Local Models
@@ -126,7 +144,8 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
                 url = f"{state.gateway_base}/v1/chat/completions"
             logger.info(f"Maître d' URL: {url} (Model: {model})")
             
-            r = await client.post(url, json=payload, timeout=25.0)
+            # [ADJUSTMENT] 70B Model requires longer timeout for Prompt Eval of large menus
+            r = await client.post(url, json=payload, timeout=120.0)
             
             if r.status_code == 200:
                 try:
@@ -147,6 +166,19 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
                                 s.get("name", s) if isinstance(s, dict) else s 
                                 for s in result.get("target_servers", [])
                             ]
+                        
+                        # [SANITIZER] Filter Malformed Tool Names (e.g. "Server 'time'...")
+                        if "auto_execute" in result and isinstance(result["auto_execute"], list):
+                            cleaned_tools = []
+                            for t in result["auto_execute"]:
+                                t_name = t.get("tool", "")
+                                # Heuristic: Tool names should be snake_case or kebab-case, no spaces, no quotes
+                                if " " in t_name or "'" in t_name or '"' in t_name or ":" in t_name:
+                                    logger.warning(f"Maître d' Sanitizer: Dropped malformed tool name: '{t_name}'")
+                                else:
+                                    cleaned_tools.append(t)
+                            result["auto_execute"] = cleaned_tools
+                        
                         # [OPTIMIZATION] Cache Result
                         _intent_cache[cache_key] = (time.time(), result)
                         return result
@@ -161,9 +193,22 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
                                     s.get("name", s) if isinstance(s, dict) else s 
                                     for s in result.get("target_servers", [])
                                 ]
-                            # [OPTIMIZATION] Cache Result
-                            _intent_cache[cache_key] = (time.time(), result)
-                            return result
+                            
+                        # [SANITIZER] Filter Malformed Tool Names (e.g. "Server 'time'...")
+                        if "auto_execute" in result and isinstance(result["auto_execute"], list):
+                            cleaned_tools = []
+                            for t in result["auto_execute"]:
+                                t_name = t.get("tool", "")
+                                # Heuristic: Tool names should be snake_case or kebab-case, no spaces, no quotes
+                                if " " in t_name or "'" in t_name or '"' in t_name or ":" in t_name:
+                                    logger.warning(f"Maître d' Sanitizer: Dropped malformed tool name: '{t_name}'")
+                                else:
+                                    cleaned_tools.append(t)
+                            result["auto_execute"] = cleaned_tools
+
+                        # [OPTIMIZATION] Cache Result
+                        _intent_cache[cache_key] = (time.time(), result)
+                        return result
                         raise # Re-raise to trigger error handler below
 
                 except (json.JSONDecodeError, AttributeError):
@@ -243,7 +288,7 @@ async def generate_search_query(messages: List[Dict[str, Any]], state: Any, call
             messages=prompt_msgs,
             model=state.query_refinement_model, 
             tools=[], # [FIX] Empty list prevents injecting 50+ tools into 1B model!
-            options={"num_ctx": 2048} # Match preloaded context to prevent reloading!
+            options={"num_ctx": 32768} # [USER] Expanded Context to 32k
         )
         
         rewritten = response["choices"][0]["message"]["content"].strip()

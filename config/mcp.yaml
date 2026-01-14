@@ -1,9 +1,34 @@
 mcp_servers:
-  tavily-search:
+  fetch:
+    cmd:
+    - uvx
+    - mcp-server-fetch
+    env: {}
+    enabled: true
+    type: stdio
+  filesystem:
     cmd:
     - npx
     - -y
-    - tavily-mcp@0.1.3
+    - '@modelcontextprotocol/server-filesystem'
+    - /Users/bee/Sync/Antigravity
+    - /Users/bee/Desktop
+    - /Users/bee/Downloads
+    env: {}
+    enabled: true
+    type: stdio
+  sequential-thinking:
+    cmd:
+    - npx
+    - -y
+    - '@modelcontextprotocol/server-sequential-thinking'
+    env: {}
+    enabled: true
+    type: stdio
+  time:
+    cmd:
+    - uvx
+    - mcp-server-time
     env: {}
     enabled: true
     type: stdio
@@ -14,10 +39,11 @@ mcp_servers:
     env: {}
     enabled: true
     type: stdio
-  fetch:
+  tavily-search:
     cmd:
-    - uvx
-    - mcp-server-fetch
+    - npx
+    - -y
+    - tavily-mcp@0.1.3
     env: {}
     enabled: true
     type: stdio
@@ -27,7 +53,8 @@ mcp_servers:
     - -y
     - '@modelcontextprotocol/server-brave-search'
     env: {}
-    enabled: true
+    enabled: false
+    disabled_reason: user_disabled
     type: stdio
   weather:
     cmd:
@@ -44,36 +71,10 @@ mcp_servers:
     env: {}
     enabled: true
     type: stdio
-  time:
-    cmd:
-    - uvx
-    - mcp-server-time
-    env: {}
-    enabled: true
-    type: stdio
-  filesystem:
-    cmd:
-    - npx
-    - -y
-    - '@modelcontextprotocol/server-filesystem'
-    - /Users/bee/Sync/Antigravity
-    - /Users/bee/Desktop
-    - /Users/bee/Downloads
-    env: {}
-    enabled: true
-    type: stdio
   system-control:
     cmd:
     - /Users/bee/Sync/Antigravity/ai/.venv/bin/python
     - /Users/bee/Sync/Antigravity/ai/agent_runner/system_control_server.py
-    env: {}
-    enabled: true
-    type: stdio
-  sequential-thinking:
-    cmd:
-    - npx
-    - -y
-    - '@modelcontextprotocol/server-sequential-thinking'
     env: {}
     enabled: true
     type: stdio

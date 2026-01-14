@@ -13,9 +13,8 @@ MODEL_ROLES = [
 ]
 
 # Default Models (if not in config/db)
-# Strict Configuration: No hardcoded fallbacks. Must be in .env or DB.
-TASK_MODEL = os.getenv("TASK_MODEL")
-AGENT_MODEL = os.getenv("AGENT_MODEL")
+TASK_MODEL = os.getenv("TASK_MODEL", "ollama:llama3.3:70b")
+AGENT_MODEL = os.getenv("AGENT_MODEL", "ollama:llama3.3:70b")
 
 # Log sorter service sleep interval (seconds)
 SLEEP_LOG_SORTER = 5.0
@@ -30,11 +29,10 @@ SLEEP_BRIEF_BACKOFF_BASE = 0.5  # Base delay in seconds for exponential backoff
 # Core MCP Services - These are critical and must be protected
 # Core services have higher circuit breaker thresholds and automatic recovery
 CORE_MCP_SERVERS = {
-    # "location",      # Native
-    # "thinking",      # Native
-    # "system-control" # Native
-    # Keep empty for now as most core tools are native.
-    # If we add critical remote MCP servers, add them here.
+    "system-control",  # Critical: Provides get_server_status and config tools
+    "time",            # Critical: Prevents hallucinations about date/time
+    "filesystem",      # Critical: Needed for basic operations
+    "project-memory"   # Critical: Long-term memory and context
 }
 
 # Circuit breaker thresholds for core vs non-core services
@@ -71,3 +69,15 @@ TOKEN_IMPORTANT_FIELDS = [
 # Other thresholds
 TOKEN_SMALL_FIELD_THRESHOLD = 200  # Keep non-important fields if < this (chars)
 TOKEN_LIST_ITEM_SIZE_FLOOR = 50    # Minimum item size for list estimation (chars)
+
+# Transport Constants
+LOCK_ACQUISITION_TIMEOUT_SECONDS = 10.0
+PROCESS_INITIALIZATION_TIMEOUT_SECONDS = 20.0
+NON_CORE_PROCESS_TIMEOUT_SECONDS = 15.0
+PROCESS_WAIT_TIMEOUT_SECONDS = 5.0
+STDERR_READ_TIMEOUT_SECONDS = 0.1
+
+# Error Messages
+ERROR_STDERR_READ_FAILED = "Failed to read stderr: {error}"
+ERROR_PROCESS_CREATION_FAILED = "Failed to create process: {error}"
+ERROR_PROCESS_STREAM_CLOSE_FAILED = "Failed to close process streams: {error}"

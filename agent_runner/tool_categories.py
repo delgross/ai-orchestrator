@@ -13,7 +13,8 @@ VALID_CATEGORIES = {
     "web_search", "filesystem", "code", "browser", "memory",
     "scraping", "automation", "http", "weather", "document", "ollama",
     "system", "status", "control", "exploration", "thinking", "knowledge",
-    "admin", "introspection", "latency", "node", "mcp"
+    "admin", "introspection", "latency", "node", "mcp", "data_processing",
+    "security", "api_integration", "workflow_automation"
 }
 
 # Category hierarchy for better organization
@@ -47,6 +48,30 @@ CATEGORY_HIERARCHY = {
         "search": ["search", "knowledge_search", "semantic_search"],
         "ingest": ["ingest_knowledge", "ingest_file"],
         "memory": ["memory_store_fact", "memory_query_facts", "memory_search_semantic", "memory_consolidate", "remove_memory_from_file", "run_memory_consolidation"]
+    },
+    "data_processing": {
+        "parsing": ["parse_json", "parse_csv"],
+        "transformation": ["transform_data"],
+        "reporting": ["generate_report"]
+    },
+    "security": {
+        "passwords": ["generate_password", "validate_password_strength"],
+        "cryptography": ["hash_string", "generate_token"]
+    },
+    "api_integration": {
+        "http": ["http_request", "api_health_check"],
+        "webhooks": ["create_webhook", "call_webhook"],
+        "parsing": ["parse_api_response"]
+    },
+    "workflow_automation": {
+        "workflows": ["create_workflow", "execute_workflow"],
+        "scheduling": ["schedule_task", "list_scheduled_tasks", "cancel_scheduled_task"],
+        "pipelines": ["create_pipeline"]
+    },
+    "vector_tool_retrieval": {
+        "search": ["vector_tool_search"],
+        "analysis": ["compare_retrieval_methods"],
+        "hybrid": ["hybrid_tool_retrieval"]
     },
     "admin": {
         "session": ["unlock_session", "check_admin_status"],

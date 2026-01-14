@@ -226,6 +226,13 @@ async def _call_router_model(
     if not _check_circuit_breaker():
         raise Exception("Router circuit breaker is OPEN")
     
+    
+    # [PATCH] Use auth token from env
+    auth_token = os.getenv("ROUTER_AUTH_TOKEN")
+    headers = {}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
     url = f"{gateway_base}/v1/chat/completions"
     payload = {
         "model": ROUTER_MODEL,
@@ -244,7 +251,7 @@ async def _call_router_model(
         try:
             start_time = time.time()
             resp = await asyncio.wait_for(
-                http_client.post(url, json=payload),
+                http_client.post(url, json=payload, headers=headers),
                 timeout=timeout
             )
             resp.raise_for_status()

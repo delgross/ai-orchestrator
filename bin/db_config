@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+import asyncio
+import argparse
+import json
+import sys
+import logging
+from typing import Any, Dict, List, Optional
+
+# Setup Path to import agent_runner
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from agent_runner.state import AgentState
+from agent_runner.db_utils import run_query
+
+# Configure logging to be minimal
+logging.basicConfig(level=logging.ERROR)
+
+async def get_key(state: AgentState, key: str) -> Optional[Any]:
+    res = await run_query(state, f"SELECT * FROM config_state WHERE key = '{key}'")
+    if res:
+        return res[0].get("value")
+    return None
+
+async def set_key(state: AgentState, key: str, value: Any) -> bool:
+    # Serialize value if dict/list
+    val_str = value
+    if isinstance(value, (dict, list)):
+        val_str = json.dumps(value)
+    
+    # Check if exists
+    exists = await get_key(state, key)
+    
+    if exists is not None:
+        # Update
+        # Escape single quotes in value for SQL safety (basic)
+        val_sql = str(val_str).replace("'", "''")
+        q = f"UPDATE config_state SET value = '{val_sql}' WHERE key = '{key}'"
+        await run_query(state, q)
+        print(f"✅ Updated '{key}'.")
+    else:
+        # Insert
+        val_sql = str(val_str).replace("'", "''")
+        q = f"INSERT INTO config_state (key, value) VALUES ('{key}', '{val_sql}')"
+        await run_query(state, q)
+        print(f"✅ inserted '{key}'.")
+    return True
+
+async def list_keys(state: AgentState):
+    res = await run_query(state, "SELECT key FROM config_state ORDER BY key ASC")
+    print(f"--- Database Configuration Keys ({len(res)}) ---")
+    for r in res:
+        print(f"- {r.get('key')}")
+
+async def show_presets(state: AgentState):
+    print("\n👾 === LLM INTELLIGENCE PRESETS === 👾")
+    
+    # 1. Models
+    print("\n--- 🧠 Active Models ---")
+    models = ["AGENT_MODEL", "MCP_MODEL", "ROUTER_MODEL", "HEALER_MODEL", "VISION_MODEL"]
+    for m in models:
+        val = await get_key(state, m)
+        print(f"{m:<15}: {val}")
+
+    # 2. Intelligence Map
+    print("\n--- 🗺️  Model Intelligence Map ---")
+    mi = await get_key(state, "MODEL_INTELLIGENCE")
+    if mi:
+        if isinstance(mi, str):
+            try: mi = json.loads(mi)
+            except: pass
+        print(json.dumps(mi, indent=2))
+    else:
+        print("(Not Found)")
+
+    # 3. Personas
+    print("\n--- 🎭 Active Personas ---")
+    personas = await get_key(state, "PERSONAS")
+    if personas:
+        if isinstance(personas, str):
+            try: personas = json.loads(personas)
+            except: pass
+        # Just show names and models for brevity
+        if isinstance(personas, dict):
+            for p_id, p_data in personas.items():
+                name = p_data.get("name", p_id)
+                model = p_data.get("preferred_model", "default")
+                print(f"• {name} ({p_id}) -> {model}")
+        else:
+            print(personas)
+    else:
+        print("(Not Found)")
+
+async def list_saved_presets(state: AgentState, name: Optional[str] = None):
+    if name:
+        res = await run_query(state, "SELECT * FROM model_preset WHERE name = $name", {"name": name})
+        if not res:
+            print(f"❌ Preset '{name}' not found.")
+        else:
+            print(f"\n💾 === SAVED PRESET: {name} === 💾")
+            print(json.dumps(res[0], indent=2, default=str))
+    else:
+        res = await run_query(state, "SELECT name, description, created_at FROM model_preset ORDER BY created_at DESC")
+        print(f"\n💾 === SAVED PRESETS ({len(res)}) === 💾")
+        for r in res:
+            print(f"- {r.get('name'):<20} | {r.get('description')}")
+
+async def main():
+    parser = argparse.ArgumentParser(description="Sovereign Memory Configuration Tool")
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    
+    # list
+    subparsers.add_parser("list", help="List all configuration keys")
+    
+    # presets
+    subparsers.add_parser("presets", help="Show LLM/Persona Presets")
+
+    # saved
+    saved_parser = subparsers.add_parser("saved", help="Show saved model presets")
+    saved_parser.add_argument("name", nargs="?", help="Specific preset name")
+    
+    # get <key>
+    get_parser = subparsers.add_parser("get", help="Get a specific key value")
+    get_parser.add_argument("key", help="Key name")
+    
+    # set <key> <value>
+    set_parser = subparsers.add_parser("set", help="Set a specific key value")
+    set_parser.add_argument("key", help="Key name")
+    set_parser.add_argument("value", help="Value (strings or JSON)")
+
+    args = parser.parse_args()
+    
+    # Initialize State
+    state = AgentState()
+    await state.initialize()
+    
+    if args.command == "list":
+        await list_keys(state)
+    elif args.command == "presets":
+        await show_presets(state)
+    elif args.command == "saved":
+        await list_saved_presets(state, args.name)
+    elif args.command == "get":
+        val = await get_key(state, args.key)
+        if val is None:
+            print(f"❌ Key '{args.key}' not found.")
+        else:
+            if isinstance(val, (dict, list)):
+                print(json.dumps(val, indent=2))
+            else:
+                print(val)
+    elif args.command == "set":
+        # Try to parse value as JSON
+        try:
+            clean_val = json.loads(args.value)
+        except:
+            clean_val = args.value
+        await set_key(state, args.key, clean_val)
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    asyncio.run(main())

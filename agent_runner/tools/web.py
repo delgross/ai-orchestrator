@@ -3,11 +3,15 @@ import asyncio
 from typing import Dict, Any, List
 
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
     HAS_DDGS = True
 except ImportError:
-    HAS_DDGS = False
-    DDGS = None
+    try:
+        from duckduckgo_search import DDGS
+        HAS_DDGS = True
+    except ImportError:
+        HAS_DDGS = False
+        DDGS = None
 
 from agent_runner.state import AgentState
 

@@ -5,7 +5,7 @@ Provides time functionality using the system clock (no internet dependency).
 Replaces the mcp-server-time MCP server.
 """
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger("agent_runner.tools.time")
@@ -22,7 +22,7 @@ except ImportError:
         _tz_class = None
 
 
-async def tool_get_current_time(state, timezone: str = "America/New_York") -> Dict[str, Any]:
+async def tool_get_current_time(state, timezone: Optional[str] = "America/New_York", **kwargs) -> Dict[str, Any]:
     """
     Get current time in a specific timezone using the system clock.
     
@@ -38,6 +38,10 @@ async def tool_get_current_time(state, timezone: str = "America/New_York") -> Di
             "ok": False,
             "error": "No timezone library available. Install pytz or use Python 3.9+ with zoneinfo."
         }
+    
+    # Robust Defaulting for safety against 'null' arguments
+    if not timezone:
+        timezone = "America/New_York"
     
     try:
         if _tz_class == ZoneInfo:

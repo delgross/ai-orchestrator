@@ -13,6 +13,108 @@ from common.unified_tracking import track_event, EventSeverity, EventCategory
 
 logger = logging.getLogger("agent_runner")
 
+class PulseCheckFailed(Exception):
+    """Raised when an MCP server fails its startup pulse check."""
+    pass
+
+async def perform_pulse_check(state: AgentState, server_name: str, config: Dict[str, Any]):
+    """
+    [DARWINIAN DISCOVERY] Pulse Check Protocol
+    Briefly spin up the server to verify it doesn't crash immediately (e.g. missing API key).
+    """
+    logger.info(f"[Darwinian] Performing pulse check on '{server_name}'...")
+    
+    # Only check stdio servers for now as they are the most prone to env issues
+    if config.get("type") != "stdio":
+        return
+
+    try:
+        # 1. Attempt Spawn
+        # We use a short timeout to catch immediate failures
+        # Note: We reuse get_or_create to mimic exactly how the tool will be used later
+        proc = await get_or_create_stdio_process(state, server_name, config["cmd"], config.get("env", {}))
+        
+        if not proc:
+            raise PulseCheckFailed(f"Failed to spawn process for '{server_name}'")
+            
+        # 2. Strict Handshake (Initialize)
+        # Instead of just waiting, we attempt the JSON-RPC initialization.
+        # This guarantees the process is responsive and stdin/stdout are hooked up correctly.
+        # If the process crashed (e.g. valid 'npx' wrapper but failed script), interact will fail.
+        success = await initialize_stdio_process(state, server_name, proc)
+        
+        if not success:
+             # Capture stderr usage if possible
+             stderr_msg = "Handshake failed (Process died or timed out)"
+             if proc.returncode is not None:
+                try: 
+                    # Try to grab stderr if it's dead
+                    if proc.stderr:
+                        err_bytes = await asyncio.wait_for(proc.stderr.read(4096), timeout=1.0)
+                        stderr_msg += f": {err_bytes.decode('utf-8', errors='replace')}"
+                except:
+                    pass
+             raise PulseCheckFailed(stderr_msg)
+             
+        # 3. Deep Check (List Tools)
+        # Some servers (like brave-search) might initialize fine but crash when asked for tools if config is missing.
+        # We perform a 'tools/list' call to ensure the server is truly functional.
+        list_req = {
+            "jsonrpc": "2.0", 
+            "method": "tools/list", 
+            "params": {}, 
+            "id": int(time.time() * 1000) + 1
+        }
+        proc.stdin.write((json.dumps(list_req) + "\n").encode("utf-8"))
+        await proc.stdin.drain()
+        
+        # Read response (iterative read to avoid buffering issues)
+        # Give it 5 seconds as listing tools might load resources
+        try:
+             # Just read line by line until we find the response ID
+             start_read = time.time()
+             got_response = False
+             while time.time() - start_read < 5.0:
+                 line = await asyncio.wait_for(proc.stdout.readline(), timeout=5.0)
+                 if not line: # EOF
+                     break
+                 
+                 try:
+                     resp = json.loads(line.decode("utf-8", errors="replace"))
+                     if resp.get("id") == list_req["id"]:
+                         if "error" in resp:
+                             raise PulseCheckFailed(f"Tool list returned error: {resp['error']}")
+                         got_response = True
+                         break
+                 except json.JSONDecodeError:
+                     continue
+            
+             if not got_response:
+                 raise PulseCheckFailed("Failed to receive tool list response (Timeout or Crash)")
+                 
+        except asyncio.TimeoutError:
+             raise PulseCheckFailed("Timeout waiting for tool list response")
+
+        # 4. Success - Server survived the pulse check, handshake, and tool listing
+        logger.info(f"[Darwinian] Server '{server_name}' PASSED pulse check (Handshake + Tool List OK).")
+        
+    except PulseCheckFailed:
+        # Ensure we kill the process if it failed the check
+        try:
+             import signal
+             if proc.returncode is None:
+                 proc.send_signal(signal.SIGTERM)
+        except: pass
+        raise
+    except Exception as e:
+        try:
+             import signal
+             if proc.returncode is None:
+                 proc.send_signal(signal.SIGTERM)
+        except: pass
+        raise PulseCheckFailed(f"Pulse check exception: {str(e)}")
+
+
 async def tool_mcp_proxy(state: AgentState, server: str, tool: str, arguments: Dict[str, Any] = None, bypass_circuit_breaker: bool = False) -> Dict[str, Any]:
     """Proxy a tool call to a configured MCP server."""
     arguments = arguments or {}
@@ -251,6 +353,13 @@ async def tool_add_mcp_server(state: AgentState, name: str, config: Dict[str, An
                      "request_id": None,
                      "timestamp": time.time()
                  })
+
+            # [VECTOR-SEARCH] Index new tools immediately
+            if hasattr(state, "vector_store") and state.vector_store:
+                new_tools = engine.executor.mcp_tool_cache.get(name, [])
+                if new_tools:
+                    logger.info(f"[tool_add_mcp_server] Triggering vector indexing for {len(new_tools)} tools from '{name}'")
+                    asyncio.create_task(state.vector_store.index_tools(new_tools))
 
         except RuntimeError:
             logger.warning("Could not access engine for tool discovery")

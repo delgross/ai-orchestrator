@@ -57,23 +57,38 @@ class AgentState:
         # --- 1. THE CORE ROLES ---
         # Backing storage for properties
         #Backing storage for properties
-        self._agent_model = os.getenv("AGENT_MODEL", "ollama:llama3.3:70b")
-        self._router_model = os.getenv("ROUTER_MODEL", "ollama:llama3.3:70b") # Consolidated
-        self._task_model = os.getenv("TASK_MODEL", self._agent_model)
-        self._summarization_model = os.getenv("SUMMARIZATION_MODEL", "ollama:llama3.3:70b") # Consolidated
+        # --- 1. THE BRAIN (Deep Intelligence: 70B) ---
+        # CODIFIED: These are now hardcoded. Config/DB are ignored.
+        self._agent_model = "ollama:llama3.3:70b"
+        self._intent_model = "ollama:llama3.3:70b"
 
-        # --- 2. THE UNVEILED (Previously Hidden) ---
-        self._vision_model = os.getenv("VISION_MODEL", "ollama:llama3.2-vision:latest") 
-        self._mcp_model = os.getenv("MCP_MODEL", self._agent_model)
-        self._finalizer_model = os.getenv("FINALIZER_MODEL", self._agent_model)
-        self._fallback_model = os.getenv("FALLBACK_MODEL", "ollama:llama3.3:70b") # Consolidated
+        # --- 2. THE NERVOUS SYSTEM (Fast Transactions: Qwen 7B) ---
+        self._router_model = "ollama:qwen2.5:7b-instruct"
+        self._task_model = "ollama:qwen2.5:7b-instruct"
+        self._summarization_model = "ollama:qwen2.5:7b-instruct"
+        self._mcp_model = "ollama:qwen2.5:7b-instruct"
+        self._finalizer_model = "ollama:qwen2.5:7b-instruct"
+        self._critic_model = "ollama:qwen2.5:7b-instruct"
+        self._healer_model = "ollama:qwen2.5:7b-instruct"
+        self._fallback_model = "ollama:qwen2.5:7b-instruct"
+        self._pruner_model = "ollama:qwen2.5:7b-instruct"
+        self._query_refinement_model = "ollama:qwen2.5:7b-instruct"
 
-        # --- 3. THE NEW INTELLIGENCES (Enhancements) ---
-        self._intent_model = os.getenv("INTENT_MODEL", "ollama:llama3.3:70b") # Consolidated
-        self._pruner_model = os.getenv("PRUNER_MODEL", "ollama:llama3.3:70b") # Consolidated
-        self._healer_model = os.getenv("HEALER_MODEL", "ollama:qwq:latest") # Specialized
-        self._critic_model = os.getenv("CRITIC_MODEL", "ollama:llama3.3:70b") # Specialized
-        self._query_refinement_model = os.getenv("QUERY_REFINEMENT_MODEL", "ollama:llama3.3:70b") # Consolidated
+        # --- 3. SPECIALIZED CORTEX ---
+        self._vision_model = "ollama:llama3.2-vision:latest"
+        self._embedding_model = "ollama:mxbai-embed-large:latest" # Ensure this attribute exists
+
+        # RESTORED: Keys for iteration
+        self.MODEL_KEYS = [
+            "agent_model", "router_model", "task_model", "summarization_model",
+            "vision_model", "mcp_model", "finalizer_model", "fallback_model",
+            "intent_model", "pruner_model", "healer_model", "critic_model",
+            "query_refinement_model", "embedding_model"
+        ]
+
+        # Hallucination Detection Configuration
+        self._hallucination_detection_enabled = os.getenv("HALLUCINATION_DETECTION_ENABLED", "true").lower() == "true"
+        self._hallucination_confidence_threshold = float(os.getenv("HALLUCINATION_CONFIDENCE_THRESHOLD", "0.7"))
 
         # --- 4. THE UNIFIED FOUNDATION ---
         # Single Source of Truth for Vectors. RAG/Memory servers must respect this.
@@ -134,6 +149,14 @@ class AgentState:
         self.stdio_process_health: Dict[str, float] = {}
         self.mcp_subprocess_semaphore = asyncio.Semaphore(5)
         self.last_user_query: str = "" # Store last user query for analytics
+
+        # Vector Store (Semantic Tool Search)
+        from agent_runner.vector_store import ToolsetVectorIndex
+        self.vector_store = ToolsetVectorIndex(self)
+        
+        # Graph Service (The Map)
+        from agent_runner.services.graph_service import GraphService
+        self.graph = GraphService(self)
         
         # Reliability (Circuit Breakers)
         # from common.circuit_breaker import CircuitBreakerRegistry  <-- Removed to fix UnboundLocalError
@@ -315,7 +338,14 @@ class AgentState:
         except Exception as e:
             logger.warning(f"ConfigManager initialization failed: {e}")
             # Continue without config manager - no hot-reload, but system can run
+            # Continue without config manager - no hot-reload, but system can run
             self.config_manager = None
+
+        # [PHASE 47] Initialize Graph Service (Stub)
+        try:
+            await self.graph.initialize()
+        except Exception as e:
+            logger.warning(f"GraphService initialization failed: {e}")
 
         # [PHASE 45] Sovereign Boot Protocol
         # 1. Attempt Load from Memory (DB) - Database is source of truth
@@ -356,10 +386,14 @@ class AgentState:
                 val = item.get("value")
                 
                 if key and val:
+                    # BLOCK: Prevent DB from overriding Models (User Request: Files Only)
+                    if key.lower() in self.MODEL_KEYS:
+                        continue
+
                     # 1. Update Environment
                     if key not in os.environ or os.environ[key] != str(val):
                         os.environ[key] = str(val)
-                        
+                    
                     # 2. Update Self Attributes
                     self._update_attribute_from_config(key, val)
                     count += 1
@@ -388,36 +422,26 @@ class AgentState:
             # We iterate known keys or the whole config blob?
             # Ideally we iterate mapped keys.
             
-            # Map attributes back to keys
-            to_sync = {
-                "AGENT_MODEL": self.agent_model,
-                "ROUTER_MODEL": self.router_model,
-                "TASK_MODEL": self.task_model,
-                "VISION_MODEL": self.vision_model,
-                "EMBEDDING_MODEL": self.embedding_model,
-                # Add limits?
-            }
-            
-            for k, v in to_sync.items():
-                await self.config_manager.set_config_value(k, v)
+            # Unified Bulk Push
+            for key in self.MODEL_KEYS:
+                # key is "intent_model", DB wants "INTENT_MODEL"
+                db_key = key.upper()
+                val = getattr(self, f"_{key}", None)
+                
+                if val:
+                    await self.config_manager.set_config_value(db_key, val)
                 
     def _update_attribute_from_config(self, key: str, val: Any):
         """Helper to map Upper Keys to attributes."""
-        if key == "AGENT_MODEL": self.agent_model = val
-        elif key == "ROUTER_MODEL": self.router_model = val
-        elif key == "TASK_MODEL": self.task_model = val
-        elif key == "VISION_MODEL": self.vision_model = val
-        elif key == "EMBEDDING_MODEL": self.embedding_model = val
-        elif key == "MCP_MODEL": self.mcp_model = val
-        elif key == "INTENT_MODEL": self.intent_model = val
-        elif key == "PRUNER_MODEL": self.pruner_model = val
-        elif key == "HEALER_MODEL": self.healer_model = val
-        elif key == "CRITIC_MODEL": self.critic_model = val
-        elif key == "QUERY_REFINEMENT_MODEL": self.query_refinement_model = val
-        elif key == "FINALIZER_MODEL": self.finalizer_model = val
-        elif key == "FALLBACK_MODEL": self.fallback_model = val
-        elif key == "SUMMARIZATION_MODEL": self.summarization_model = val
-        elif key == "ROUTER_AUTH_TOKEN": self.router_auth_token = val
+        
+        # 1. Check Canonical Models
+        lower_key = key.lower()
+        if lower_key in self.MODEL_KEYS:
+            attr_name = f"_{lower_key}"
+            setattr(self, attr_name, val)
+            return
+
+        if key == "ROUTER_AUTH_TOKEN": self.router_auth_token = val
         elif key == "ACTIVE_MODE": self._active_mode = val
         elif key == "MODES":
              import json
@@ -438,54 +462,81 @@ class AgentState:
         """Hardcoded safety defaults."""
         self.config = {}
     
+    # Canonical List of Internal Model Keys
+    MODEL_KEYS = [
+        "agent_model", "router_model", "task_model", "summarization_model",
+        "vision_model", "mcp_model", "finalizer_model", "critic_model",
+        "healer_model", "fallback_model", "intent_model", "pruner_model",
+        "embedding_model", "query_refinement_model"
+    ]
+    # --- CONFIGURATION LOADING ---
     def _load_base_config(self):
         """
-        Load limits and general config from config.yaml as the baseline.
-        WARNING: This should ONLY be called during bootstrap when database is confirmed empty.
-        Database is the source of truth - this is only for initial population.
+        Load configuration from edollama.yaml (Base) + edllm.yml (LLM Overrides).
+        Unified initialization for all models.
         """
         import yaml
-        config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-        if config_path.exists():
-            try:
-                # Use async file I/O (but this is a sync method, so use to_thread)
-                import aiofiles
-                import asyncio
-                # This is a sync method, so we need to use asyncio.to_thread for async file I/O
-                # Or just use regular file I/O since this is called during sync initialization
-                with open(config_path, "r") as f:
-                    cfg_data = yaml.safe_load(f)
-                    if cfg_data:
-                        self.config = cfg_data
-                        
-                        agent_cfg = cfg_data.get("agent", cfg_data.get("agent_runner", {}))
-                        
-                        if agent_cfg:
-                            if "limits" in agent_cfg:
-                                limits = agent_cfg["limits"]
-                                self.max_read_bytes = int(limits.get("max_read_bytes", self.max_read_bytes))
-                                self.max_list_entries = int(limits.get("max_list_entries", self.max_list_entries))
-                                self.max_tool_steps = int(limits.get("max_tool_steps", self.max_tool_steps))
-                            
-                            self.agent_model = agent_cfg.get("model", self.agent_model)
-                            
-                            if "fallback" in agent_cfg and "model" in agent_cfg["fallback"]:
-                                self.fallback_model = agent_cfg["fallback"]["model"]
-                                self.fallback_enabled = agent_cfg["fallback"].get("enabled", self.fallback_enabled)
-                                
-                            if "summarization" in agent_cfg and "model" in agent_cfg["summarization"]:
-                                self.summarization_model = agent_cfg["summarization"]["model"]
-
-                            if "tasks" in agent_cfg and "model" in agent_cfg["tasks"]:
-                                self.task_model = agent_cfg["tasks"]["model"]
-            
-                # [Fix] Load Location from Config
-                if "location" in self.config:
-                    self.location = self.config["location"]
-                                
-            except Exception as e:
-                logger.warning(f"Failed to load config.yaml as base: {e}", exc_info=True)
         
+        base_path = Path(__file__).parent.parent / "config" / "edollama.yaml"
+        llm_path = Path(__file__).parent.parent / "config" / "edllm.yml"
+        
+        cfg_data = {}
+        
+        # 1. Load Base Config (Ollama Settings)
+        if base_path.exists():
+            try:
+                with open(base_path, "r") as f:
+                    cfg_data = yaml.safe_load(f) or {}
+                logger.info(f"Loaded Base Config: {base_path}")
+            except Exception as e:
+                logger.error(f"Failed to load user config {base_path}: {e}")
+        else:
+             logger.warning(f"Config file not found: {base_path}")
+
+        # 2. Load LLM Config (Model Overrides)
+        if llm_path.exists():
+            try:
+                with open(llm_path, "r") as f:
+                    llm_data = yaml.safe_load(f) or {}
+                
+                # Overlay LLM Data onto Base Data
+                # Specifically merging the 'system' block where models live
+                if "system" in llm_data:
+                    base_sys = cfg_data.get("system", {})
+                    override_sys = llm_data["system"]
+                    base_sys.update(override_sys) # Update in place
+                    cfg_data["system"] = base_sys # Reassign
+                
+                # Also merge root level if any
+                for k, v in llm_data.items():
+                    if k != "system":
+                        cfg_data[k] = v
+                        
+                logger.info(f"Loaded LLM Overrides: {llm_path}")
+            except Exception as e:
+                logger.error(f"Failed to load LLM config {llm_path}: {e}")
+        else:
+            logger.warning(f"LLM Config file not found: {llm_path}")
+
+        self.config = cfg_data
+        
+        # Flattened Bulk Assignment
+        system_cfg = cfg_data.get("system", {})
+        
+        for key in self.MODEL_KEYS:
+            # 1. Try Root Match
+            val = cfg_data.get(key)
+            
+            # 2. Try System Block Match (Primary Source)
+            if not val:
+                val = system_cfg.get(key)
+            
+            # 3. Update the internal attribute
+            if val:
+                attr_name = f"_{key}"
+                setattr(self, attr_name, val)
+                logger.info(f"Initialized {key} => {val}")
+
     
     
 
@@ -617,6 +668,16 @@ class AgentState:
     def healer_model(self): return self._resolve_sovereign_model(self._healer_model)
     @healer_model.setter
     def healer_model(self, value): self._healer_model = value
+
+    @property
+    def hallucination_detection_enabled(self): return self._hallucination_detection_enabled
+    @hallucination_detection_enabled.setter
+    def hallucination_detection_enabled(self, value): self._hallucination_detection_enabled = value
+
+    @property
+    def hallucination_confidence_threshold(self): return self._hallucination_confidence_threshold
+    @hallucination_confidence_threshold.setter
+    def hallucination_confidence_threshold(self, value): self._hallucination_confidence_threshold = value
 
     @property
     def critic_model(self): return self._resolve_sovereign_model(self._critic_model)

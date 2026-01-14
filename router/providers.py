@@ -262,8 +262,36 @@ async def call_ollama_chat_stream(
     # [PATCH] Merge top-level kwargs (like keep_alive)
     ollama_body.update(kwargs)
     
+    # [Optimization] Smart Context Sizing (Gateway Level)
+    # Ensure the Gateway respects VRAM constraints even if the client didn't specify limits.
+    CONTEXT_WINDOW_MAP = {
+        "llama3.3:70b": 32768,      # Brain (Deep Context)
+        "ollama:llama3.3:70b": 32768,
+        "qwen2.5:32b": 8192,        # Auditor (Medium Context)
+        "ollama:qwen2.5:32b": 8192,
+        "llama3.1:latest": 2048,    # Router (Transactional)
+        "ollama:llama3.1:latest": 2048,
+        "llama3.2:latest": 2048,    # Small Tasks (Transactional)
+        "ollama:llama3.2:latest": 2048,
+        "llama3.2-vision:latest": 2048, # Vision (Transactional)
+        "ollama:llama3.2-vision:latest": 2048,
+        "qwen2.5:7b-instruct": 2048, # Query Refinement (Transactional)
+        "ollama:qwen2.5:7b-instruct": 2048,
+    }
+    
+    # Priority: 1. Request Options (num_ctx) -> 2. Map -> 3. Global Env -> 4. Default 2048
     options = {}
-    ctx_size = num_ctx or state.ollama_num_ctx
+    base_ctx = CONTEXT_WINDOW_MAP.get(model_id, CONTEXT_WINDOW_MAP.get(f"ollama:{model_id}"))
+    
+    # Priority: 1. Request Options (num_ctx) -> 2. Map -> 3. Global Env -> 4. Default 2048
+    options = {}
+    base_ctx = CONTEXT_WINDOW_MAP.get(model_id, CONTEXT_WINDOW_MAP.get(f"ollama:{model_id}"))
+    
+    # Use request-provided ctx, or map, or global default
+    ctx_size = num_ctx or base_ctx or state.ollama_num_ctx
+    
+    logger.warning(f"🔍 [CTX_DEBUG] Stream Call: Model='{model_id}' | MapCtx={base_ctx} | ReqCtx={num_ctx} | Final={ctx_size}")
+
     if ctx_size:
         options["num_ctx"] = ctx_size
     
@@ -382,8 +410,29 @@ async def call_ollama_chat(
     # [PATCH] Merge top-level kwargs (like keep_alive)
     ollama_body.update(kwargs)
     
+    # [Optimization] Smart Context Sizing (Gateway Level)
+    CONTEXT_WINDOW_MAP = {
+        "llama3.3:70b": 32768,      # Brain (Deep Context)
+        "ollama:llama3.3:70b": 32768,
+        "qwen2.5:32b": 8192,        # Auditor (Medium Context)
+        "ollama:qwen2.5:32b": 8192,
+        "llama3.1:latest": 2048,    # Router (Transactional)
+        "ollama:llama3.1:latest": 2048,
+        "llama3.2:latest": 2048,    # Small Tasks (Transactional)
+        "ollama:llama3.2:latest": 2048,
+        "llama3.2-vision:latest": 2048, # Vision (Transactional)
+        "ollama:llama3.2-vision:latest": 2048,
+        "qwen2.5:7b-instruct": 2048, # Query Refinement (Transactional)
+        "ollama:qwen2.5:7b-instruct": 2048,
+    }
+    
     options = {}
-    ctx_size = num_ctx or state.ollama_num_ctx
+    base_ctx = CONTEXT_WINDOW_MAP.get(model_id, CONTEXT_WINDOW_MAP.get(f"ollama:{model_id}"))
+    
+    ctx_size = num_ctx or base_ctx or state.ollama_num_ctx
+    
+    logger.warning(f"🔍 [CTX_DEBUG] Sync Call: Model='{model_id}' | MapCtx={base_ctx} | ReqCtx={num_ctx} | Final={ctx_size}")
+
     if ctx_size:
         options["num_ctx"] = ctx_size
     

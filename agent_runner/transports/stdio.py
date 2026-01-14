@@ -8,6 +8,16 @@ from pathlib import Path
 from typing import Any, List, Dict
 from common.logging_utils import log_json_event as _log_json_event
 from agent_runner.state import AgentState
+from agent_runner.constants import (
+    LOCK_ACQUISITION_TIMEOUT_SECONDS,
+    ERROR_STDERR_READ_FAILED,
+    ERROR_PROCESS_CREATION_FAILED,
+    ERROR_PROCESS_STREAM_CLOSE_FAILED,
+    PROCESS_INITIALIZATION_TIMEOUT_SECONDS,
+    NON_CORE_PROCESS_TIMEOUT_SECONDS,
+    PROCESS_WAIT_TIMEOUT_SECONDS,
+    STDERR_READ_TIMEOUT_SECONDS
+)
 
 logger = logging.getLogger("agent_runner")
 
@@ -22,8 +32,9 @@ def _cleanup_on_exit():
         try:
             if proc.returncode is None:
                 proc.kill()
-        except Exception:
-            pass
+        except Exception as e:
+
+            logger.debug(ERROR_STDERR_READ_FAILED.format(error=e))
 
 atexit.register(_cleanup_on_exit)
 
@@ -56,8 +67,9 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
     
     # Add timeout to prevent indefinite deadlocks (10 seconds max wait)
     # Add timeout to prevent indefinite deadlocks (10 seconds max wait)
+    # Add timeout to prevent indefinite deadlocks (10 seconds max wait)
     try:
-        await asyncio.wait_for(state.stdio_process_locks[server].acquire(), timeout=10.0)
+        await asyncio.wait_for(state.stdio_process_locks[server].acquire(), timeout=LOCK_ACQUISITION_TIMEOUT_SECONDS)
         lock_acquired = True
         
         # Check if process exists and is alive
@@ -135,9 +147,10 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
                 stderr_data = b""
                 if proc.stderr:
                     try:
-                        stderr_data = await asyncio.wait_for(proc.stderr.read(1024), timeout=1.0)
-                    except Exception:
-                        pass
+                        stderr_data = await asyncio.wait_for(proc.stderr.read(1024), timeout=STDERR_READ_TIMEOUT_SECONDS)
+                    except Exception as e:
+
+                        logger.debug(ERROR_STDERR_READ_FAILED.format(error=e))
                 print(f"DEBUG: PROCESS DIED IMMEDIATELY. ReturnCode: {proc.returncode}. Stderr: {stderr_data}")
                 logger.error(
                     f"Stdio process for '{server}' died immediately (returncode={proc.returncode}). "
@@ -170,7 +183,7 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
             
             return proc
         except Exception as e:
-                print(f"DEBUG: STDIO EXCEPTION: {e}")
+                logger.error(ERROR_PROCESS_CREATION_FAILED.format(error=e))
                 _log_json_event("mcp_stdio_start_error", server=server, error=str(e))
                 if proc is not None:
                     try:
@@ -179,8 +192,9 @@ async def get_or_create_stdio_process(state: AgentState, server: str, cmd: List[
                         if proc.stderr: proc.stderr.close()
                         proc.kill()
                         await proc.wait()
-                    except Exception:
-                        pass
+                    except Exception as e:
+
+                        logger.debug(ERROR_STDERR_READ_FAILED.format(error=e))
                 return None
                 return None
     except asyncio.TimeoutError:
@@ -205,8 +219,10 @@ async def initialize_stdio_process(state: AgentState, server: str, proc: Any) ->
     lock_acquired = False
     
     # Add timeout to prevent indefinite deadlocks (10 seconds max wait)
+    # Add timeout to prevent indefinite deadlocks (10 seconds max wait)
+    # Add timeout to prevent indefinite deadlocks (10 seconds max wait)
     try:
-        await asyncio.wait_for(state.stdio_process_locks[server].acquire(), timeout=10.0)
+        await asyncio.wait_for(state.stdio_process_locks[server].acquire(), timeout=LOCK_ACQUISITION_TIMEOUT_SECONDS)
         lock_acquired = True
         try:
             if state.stdio_process_initialized.get(server, False):
@@ -240,7 +256,7 @@ async def initialize_stdio_process(state: AgentState, server: str, proc: Any) ->
                 
                 # Use longer timeout for initialization: 20s for core services, 15s for non-core
                 from agent_runner.constants import CORE_MCP_SERVERS
-                init_timeout = 20.0 if server in CORE_MCP_SERVERS else 15.0
+                init_timeout = PROCESS_INITIALIZATION_TIMEOUT_SECONDS if server in CORE_MCP_SERVERS else NON_CORE_PROCESS_TIMEOUT_SECONDS
                 
                 try:
                     init_resp_line = await asyncio.wait_for(proc.stdout.readline(), timeout=init_timeout)
@@ -287,7 +303,7 @@ async def cleanup_stdio_process(state: AgentState, server: str) -> None:
     try:
         proc.terminate()
         try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
+            await asyncio.wait_for(proc.wait(), timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
@@ -302,7 +318,7 @@ async def cleanup_stdio_process(state: AgentState, server: str) -> None:
         if proc.stdout: proc.stdout.close()
         if proc.stderr: proc.stderr.close()
     except Exception as cleanup_err:
-        logger.debug(f"Error closing process streams: {cleanup_err}")
+        logger.debug(ERROR_PROCESS_STREAM_CLOSE_FAILED.format(error=cleanup_err))
     
     if server in state.stdio_processes: del state.stdio_processes[server]
     if server in state.stdio_process_initialized: del state.stdio_process_initialized[server]

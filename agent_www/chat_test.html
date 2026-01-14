@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Antigravity Chat Test (Unified 70B)</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            background: #111;
+            color: #eee;
+        }
+
+        #chat-box {
+            border: 1px solid #333;
+            padding: 1rem;
+            height: 400px;
+            overflow-y: auto;
+            background: #222;
+            margin-bottom: 1rem;
+            border-radius: 8px;
+        }
+
+        .message {
+            margin-bottom: 0.5rem;
+            padding: 0.5rem;
+            border-radius: 4px;
+        }
+
+        .user {
+            background: #004400;
+            text-align: right;
+        }
+
+        .assistant {
+            background: #000044;
+        }
+
+        input {
+            width: 70%;
+            padding: 0.5rem;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Antigravity Verification (Unified 70B)</h1>
+    <div id="status">Status: Ready</div>
+    <div id="chat-box"></div>
+    <div style="display: flex; gap: 10px;">
+        <input type="text" id="user-input" placeholder="Type a message..." value="Hello"
+            onkeydown="if(event.key==='Enter') sendMessage()">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById('user-input');
+            const chatBox = document.getElementById('chat-box');
+            const status = document.getElementById('status');
+            const text = input.value;
+            if (!text) return;
+
+            // Add user message via simple div
+            const userDiv = document.createElement('div');
+            userDiv.className = 'message user';
+            userDiv.innerText = text;
+            chatBox.appendChild(userDiv);
+            input.value = '';
+
+            // Add assistant placeholder
+            const botDiv = document.createElement('div');
+            botDiv.className = 'message assistant';
+            botDiv.innerText = '...';
+            chatBox.appendChild(botDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            status.innerText = 'Status: Streaming...';
+            const startTime = performance.now();
+            let firstToken = true;
+
+            try {
+                // Accessing via 127.0.0.1 (IPv4 explicit)
+                const response = await fetch('http://127.0.0.1:5460/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'agent',
+                        messages: [{ role: 'user', content: text }],
+                        stream: true
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                botDiv.innerText = ''; // Clear placeholder
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') break;
+                            try {
+                                const parsed = JSON.parse(data);
+                                const content = parsed.choices[0].delta.content;
+                                if (content) {
+                                    if (firstToken) {
+                                        const latency = Math.round(performance.now() - startTime);
+                                        status.innerText = `Status: Streaming (TTFT: ${latency}ms)`;
+                                        firstToken = false;
+                                    }
+                                    botDiv.innerText += content;
+                                    chatBox.scrollTop = chatBox.scrollHeight;
+                                }
+                            } catch (e) {
+                                console.error('Error parsing JSON:', e);
+                            }
+                        }
+                    }
+                }
+                const totalTime = Math.round(performance.now() - startTime);
+                if (status.innerText.includes("Streaming")) {
+                    status.innerText += ` | Total: ${totalTime}ms`;
+                }
+            } catch (err) {
+                botDiv.innerText += '\n[Error: ' + err.message + ']';
+                status.innerText = 'Status: Error';
+            }
+        }
+    </script>
+</body>
+
+</html>

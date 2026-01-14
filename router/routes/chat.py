@@ -191,7 +191,7 @@ async def _handle_chat_internal(request_id: str, body: Dict[str, Any], prefix: s
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return JSONResponse({"error": {"message": str(e), "type": "internal_server_error"}}, status_code=500)
-    
+
     elif prefix == PREFIX_OLLAMA:
         # [PATCH] Extract extra params for Ollama (keep_alive, options)
         extra_kwargs = {}
@@ -294,5 +294,97 @@ async def _handle_chat_internal(request_id: str, body: Dict[str, Any], prefix: s
                     if isinstance(e, HTTPException):
                         raise
                     raise HTTPException(status_code=500, detail=str(e))
-            
+
+    # [NEW] Universal hallucination detection for all chat responses
+    logger.warning(f"HALLUCINATION_CHECK: Processing {prefix} response")
+    try:
+        # Apply to all response types that have content
+        response_to_check = None
+        messages_for_context = body.get("messages", [])
+
+        if prefix == PREFIX_AGENT:
+            # Agent responses come as JSONResponse objects
+            if 'result' in locals() and isinstance(result, dict):
+                response_to_check = result
+                logger.warning("HALLUCINATION_CHECK: Found agent result to check")
+        elif prefix == PREFIX_OLLAMA:
+            # Ollama responses come as data dict
+            if 'data' in locals() and isinstance(data, dict):
+                response_to_check = data
+                logger.warning("HALLUCINATION_CHECK: Found ollama data to check")
+
+        if response_to_check and isinstance(response_to_check, dict):
+            logger.warning("HALLUCINATION_CHECK: Checking response for hallucinations")
+            if (response_to_check.get("object") == "chat.completion" and
+                response_to_check.get("choices") and
+                len(response_to_check["choices"]) > 0):
+
+                choice = response_to_check["choices"][0]
+                message = choice.get("message", {})
+                content = message.get("content", "")
+
+                if content and len(content.strip()) > 10:  # Only check substantial responses
+                    # Import hallucination detector
+                    from agent_runner.hallucination_detector import HallucinationDetector, DetectorConfig
+
+                    # Get shared state
+                    try:
+                        from router.config import state as router_state
+                        detector_config = DetectorConfig(enabled=True)
+                        detector = HallucinationDetector(router_state, detector_config)
+
+                        # Prepare context for detection
+                        user_messages = [msg for msg in messages_for_context if msg.get("role") == "user"]
+                        user_query = user_messages[-1]["content"] if user_messages else ""
+
+                        context = {
+                            "response": content,
+                            "user_query": user_query,
+                            "conversation_history": messages_for_context[:-1] if len(messages_for_context) > 1 else [],
+                            "model_info": {"model": requested_model or "unknown"}
+                        }
+
+                        # Run hallucination detection
+                        logger.warning("HALLUCINATION_CHECK: Starting detection")
+                        detection_result = await detector.detect_hallucinations(**context)
+                        logger.warning(f"HALLUCINATION_CHECK: Detection completed - hallucination: {detection_result.is_hallucination}")
+
+                        # Log detection results
+                        if detection_result.is_hallucination:
+                            logger.warning(f"HALLUCINATION DETECTED in {prefix} response: severity={detection_result.severity.value}, confidence={detection_result.confidence:.2f}")
+
+                            # For critical hallucinations, replace with safe response
+                            if detection_result.severity.value == "critical":
+                                logger.warning("HALLUCINATION_CHECK: Replacing with safe response")
+                                choice["message"]["content"] = "I apologize, but I cannot provide accurate information about that topic. Please consult the official documentation or try rephrasing your question."
+                                choice["message"]["hallucination_detected"] = True
+                            elif detection_result.severity.value == "high":
+                                logger.warning("HALLUCINATION_CHECK: Adding warning to response")
+                                # Add warning but keep original response
+                                choice["message"]["content"] += "\n\n⚠️ *Note: This response may contain inaccuracies. Please verify the information.*"
+                                choice["message"]["hallucination_warning"] = True
+
+                        # Add detection metadata to response
+                        choice["message"]["hallucination_check"] = {
+                            "detected": detection_result.is_hallucination,
+                            "severity": detection_result.severity.value,
+                            "confidence": detection_result.confidence,
+                            "issues_count": len(detection_result.detected_issues)
+                        }
+                        logger.warning(f"HALLUCINATION_CHECK: Added metadata to response")
+
+                        # Cleanup
+                        await detector.cleanup()
+                        logger.warning("HALLUCINATION_CHECK: Cleanup completed")
+
+                    except Exception as detect_e:
+                        logger.error(f"HALLUCINATION_CHECK: Detection failed: {detect_e}")
+                        import traceback
+                        logger.error(f"HALLUCINATION_CHECK: Traceback: {traceback.format_exc()}")
+                        # Don't fail the request if detection fails
+
+    except Exception as post_e:
+        logger.error(f"Post-processing failed: {post_e}")
+        # Don't fail the request if post-processing fails
+
     raise HTTPException(status_code=404, detail=f"Provider or model not found: {prefix}:{model_id}")

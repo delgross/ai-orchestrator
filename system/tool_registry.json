@@ -1,17 +1,17 @@
 {
-  "timestamp": 1767492246.135741,
+  "timestamp": 1768335902.2700748,
   "native_tools": [
     {
       "type": "function",
       "function": {
-        "name": "run_latency_tests",
-        "description": "Run an integrated set of latency tests (Ping, Embedding, DB Write, LLM Token Gen). Runs asynchronously by default.",
+        "name": "get_current_time",
+        "description": "Get current time in ISO format or specific timezone.",
         "parameters": {
           "type": "object",
           "properties": {
-            "background": {
-              "type": "boolean",
-              "description": "Run in background and report to Live Stream (default: true)."
+            "timezone": {
+              "type": "string",
+              "description": "Timezone e.g. 'America/New_York'"
             }
           }
         }
@@ -20,31 +20,36 @@
     {
       "type": "function",
       "function": {
-        "name": "registry_manage",
-        "description": "Manage the Sovereign Registry (Database-Backed Configuration). Use this to inspect or change system configuration (models, ports, policies).",
+        "name": "get_location",
+        "description": "Get current physical location of the server/agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "convert_time",
+        "description": "Convert time between timezones.",
         "parameters": {
           "type": "object",
           "properties": {
-            "action": {
+            "time_str": {
               "type": "string",
-              "enum": [
-                "list",
-                "get",
-                "set"
-              ],
-              "description": "Action to perform"
+              "description": "Time string"
             },
-            "target": {
-              "type": "string",
-              "description": "Target section (list) or key (get/set). e.g. 'models', 'policy:internet'"
+            "source_tz": {
+              "type": "string"
             },
-            "value": {
-              "type": "string",
-              "description": "Value to set (only for 'set' action)"
+            "target_tz": {
+              "type": "string"
             }
           },
           "required": [
-            "action"
+            "time_str",
+            "target_tz"
           ]
         }
       }
@@ -52,23 +57,45 @@
     {
       "type": "function",
       "function": {
+        "name": "get_graph_snapshot",
+        "description": "Get a snapshot of the knowledge graph (nodes/edges).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "description": "Max nodes (default 100)"
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "mermaid"
+              ],
+              "default": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "list_dir",
-        "description": "List contents of a directory in the sandboxed workspace. Returns file names, sizes, and types.",
+        "description": "List contents of a directory in the sandboxed workspace.",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
-              "description": "Relative path to list (default '.')"
+              "description": "Relative path (default '.')"
             },
             "recursive": {
               "type": "boolean",
-              "description": "Whether to list subdirectories",
               "default": false
             },
             "max_depth": {
               "type": "integer",
-              "description": "Max recursion depth",
               "default": 2
             }
           }
@@ -79,17 +106,19 @@
       "type": "function",
       "function": {
         "name": "read_text",
-        "description": "Read the text content of a file from the workspace.",
+        "description": "Read text file content.",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
-              "description": "Path to the file to read."
+              "description": "Path to file"
             },
-            "max_bytes": {
-              "type": "integer",
-              "description": "Optional limit on bytes to read."
+            "start_line": {
+              "type": "integer"
+            },
+            "end_line": {
+              "type": "integer"
             }
           },
           "required": [
@@ -102,22 +131,17 @@
       "type": "function",
       "function": {
         "name": "write_text",
-        "description": "Create a new file or overwrite an existing one with text content.",
+        "description": "Write text to file (overwrites).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
-              "description": "Path to create/overwrite."
+              "description": "Path to file"
             },
             "content": {
               "type": "string",
-              "description": "The text content to write."
-            },
-            "overwrite": {
-              "type": "boolean",
-              "description": "Whether to allow overwriting existing files.",
-              "default": false
+              "description": "Content to write"
             }
           },
           "required": [
@@ -130,144 +154,35 @@
     {
       "type": "function",
       "function": {
-        "name": "mcp_proxy",
-        "description": "Call a tool on an MCP (Model Context Protocol) server. Useful for external capabilities like weather, search, or specialized databases.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "server": {
-              "type": "string",
-              "description": "The name of the MCP server to call."
-            },
-            "tool": {
-              "type": "string",
-              "description": "The name of the tool on that server."
-            },
-            "arguments": {
-              "type": "object",
-              "description": "The arguments to pass to the tool."
-            }
-          },
-          "required": [
-            "server",
-            "tool",
-            "arguments"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "query_static_resources",
-        "description": "Search or read documentation and reference materials from the 'Static Resources' folder.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": "Optional keyword search query."
-            },
-            "resource_name": {
-              "type": "string",
-              "description": "Specific file name to read."
-            },
-            "list_all": {
-              "type": "boolean",
-              "description": "List all available resources."
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "knowledge_search",
-        "description": "Deep search across uploaded PDFs, manuals, and long-form documents in your knowledge bases (RAG). Use this for complex questions that require more than just short facts.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": "The specific question or topic to search for."
-            },
-            "kb_id": {
-              "type": "string",
-              "description": "The specific knowledge base to search (default 'default')."
-            },
-            "filters": {
-              "type": "object",
-              "description": "Optional metadata filters (e.g. {'brand': 'TIME', 'visual_credibility': {'$gt': 0.8}})."
-            }
-          },
-          "required": [
-            "query"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "search",
-        "description": "The ultimate search tool. It automatically checks your short-term facts (SurrealDB) AND your deep-knowledge bases (RAG). Use this first for any question about your project, farm, or past conversations.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": "The question or topic to search for."
-            }
-          },
-          "required": [
-            "query"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "ingest_knowledge",
-        "description": "Store a piece of text into the deep knowledge base (RAG). Use this for permanent business logic, farm specs, or medical protocols.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "text": {
-              "type": "string",
-              "description": "The content to remember."
-            },
-            "kb_id": {
-              "type": "string",
-              "description": "Knowledge base ID (default 'default')."
-            },
-            "source_name": {
-              "type": "string",
-              "description": "Friendly name for the source (e.g. 'Farm Policy 2025')."
-            }
-          },
-          "required": [
-            "text"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "ingest_file",
-        "description": "Take an existing file from the uploads folder and ingest it into the deep knowledge base.",
+        "name": "append_text",
+        "description": "Append text to file.",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
-              "type": "string",
-              "description": "Path to the file (e.g. 'uploads/data.txt')."
+              "type": "string"
             },
-            "kb_id": {
-              "type": "string",
-              "description": "Knowledge base ID (default 'default')."
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "make_dir",
+        "description": "Create directory recursively.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
             }
           },
           "required": [
@@ -279,23 +194,61 @@
     {
       "type": "function",
       "function": {
+        "name": "path_info",
+        "description": "Get file/directory metadata.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "find_files",
+        "description": "Find files matching pattern.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string",
+              "description": "Glob pattern e.g. '*.py'"
+            }
+          },
+          "required": [
+            "path",
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "run_command",
-        "description": "Execute a shell command. Use this for running scripts, refactoring tools, or system operations. Requires 'enable_command_execution' in config.",
+        "description": "Execute shell command (Sandboxed).",
         "parameters": {
           "type": "object",
           "properties": {
             "command": {
-              "type": "string",
-              "description": "The shell command to run."
+              "type": "string"
+            },
+            "timeout": {
+              "type": "integer",
+              "default": 60
             },
             "background": {
               "type": "boolean",
-              "description": "Run in background (async).",
-              "default": false
-            },
-            "dry_run": {
-              "type": "boolean",
-              "description": "Simulate safety checks without execution. Use for impact analysis.",
               "default": false
             }
           },
@@ -309,21 +262,16 @@
       "type": "function",
       "function": {
         "name": "run_node",
-        "description": "Execute JavaScript code using the Node.js runtime. Useful for web scraping, data processing, or testing JS/TS logic.",
+        "description": "Execute Node.js script.",
         "parameters": {
           "type": "object",
           "properties": {
-            "code": {
-              "type": "string",
-              "description": "The JavaScript code to execute."
-            },
-            "dependency_check": {
-              "type": "boolean",
-              "description": "Check for basic dependencies (default True)."
+            "script": {
+              "type": "string"
             }
           },
           "required": [
-            "code"
+            "script"
           ]
         }
       }
@@ -331,18 +279,160 @@
     {
       "type": "function",
       "function": {
-        "name": "run_npm",
-        "description": "Run NPM commands (install, init, etc) in the current workspace.",
+        "name": "check_system_health",
+        "description": "Run diagnostic health check.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "restart_agent",
+        "description": "Restart the Agent Runner service.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_secret",
+        "description": "Securely save/retrieve API keys.",
         "parameters": {
           "type": "object",
           "properties": {
-            "command": {
+            "action": {
               "type": "string",
-              "description": "The NPM command args (e.g. 'install axios'). Do not include 'npm' prefix."
+              "enum": [
+                "set",
+                "get",
+                "delete"
+              ]
+            },
+            "key": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
             }
           },
           "required": [
-            "command"
+            "action",
+            "key"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_store_fact",
+        "description": "Store a fact in long-term memory.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string",
+              "description": "fact content"
+            },
+            "category": {
+              "type": "string",
+              "default": "general"
+            },
+            "confidence": {
+              "type": "number",
+              "default": 1.0
+            }
+          },
+          "required": [
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_query_facts",
+        "description": "Retrieve facts from long-term memory.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Natural language query"
+            },
+            "limit": {
+              "type": "integer",
+              "default": 5
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_search_semantic",
+        "description": "Semantic search over memory episodes.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "default": 10
+            },
+            "threshold": {
+              "type": "number",
+              "default": 0.7
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_consolidate",
+        "description": "Trigger memory consolidation/cleanup.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "sequential_thinking",
+        "description": "Internal Chain of Thought engine.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "thought": {
+              "type": "string"
+            },
+            "needs_more_time": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "thought",
+            "needs_more_time"
           ]
         }
       }
@@ -351,13 +441,12 @@
       "type": "function",
       "function": {
         "name": "unlock_session",
-        "description": "Unlock 'God Mode' for the current session. Requires password ('lloovies').",
+        "description": "Unlock admin session with password.",
         "parameters": {
           "type": "object",
           "properties": {
             "password": {
-              "type": "string",
-              "description": "The secret passphrase."
+              "type": "string"
             }
           },
           "required": [
@@ -370,26 +459,20 @@
       "type": "function",
       "function": {
         "name": "set_policy",
-        "description": "Override ANY system policy (e.g. 'internet', 'safety', 'limits'). Requires active session unlock OR password.",
+        "description": "Update security policy.",
         "parameters": {
           "type": "object",
           "properties": {
+            "entity": {
+              "type": "string"
+            },
             "policy": {
-              "type": "string",
-              "description": "Name of policy (e.g. 'internet', 'safety', 'limits')."
-            },
-            "value": {
-              "type": "string",
-              "description": "New value (e.g. 'true', 'infinity')."
-            },
-            "password": {
-              "type": "string",
-              "description": "Optional: override password if session not unlocked."
+              "type": "string"
             }
           },
           "required": [
-            "policy",
-            "value"
+            "entity",
+            "policy"
           ]
         }
       }
@@ -398,7 +481,7 @@
       "type": "function",
       "function": {
         "name": "check_admin_status",
-        "description": "Check the current admin override status and internet policy.",
+        "description": "Check current admin privileges.",
         "parameters": {
           "type": "object",
           "properties": {}
@@ -408,18 +491,17 @@
     {
       "type": "function",
       "function": {
-        "name": "trigger_task",
-        "description": "Trigger a background task to run immediately.",
+        "name": "remove_file",
+        "description": "Delete file.",
         "parameters": {
           "type": "object",
           "properties": {
-            "task_name": {
-              "type": "string",
-              "description": "The name of the task (e.g. 'night_shift_refactor', 'cloud_refactor_audit')."
+            "path": {
+              "type": "string"
             }
           },
           "required": [
-            "task_name"
+            "path"
           ]
         }
       }
@@ -427,100 +509,18 @@
     {
       "type": "function",
       "function": {
-        "name": "report_missing_tool",
-        "description": "Call this when you CANNOT complete a task because you lack a specific tool.",
+        "name": "remove_dir",
+        "description": "Delete directory.",
         "parameters": {
           "type": "object",
           "properties": {
-            "tool_name": {
-              "type": "string",
-              "description": "Name of the hypothetical tool you need."
-            },
-            "reason": {
-              "type": "string",
-              "description": "Explanation of why existing tools are insufficient."
+            "path": {
+              "type": "string"
             }
           },
           "required": [
-            "tool_name",
-            "reason"
+            "path"
           ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "run_memory_consolidation",
-        "description": "Trigger the memory consolidation process manually.",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "remove_memory_from_file",
-        "description": "Surgically 'Forget' a fact by identifying and removing the concept from a source file (preserving formatting).",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "target_text": {
-              "type": "string",
-              "description": "The concept or fact to forget (e.g. 'Remove the definition of Uplink')."
-            },
-            "file_path": {
-              "type": "string",
-              "description": "The path to the source file (e.g. 'brain/system_lexicon.md')."
-            }
-          },
-          "required": [
-            "target_text",
-            "file_path"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "check_system_health",
-        "description": "Check the health status of the entire Orchestrator (Router, Agent, Circuit Breakers). Use this if the user asks about 'system status', 'health', or 'breakers'.",
-        "parameters": {
-          "type": "object",
-          "properties": {}
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "import_mcp_config",
-        "description": "Smartly import MCP server configurations from raw text or JSON. Use this when the user pastes a config or asks to 'install this server'.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "raw_text": {
-              "type": "string",
-              "description": "The raw text, JSON, or URL snippet provided by the user."
-            }
-          },
-          "required": [
-            "raw_text"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "get_service_status",
-        "description": "Get a health report of all system services (Router, Agent, RAG, DB). Use for diagnosis.",
-        "parameters": {
-          "type": "object",
-          "properties": {}
         }
       }
     },
@@ -528,7 +528,7 @@
       "type": "function",
       "function": {
         "name": "get_component_map",
-        "description": "List all system roles and their assigned models. Use to answer 'What model is the Router?'",
+        "description": "List all system roles and their assigned models. Use to answer questions about models, inventory all LLMs, list all internal models, or what model is the Router using. Returns data from database (source of truth).",
         "parameters": {
           "type": "object",
           "properties": {}
@@ -539,7 +539,164 @@
       "type": "function",
       "function": {
         "name": "get_active_configuration",
-        "description": "Read the current system configuration and environment variables (secrets masked).",
+        "description": "Read the current system configuration from database, including all model assignments (AGENT_MODEL, ROUTER_MODEL, etc.). Use to answer questions about models, inventory all LLMs, or show system configuration. Secrets are masked. Database is source of truth.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_web",
+        "description": "Search the web for real-time information.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "domain": {
+              "type": "string",
+              "description": "Optional domain filter"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "consult_advice",
+        "description": "Consult the Advice Subsystem/Critic.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_latency_tests",
+        "description": "Run system latency diagnostics.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_circuit_breaker_status",
+        "description": "Check circuit breaker health.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "ingest_knowledge",
+        "description": "Ingest raw text/markdown into Sovereign Memory.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "source"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_mcp_server_status",
+        "description": "Get status of all MCP servers (enabled/disabled, tool counts). Use this to debug missing tools.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_all_available_tools",
+        "description": "List all available tools in the system by category.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "description": "Optional category filter"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_system_prompt",
+        "description": "Get the current system prompt being used.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_memory_facts",
+        "description": "Get facts from memory.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "entity": {
+              "type": "string"
+            },
+            "relation": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_llm_roles",
+        "description": "Get LLM role assignments.",
         "parameters": {
           "type": "object",
           "properties": {}
@@ -550,7 +707,7 @@
       "type": "function",
       "function": {
         "name": "list_system_toggles",
-        "description": "List all interactive system toggles (e.g. Router Mode, Internet) and their current values.",
+        "description": "List system toggles and their current states.",
         "parameters": {
           "type": "object",
           "properties": {}
@@ -561,13 +718,12 @@
       "type": "function",
       "function": {
         "name": "get_system_config",
-        "description": "Get the value of a specific system setting (e.g. 'router_mode').",
+        "description": "Get a specific system configuration value.",
         "parameters": {
           "type": "object",
           "properties": {
             "key": {
-              "type": "string",
-              "description": "The config key to fetch."
+              "type": "string"
             }
           },
           "required": [
@@ -579,75 +735,33 @@
     {
       "type": "function",
       "function": {
-        "name": "set_system_config",
-        "description": "Update a system setting dynamically (e.g. switch 'router_mode' to 'async').",
+        "name": "mcp_proxy",
+        "description": "[AUTO] Proxy a tool call to a configured MCP server.",
         "parameters": {
           "type": "object",
-          "properties": {
-            "key": {
-              "type": "string",
-              "description": "The config key to update."
-            },
-            "value": {
-              "type": "string",
-              "description": "The new value."
-            }
-          },
-          "required": [
-            "key",
-            "value"
-          ]
+          "properties": {}
         }
       }
     },
     {
       "type": "function",
       "function": {
-        "name": "sentinel_authorize",
-        "description": "Authorize a command pattern that was blocked by the Sentinel security system.",
+        "name": "run_chat_latency_test",
+        "description": "[AUTO] Run comprehensive chat interface latency test.",
         "parameters": {
           "type": "object",
-          "properties": {
-            "command": {
-              "type": "string",
-              "description": "The command string to whitelist (e.g. 'rm -rf ./temp')."
-            }
-          },
-          "required": [
-            "command"
-          ]
+          "properties": {}
         }
       }
     },
     {
       "type": "function",
       "function": {
-        "name": "register_trigger",
-        "description": "Register a new dynamic trigger/keyword/slash-command. Add new modes on the fly.",
+        "name": "run_npm",
+        "description": "[AUTO] Run NPM commands (install, init, etc).",
         "parameters": {
           "type": "object",
-          "properties": {
-            "pattern": {
-              "type": "string",
-              "description": "Keyword to listen for (e.g. 'verbose_mode')."
-            },
-            "action_type": {
-              "type": "string",
-              "description": "Action type: 'control_ui', 'menu', 'system_prompt'."
-            },
-            "action_data": {
-              "type": "string",
-              "description": "JSON string of parameters."
-            },
-            "description": {
-              "type": "string",
-              "description": "Human readable help text."
-            }
-          },
-          "required": [
-            "pattern",
-            "action_type"
-          ]
+          "properties": {}
         }
       }
     },
@@ -655,18 +769,791 @@
       "type": "function",
       "function": {
         "name": "remove_trigger",
-        "description": "Remove a dynamic trigger/mode.",
+        "description": "[AUTO] Remove a dynamic trigger by its pattern.",
         "parameters": {
           "type": "object",
-          "properties": {
-            "pattern": {
-              "type": "string",
-              "description": "The trigger keyword to remove."
-            }
-          },
-          "required": [
-            "pattern"
-          ]
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "set_quality_tier",
+        "description": "[AUTO] Set the system quality tier for response generation.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "remove_memory_from_file",
+        "description": "[AUTO] Surgically removes a memory/fact from a source file using Intelligence.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "sentinel_authorize",
+        "description": "[AUTO] Explicitly authorize a command pattern that was previously blocked by Sentinel.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_quality_tier",
+        "description": "[AUTO] Get the current quality tier and configuration.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "analyze_thinking_efficiency",
+        "description": "[AUTO] Analyze thinking session and suggest optimizations.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_last_system_prompt",
+        "description": "[AUTO] [Debug] View the exact System Prompt used for the last turn.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "control_refinement",
+        "description": "[AUTO] Control query refinement and memory retrieval.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "reset_mcp_servers",
+        "description": "[AUTO] Reset all MCP servers to enabled=True in the database and trigger rediscovery.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "pause_ingestion",
+        "description": "[AUTO] Pause the RAG ingestion pipeline.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "set_context_prune_limit",
+        "description": "[AUTO] Set context pruning limit.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_system_diagnostics",
+        "description": "[AUTO] Get comprehensive system diagnostics.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_ingestion_status",
+        "description": "[AUTO] Get the status of the RAG ingestion pipeline.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_task_health",
+        "description": "[AUTO] Get health status of all background tasks.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_active_advice",
+        "description": "[AUTO] [Debug] View the Advice Topics that were active in the last turn.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "reload_mcp_servers",
+        "description": "[AUTO] Reload all MCP servers and rediscover their tools.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_thinking_branch",
+        "description": "[AUTO] Start a parallel thinking branch.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_tool_health_dashboard",
+        "description": "[AUTO] Get comprehensive tool health dashboard.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "report_missing_tool",
+        "description": "[AUTO] Report a tool that is missing but required to complete a task.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "registry_read",
+        "description": "[AUTO] Read a specific Registry file from database (source of truth).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "trigger_memory_consolidation",
+        "description": "[AUTO] Manually trigger memory consolidation task.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_boot_status",
+        "description": "[AUTO] Check if a restart notification is pending. Used by Boot Scheduler.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_chat_functionality_analysis",
+        "description": "[AUTO] Get comprehensive analysis of chat functionality and system health.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "batch_operations",
+        "description": "[AUTO] No description provided.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "ingest_file",
+        "description": "[AUTO] Ingest a file from the local filesystem (sandbox) into RAG.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "registry_append",
+        "description": "[AUTO] Append text to a Registry file in database (source of truth).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "set_mode",
+        "description": "[AUTO] Switch the Agent's active mode (e.g. 'chat' -> 'coding').",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "analyze_query_classification",
+        "description": "[AUTO] Analyze how a query would be classified by the system.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "investigate_system_performance",
+        "description": "[AUTO] Run a granular investigation of system subsystems.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "trigger_task",
+        "description": "[AUTO] Manually trigger a registered background task to run immediately.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "reset_all_circuit_breakers",
+        "description": "[AUTO] Reset all circuit breakers in the system.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "registry_write",
+        "description": "[AUTO] Overwrite a Registry file completely in database (source of truth).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_file",
+        "description": "[AUTO] No description provided.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_thinking_session",
+        "description": "[AUTO] Start a thinking session with a template.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "evaluate_tool_health",
+        "description": "[AUTO] Evaluate health of a specific tool or all tools.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "install_mcp_package",
+        "description": "[AUTO] Install an NPM-based MCP server package automatically.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "register_trigger",
+        "description": "[AUTO] Register a new dynamic trigger (Slash Command or Keyword) for the Agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "import_mcp_config",
+        "description": "[AUTO] Smartly parse and import MCP server configurations from raw text or JSON.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_system_prompt",
+        "description": "[AUTO] Inspect the system prompt that would be generated for a given query.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_detailed_system_status",
+        "description": "[AUTO] Get comprehensive system status including all services.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_service_status",
+        "description": "[AUTO] Query the Orchestrator Router for a detailed health report of all services.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "add_mcp_server",
+        "description": "[AUTO] Add or update an MCP server configuration directly.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "[AUTO] No description provided.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_quality_tier_comparison",
+        "description": "[AUTO] Compare all quality tiers side-by-side with their configurations and performance estimates.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_model_config",
+        "description": "[AUTO] Update system model assignments (e.g., agent_model, router_model).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_registry_health",
+        "description": "[AUTO] Get health and validation status of the permanent memory registry.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_memory_consolidation",
+        "description": "[AUTO] Runs the specialized memory consolidation logic (extracting facts from episodes).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "reset_circuit_breaker",
+        "description": "[AUTO] Reset a specific circuit breaker to allow retries.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "resume_ingestion",
+        "description": "[AUTO] Resume a paused RAG ingestion pipeline.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "set_system_config",
+        "description": "[AUTO] Set a system configuration key.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "add_lexicon_entry",
+        "description": "[AUTO] Add a new learned error pattern to the system lexicon.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "knowledge_search",
+        "description": "[AUTO] Query the RAG server for deep content.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_tool_usage",
+        "description": "[AUTO] Record detailed tool usage for analytics.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_thinking_history",
+        "description": "[AUTO] Retrieve thinking history for a session.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "filter_tools_by_category",
+        "description": "[AUTO] Filter tools by category.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "deprecate_tool",
+        "description": "[AUTO] Deprecate a tool (mark as deprecated).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "evaluate_response_quality",
+        "description": "[AUTO] Evaluate the quality of an AI response against expectations.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_system_metrics",
+        "description": "[AUTO] Get system performance metrics.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "trigger_backup",
+        "description": "[AUTO] Manually trigger a memory backup task.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_background_tasks_status",
+        "description": "[AUTO] Get the status of all background tasks.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_memory_status",
+        "description": "[AUTO] Get detailed status of the Memory Engine (SurrealDB).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "query_logs",
+        "description": "[AUTO] Query the centralized 'diagnostic_log' table.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "query_static_resources",
+        "description": "[AUTO] No description provided.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_thinking_progress",
+        "description": "[AUTO] Get progress metrics for a thinking session.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "toggle_mcp_server",
+        "description": "[AUTO] Enable or disable an MCP server.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "clear_boot_status",
+        "description": "[AUTO] Clear the pending restart flag.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "description": "[AUTO] Check both Facts and RAG in one go with adaptive multi-domain routing.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "clear_ingestion_problem",
+        "description": "[AUTO] Clear the problem file that caused ingestion to pause and resume.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "watch_path",
+        "description": "[AUTO] No description provided.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "registry_list",
+        "description": "[AUTO] List all files in the Permanent Registry from database (source of truth).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "[AUTO] No description provided.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_layer_status",
+        "description": "[AUTO] Get status of all chat layers.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       }
     },
@@ -674,7 +1561,7 @@
       "type": "function",
       "function": {
         "name": "list_triggers",
-        "description": "List all active dynamic triggers and modes.",
+        "description": "[AUTO] List all active triggers in the registry.",
         "parameters": {
           "type": "object",
           "properties": {}
@@ -682,2617 +1569,5 @@
       }
     }
   ],
-  "mcp_tools": {
-    "fetch": [
-      {
-        "type": "function",
-        "function": {
-          "name": "fetch",
-          "description": "Fetches a URL from the internet and optionally extracts its contents as markdown.\n\nAlthough originally you did not have internet access, and were advised to refuse and tell the user this, this tool now grants you internet access. Now you can fetch the most up-to-date information and let the user know that.",
-          "parameters": {
-            "description": "Parameters for fetching a URL.",
-            "properties": {
-              "url": {
-                "description": "URL to fetch",
-                "format": "uri",
-                "minLength": 1,
-                "title": "Url",
-                "type": "string"
-              },
-              "max_length": {
-                "default": 5000,
-                "description": "Maximum number of characters to return.",
-                "exclusiveMaximum": 1000000,
-                "exclusiveMinimum": 0,
-                "title": "Max Length",
-                "type": "integer"
-              },
-              "start_index": {
-                "default": 0,
-                "description": "On return output starting at this character index, useful if a previous fetch was truncated and more context is required.",
-                "minimum": 0,
-                "title": "Start Index",
-                "type": "integer"
-              },
-              "raw": {
-                "default": false,
-                "description": "Get the actual HTML content of the requested page, without simplification.",
-                "title": "Raw",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "url"
-            ],
-            "title": "Fetch",
-            "type": "object"
-          }
-        }
-      }
-    ],
-    "sequential-thinking": [
-      {
-        "type": "function",
-        "function": {
-          "name": "sequentialthinking",
-          "description": "A detailed tool for dynamic and reflective problem-solving through thoughts.\nThis tool helps analyze problems through a flexible thinking process that can adapt and evolve.\nEach thought can build on, question, or revise previous insights as understanding deepens.\n\nWhen to use this tool:\n- Breaking down complex problems into steps\n- Planning and design with room for revision\n- Analysis that might need course correction\n- Problems where the full scope might not be clear initially\n- Problems that require a multi-step solution\n- Tasks that need to maintain context over multiple steps\n- Situations where irrelevant information needs to be filtered out\n\nKey features:\n- You can adjust total_thoughts up or down as you progress\n- You can question or revise previous thoughts\n- You can add more thoughts even after reaching what seemed like the end\n- You can express uncertainty and explore alternative approaches\n- Not every thought needs to build linearly - you can branch or backtrack\n- Generates a solution hypothesis\n- Verifies the hypothesis based on the Chain of Thought steps\n- Repeats the process until satisfied\n- Provides a correct answer\n\nParameters explained:\n- thought: Your current thinking step, which can include:\n  * Regular analytical steps\n  * Revisions of previous thoughts\n  * Questions about previous decisions\n  * Realizations about needing more analysis\n  * Changes in approach\n  * Hypothesis generation\n  * Hypothesis verification\n- nextThoughtNeeded: True if you need more thinking, even if at what seemed like the end\n- thoughtNumber: Current number in sequence (can go beyond initial total if needed)\n- totalThoughts: Current estimate of thoughts needed (can be adjusted up/down)\n- isRevision: A boolean indicating if this thought revises previous thinking\n- revisesThought: If is_revision is true, which thought number is being reconsidered\n- branchFromThought: If branching, which thought number is the branching point\n- branchId: Identifier for the current branch (if any)\n- needsMoreThoughts: If reaching end but realizing more thoughts needed\n\nYou should:\n1. Start with an initial estimate of needed thoughts, but be ready to adjust\n2. Feel free to question or revise previous thoughts\n3. Don't hesitate to add more thoughts if needed, even at the \"end\"\n4. Express uncertainty when present\n5. Mark thoughts that revise previous thinking or branch into new paths\n6. Ignore information that is irrelevant to the current step\n7. Generate a solution hypothesis when appropriate\n8. Verify the hypothesis based on the Chain of Thought steps\n9. Repeat the process until satisfied with the solution\n10. Provide a single, ideally correct answer as the final output\n11. Only set nextThoughtNeeded to false when truly done and a satisfactory answer is reached",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "thought": {
-                "description": "Your current thinking step",
-                "type": "string"
-              },
-              "nextThoughtNeeded": {
-                "description": "Whether another thought step is needed",
-                "type": "boolean"
-              },
-              "thoughtNumber": {
-                "description": "Current thought number (numeric value, e.g., 1, 2, 3)",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "totalThoughts": {
-                "description": "Estimated total thoughts needed (numeric value, e.g., 5, 10)",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "isRevision": {
-                "description": "Whether this revises previous thinking",
-                "type": "boolean"
-              },
-              "revisesThought": {
-                "description": "Which thought is being reconsidered",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "branchFromThought": {
-                "description": "Branching point thought number",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "branchId": {
-                "description": "Branch identifier",
-                "type": "string"
-              },
-              "needsMoreThoughts": {
-                "description": "If more thoughts are needed",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "thought",
-              "nextThoughtNeeded",
-              "thoughtNumber",
-              "totalThoughts"
-            ]
-          }
-        }
-      }
-    ],
-    "project-memory": [
-      {
-        "type": "function",
-        "function": {
-          "name": "store_fact",
-          "description": "Store a fact in long-term memory with an optional confidence score.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "entity": {
-                "type": "string"
-              },
-              "relation": {
-                "type": "string"
-              },
-              "target": {
-                "type": "string"
-              },
-              "context": {
-                "type": "object"
-              },
-              "confidence": {
-                "type": "number",
-                "description": "1.0 for user-confirmed ground truth, lower for agent-inferred guesses."
-              }
-            },
-            "required": [
-              "entity",
-              "relation",
-              "target"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "delete_fact",
-          "description": "Permanently delete a fact.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "fact_id": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "fact_id"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "query_facts",
-          "description": "Search facts.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "entity": {
-                "type": "string"
-              },
-              "relation": {
-                "type": "string"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "semantic_search",
-          "description": "Search by meaning.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "query": {
-                "type": "string"
-              },
-              "limit": {
-                "type": "integer"
-              }
-            },
-            "required": [
-              "query"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "record_tool_result",
-          "description": "Record tool result.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "model": {
-                "type": "string"
-              },
-              "tool": {
-                "type": "string"
-              },
-              "success": {
-                "type": "boolean"
-              },
-              "latency_ms": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "model",
-              "tool",
-              "success",
-              "latency_ms"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "get_suggested_tools",
-          "description": "Suggest tools.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "query_intent": {
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "query_intent",
-              "model"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "index_tools",
-          "description": "Index tools.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "tool_defs": {
-                "type": "array",
-                "items": {
-                  "type": "object"
-                }
-              }
-            },
-            "required": [
-              "tool_defs"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "index_own_architecture",
-          "description": "Index project.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "record_performance_snapshot",
-          "description": "Record metrics snapshot.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "model": {
-                "type": "string"
-              },
-              "total_calls": {
-                "type": "integer"
-              },
-              "success_rate": {
-                "type": "number"
-              },
-              "avg_latency_ms": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "model",
-              "total_calls",
-              "success_rate",
-              "avg_latency_ms"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "store_mcp_intel",
-          "description": "Store MCP server intel.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "github_url": {
-                "type": "string"
-              },
-              "newsletter": {
-                "type": "string"
-              },
-              "similar_servers": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            },
-            "required": [
-              "name",
-              "github_url",
-              "newsletter",
-              "similar_servers"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "query_mcp_intel",
-          "description": "Query MCP server intel.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "prune_offboarded_mcp_servers",
-          "description": "Remove stale MCP server intel.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "active_servers": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            },
-            "required": [
-              "active_servers"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "check_health",
-          "description": "Check health.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "get_memory_stats",
-          "description": "Get statistics about facts and episodes in memory.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "trigger_backup",
-          "description": "Trigger a manual backup of the memory database.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "reindex_memory",
-          "description": "Re-generate embeddings for all facts.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "process_memories",
-          "description": "Force processing of recent chats into memory.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "optimize_memory",
-          "description": "Run optimization/integrity checks on the memory database.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "store_episode",
-          "description": "Store a conversation episode.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "request_id": {
-                "type": "string"
-              },
-              "messages": {
-                "type": "array",
-                "items": {
-                  "type": "object"
-                }
-              }
-            },
-            "required": [
-              "request_id",
-              "messages"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "get_unconsolidated_episodes",
-          "description": "Get unconsolidated episodes.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "limit": {
-                "type": "integer"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "mark_episode_consolidated",
-          "description": "Mark episode as consolidated.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "request_id": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "request_id"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "store_source",
-          "description": "Store/Update a trusted source.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              },
-              "title": {
-                "type": "string"
-              },
-              "author": {
-                "type": "string"
-              },
-              "reliability": {
-                "type": "number"
-              },
-              "summary": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url",
-              "title"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "list_sources",
-          "description": "List trusted sources.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "limit": {
-                "type": "integer"
-              }
-            }
-          }
-        }
-      }
-    ],
-    "system-control": [
-      {
-        "type": "function",
-        "function": {
-          "name": "get_system_health",
-          "description": "Check connection/uptime of topology (Router, Agent, MCPs). Returns full server list.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "list_active_mcp_servers",
-          "description": "List all currently active MCP servers and their status.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "get_ingestion_status",
-          "description": "Get the status of the document ingestion queue (RAG). Use this to check if files are processed.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "read_service_logs",
-          "description": "Read recent logs from router, agent_runner, or ollama.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "service": {
-                "type": "string",
-                "enum": [
-                  "router",
-                  "agent_runner",
-                  "ollama"
-                ]
-              },
-              "lines": {
-                "type": "integer",
-                "default": 20
-              }
-            },
-            "required": [
-              "service"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "check_resource_usage",
-          "description": "Check CPU/RAM of orchestration processes and disk usage.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "trigger_maintenance",
-          "description": "Trigger 'backup' or 'consolidation' tasks.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "backup",
-                  "consolidation"
-                ]
-              }
-            },
-            "required": [
-              "type"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "speak_text",
-          "description": "Audio Output: Speak text aloud on the host machine using macOS or OpenAI. Use wait=False for non-blocking.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "text": {
-                "type": "string"
-              },
-              "provider": {
-                "type": "string",
-                "enum": [
-                  "default",
-                  "macos",
-                  "openai"
-                ],
-                "default": "default"
-              },
-              "voice": {
-                "type": "string",
-                "default": ""
-              },
-              "wait": {
-                "type": "boolean",
-                "default": false,
-                "description": "If true, wait for audio to finish before returning."
-              }
-            },
-            "required": [
-              "text"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "set_voice_preference",
-          "description": "Configure default voice provider (macos/openai).",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "provider": {
-                "type": "string",
-                "enum": [
-                  "macos",
-                  "openai"
-                ]
-              },
-              "voice": {
-                "type": "string",
-                "default": "alloy"
-              }
-            },
-            "required": [
-              "provider"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "add_mcp_server",
-          "description": "Safely add/update an MCP server in config.yaml.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "config": {
-                "type": "object"
-              }
-            },
-            "required": [
-              "name",
-              "config"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "install_mcp_package",
-          "description": "Install an NPM-based MCP server. Example: '@modelcontextprotocol/server-weather'. Support optional args for proxies.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "package": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "args": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            },
-            "required": [
-              "package"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "remove_mcp_server",
-          "description": "Safely remove an MCP server from config.yaml.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "name"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "ingest_file",
-          "description": "Submit a file for asynchronous background ingestion (RAG/Knowledge Graph).",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "source_path": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "source_path"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "parse_mcp_config",
-          "description": "Parse and install MCP servers from raw configuration text (JSON/YAML) pasted by the user. Use this when the user provides a config block.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "content": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "content"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "update_system_config",
-          "description": "Update a system configuration value (Reverse Sync). Updates Sovereign Memory (DB), Runtime, and Disk Backup (.env/system_config.json).",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "key": {
-                "type": "string"
-              },
-              "value": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "secret",
-                  "config"
-                ],
-                "default": "config"
-              }
-            },
-            "required": [
-              "key",
-              "value"
-            ]
-          }
-        }
-      }
-    ],
-    "time": [
-      {
-        "type": "function",
-        "function": {
-          "name": "get_current_time",
-          "description": "Get current time in a specific timezones",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "timezone": {
-                "type": "string",
-                "description": "IANA timezone name (e.g., 'America/New_York', 'Europe/London'). Use 'America/New_York' as local timezone if no timezone provided by the user."
-              }
-            },
-            "required": [
-              "timezone"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "convert_time",
-          "description": "Convert time between timezones",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "source_timezone": {
-                "type": "string",
-                "description": "Source IANA timezone name (e.g., 'America/New_York', 'Europe/London'). Use 'America/New_York' as local timezone if no source timezone provided by the user."
-              },
-              "time": {
-                "type": "string",
-                "description": "Time to convert in 24-hour format (HH:MM)"
-              },
-              "target_timezone": {
-                "type": "string",
-                "description": "Target IANA timezone name (e.g., 'Asia/Tokyo', 'America/San_Francisco'). Use 'America/New_York' as local timezone if no target timezone provided by the user."
-              }
-            },
-            "required": [
-              "source_timezone",
-              "time",
-              "target_timezone"
-            ]
-          }
-        }
-      }
-    ],
-    "tavily-search": [
-      {
-        "type": "function",
-        "function": {
-          "name": "tavily-search",
-          "description": "A powerful web search tool that provides comprehensive, real-time results using Tavily's AI search engine. Returns relevant web content with customizable parameters for result count, content type, and domain filtering. Ideal for gathering current information, news, and detailed web content analysis.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "query": {
-                "type": "string",
-                "description": "Search query"
-              },
-              "search_depth": {
-                "type": "string",
-                "enum": [
-                  "basic",
-                  "advanced"
-                ],
-                "description": "The depth of the search. It can be 'basic' or 'advanced'",
-                "default": "basic"
-              },
-              "topic": {
-                "type": "string",
-                "enum": [
-                  "general",
-                  "news"
-                ],
-                "description": "The category of the search. This will determine which of our agents will be used for the search",
-                "default": "general"
-              },
-              "days": {
-                "type": "number",
-                "description": "The number of days back from the current date to include in the search results. This specifies the time frame of data to be retrieved. Please note that this feature is only available when using the 'news' search topic",
-                "default": 3
-              },
-              "time_range": {
-                "type": "string",
-                "description": "The time range back from the current date to include in the search results. This feature is available for both 'general' and 'news' search topics",
-                "enum": [
-                  "day",
-                  "week",
-                  "month",
-                  "year",
-                  "d",
-                  "w",
-                  "m",
-                  "y"
-                ]
-              },
-              "max_results": {
-                "type": "number",
-                "description": "The maximum number of search results to return",
-                "default": 10,
-                "minimum": 5,
-                "maximum": 20
-              },
-              "include_images": {
-                "type": "boolean",
-                "description": "Include a list of query-related images in the response",
-                "default": false
-              },
-              "include_image_descriptions": {
-                "type": "boolean",
-                "description": "Include a list of query-related images and their descriptions in the response",
-                "default": false
-              },
-              "include_raw_content": {
-                "type": "boolean",
-                "description": "Include the cleaned and parsed HTML content of each search result",
-                "default": false
-              },
-              "include_domains": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "A list of domains to specifically include in the search results, if the user asks to search on specific sites set this to the domain of the site",
-                "default": []
-              },
-              "exclude_domains": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "List of domains to specifically exclude, if the user asks to exclude a domain set this to the domain of the site",
-                "default": []
-              }
-            },
-            "required": [
-              "query"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "tavily-extract",
-          "description": "A powerful web content extraction tool that retrieves and processes raw content from specified URLs, ideal for data collection, content analysis, and research tasks.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "urls": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "List of URLs to extract content from"
-              },
-              "extract_depth": {
-                "type": "string",
-                "enum": [
-                  "basic",
-                  "advanced"
-                ],
-                "description": "Depth of extraction - 'basic' or 'advanced', if usrls are linkedin use 'advanced' or if explicitly told to use advanced",
-                "default": "basic"
-              },
-              "include_images": {
-                "type": "boolean",
-                "description": "Include a list of images extracted from the urls in the response",
-                "default": false
-              }
-            },
-            "required": [
-              "urls"
-            ]
-          }
-        }
-      }
-    ],
-    "git": [
-      {
-        "type": "function",
-        "function": {
-          "name": "git_add",
-          "description": "Stage files for commit. Add file contents to the staging area (index) to prepare for the next commit.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "files": {
-                "description": "Array of file paths to stage (relative to repository root). Use [\".\"] to stage all changes.",
-                "minItems": 1,
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "update": {
-                "description": "Stage only modified and deleted files (skip untracked files).",
-                "default": false,
-                "type": "boolean"
-              },
-              "all": {
-                "description": "Include all items (varies by operation).",
-                "default": false,
-                "type": "boolean"
-              },
-              "force": {
-                "description": "Allow adding otherwise ignored files.",
-                "default": false,
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "files"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_blame",
-          "description": "Show line-by-line authorship information for a file, displaying who last modified each line and when.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "file": {
-                "description": "Path to the file to blame (relative to repository root).",
-                "type": "string",
-                "minLength": 1
-              },
-              "startLine": {
-                "description": "Start line number (1-indexed).",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "endLine": {
-                "description": "End line number (1-indexed).",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "ignoreWhitespace": {
-                "description": "Ignore whitespace changes.",
-                "default": false,
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "file"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_branch",
-          "description": "Manage branches: list all branches, show current branch, create a new branch, delete a branch, or rename a branch.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "operation": {
-                "description": "The branch operation to perform.",
-                "default": "list",
-                "type": "string",
-                "enum": [
-                  "list",
-                  "create",
-                  "delete",
-                  "rename",
-                  "show-current"
-                ]
-              },
-              "name": {
-                "description": "Branch name for create/delete/rename operations.",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^~^:?*\\[\\\\]+$"
-              },
-              "newName": {
-                "description": "New branch name for rename operation.",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^~^:?*\\[\\\\]+$"
-              },
-              "startPoint": {
-                "description": "Starting point (commit/branch) for new branch creation.",
-                "type": "string",
-                "minLength": 1
-              },
-              "force": {
-                "description": "Force the operation, bypassing safety checks.",
-                "default": false,
-                "type": "boolean"
-              },
-              "all": {
-                "description": "For list operation: show both local and remote branches.",
-                "default": false,
-                "type": "boolean"
-              },
-              "remote": {
-                "description": "For list operation: show only remote branches.",
-                "default": false,
-                "type": "boolean"
-              },
-              "merged": {
-                "description": "For list operation: show only branches merged into HEAD (true) or specified commit (string).",
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "description": "Commit reference: full/short hash, branch name, tag name, or relative ref (HEAD~1).",
-                    "type": "string",
-                    "minLength": 1
-                  }
-                ]
-              },
-              "noMerged": {
-                "description": "For list operation: show only branches not merged into HEAD (true) or specified commit (string).",
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "description": "Commit reference: full/short hash, branch name, tag name, or relative ref (HEAD~1).",
-                    "type": "string",
-                    "minLength": 1
-                  }
-                ]
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_checkout",
-          "description": "Switch branches or restore working tree files. Can checkout an existing branch, create a new branch, or restore specific files.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "target": {
-                "description": "Branch name, commit hash, or tag to checkout.",
-                "anyOf": [
-                  {
-                    "description": "Branch name (must follow git naming conventions).",
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 255,
-                    "pattern": "^[^~^:?*\\[\\\\]+$"
-                  },
-                  {
-                    "description": "Commit reference: full/short hash, branch name, tag name, or relative ref (HEAD~1).",
-                    "type": "string",
-                    "minLength": 1
-                  }
-                ]
-              },
-              "createBranch": {
-                "description": "Create a new branch with the specified name.",
-                "default": false,
-                "type": "boolean"
-              },
-              "force": {
-                "description": "Force the operation, bypassing safety checks.",
-                "default": false,
-                "type": "boolean"
-              },
-              "paths": {
-                "description": "Specific file paths to checkout/restore (relative to repository root).",
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "track": {
-                "description": "Set up tracking relationship with remote branch when creating new branch.",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "target"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_cherry_pick",
-          "description": "Cherry-pick commits from other branches. Apply specific commits to the current branch without merging entire branches.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "commits": {
-                "description": "Commit hashes to cherry-pick.",
-                "minItems": 1,
-                "type": "array",
-                "items": {
-                  "description": "Commit reference: full/short hash, branch name, tag name, or relative ref (HEAD~1).",
-                  "type": "string",
-                  "minLength": 1
-                }
-              },
-              "noCommit": {
-                "description": "Don't create commit (stage changes only).",
-                "default": false,
-                "type": "boolean"
-              },
-              "continueOperation": {
-                "description": "Continue cherry-pick after resolving conflicts.",
-                "default": false,
-                "type": "boolean"
-              },
-              "abort": {
-                "description": "Abort cherry-pick operation.",
-                "default": false,
-                "type": "boolean"
-              },
-              "mainline": {
-                "description": "For merge commits, specify which parent to follow (1 for first parent, 2 for second, etc.).",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "strategy": {
-                "description": "Merge strategy to use for cherry-pick.",
-                "type": "string",
-                "enum": [
-                  "ort",
-                  "recursive",
-                  "octopus",
-                  "ours",
-                  "subtree"
-                ]
-              },
-              "signoff": {
-                "description": "Add Signed-off-by line to the commit message.",
-                "default": false,
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "commits"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_clean",
-          "description": "Remove untracked files from the working directory. Requires force flag for safety. Use dry-run to preview files that would be removed.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "force": {
-                "default": false,
-                "type": "boolean"
-              },
-              "dryRun": {
-                "description": "Preview the operation without executing it.",
-                "default": false,
-                "type": "boolean"
-              },
-              "directories": {
-                "description": "Remove untracked directories in addition to files.",
-                "default": false,
-                "type": "boolean"
-              },
-              "ignored": {
-                "description": "Remove ignored files as well.",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_clear_working_dir",
-          "description": "Clear the session working directory setting. This resets the context without restarting the server. Subsequent git operations will require an explicit path parameter unless git_set_working_dir is called again.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "confirm": {
-                "description": "Explicit confirmation required to clear working directory. Accepted values: 'Y', 'y', 'Yes', or 'yes'.",
-                "type": "string",
-                "enum": [
-                  "Y",
-                  "y",
-                  "Yes",
-                  "yes"
-                ]
-              }
-            },
-            "required": [
-              "confirm"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_clone",
-          "description": "Clone a repository from a remote URL to a local path. Supports HTTP/HTTPS and SSH URLs, with optional shallow cloning.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "url": {
-                "description": "Remote repository URL to clone from.",
-                "type": "string",
-                "format": "uri"
-              },
-              "localPath": {
-                "description": "Local path where the repository should be cloned.",
-                "type": "string",
-                "minLength": 1
-              },
-              "branch": {
-                "description": "Specific branch to clone (defaults to remote HEAD).",
-                "type": "string"
-              },
-              "depth": {
-                "description": "Create a shallow clone with history truncated to N commits.",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "bare": {
-                "description": "Create a bare repository (no working directory).",
-                "default": false,
-                "type": "boolean"
-              },
-              "mirror": {
-                "description": "Create a mirror clone (implies bare).",
-                "default": false,
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "url",
-              "localPath"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_commit",
-          "description": "Create a new commit with staged changes in the repository. Records a snapshot of the staging area with a commit message.\n\n**Commit Message Format:**\nPass commit messages as JSON string parameters. Multi-line messages are supported using standard JSON string escaping.\n\n**Examples:**\n- Single line: { \"message\": \"feat: add user authentication\" }\n- Multi-line: { \"message\": \"feat: add user authentication\\n\\nImplemented OAuth2 flow with JWT tokens.\\nAdded tests for login and logout.\" }\n\nNote: Do not use bash heredoc syntax.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "message": {
-                "description": "Commit message.",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 10000
-              },
-              "author": {
-                "description": "Override commit author (defaults to git config).",
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "description": "Author's name",
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "email": {
-                    "description": "Author's email address",
-                    "type": "string",
-                    "format": "email",
-                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
-                  }
-                },
-                "required": [
-                  "name",
-                  "email"
-                ]
-              },
-              "amend": {
-                "description": "Amend the previous commit instead of creating a new one. Use with caution.",
-                "default": false,
-                "type": "boolean"
-              },
-              "allowEmpty": {
-                "description": "Allow creating a commit with no changes.",
-                "default": false,
-                "type": "boolean"
-              },
-              "sign": {
-                "description": "Sign the commit/tag with GPG.",
-                "type": "boolean"
-              },
-              "noVerify": {
-                "description": "Bypass pre-commit and commit-msg hooks.",
-                "default": false,
-                "type": "boolean"
-              },
-              "filesToStage": {
-                "description": "File paths to stage before committing (atomic stage+commit operation).",
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "forceUnsignedOnFailure": {
-                "description": "If GPG/SSH signing fails, retry the commit without signing instead of failing.",
-                "default": false,
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "message"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_diff",
-          "description": "View differences between commits, branches, or working tree. Shows changes in unified diff format.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "target": {
-                "description": "Target commit/branch to compare against. If not specified, shows unstaged changes in working tree.",
-                "type": "string",
-                "minLength": 1
-              },
-              "source": {
-                "description": "Source commit/branch to compare from. If target is specified but not source, compares target against working tree.",
-                "type": "string",
-                "minLength": 1
-              },
-              "paths": {
-                "description": "Limit diff to specific file paths (relative to repository root).",
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "staged": {
-                "description": "Show diff of staged changes instead of unstaged.",
-                "default": false,
-                "type": "boolean"
-              },
-              "includeUntracked": {
-                "description": "Include untracked files in the diff. Useful for reviewing all upcoming changes.",
-                "default": false,
-                "type": "boolean"
-              },
-              "nameOnly": {
-                "description": "Show only names of changed files, not the diff content.",
-                "default": false,
-                "type": "boolean"
-              },
-              "stat": {
-                "description": "Show diffstat (summary of changes) instead of full diff content.",
-                "default": false,
-                "type": "boolean"
-              },
-              "contextLines": {
-                "description": "Number of context lines to show around changes.",
-                "default": 3,
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_fetch",
-          "description": "Fetch updates from a remote repository. Downloads objects and refs without merging them.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "remote": {
-                "description": "Remote name (default: origin).",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[a-zA-Z0-9._-]+$"
-              },
-              "prune": {
-                "description": "Prune remote-tracking references that no longer exist on remote.",
-                "default": false,
-                "type": "boolean"
-              },
-              "tags": {
-                "description": "Fetch all tags from the remote.",
-                "default": false,
-                "type": "boolean"
-              },
-              "depth": {
-                "description": "Create a shallow clone with history truncated to N commits.",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_init",
-          "description": "Initialize a new Git repository at the specified path. Creates a .git directory and sets up the initial branch.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "initialBranch": {
-                "description": "Name of the initial branch (default: main).",
-                "type": "string"
-              },
-              "bare": {
-                "description": "Create a bare repository (no working directory).",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_log",
-          "description": "View commit history with optional filtering by author, date range, file path, or commit message pattern.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "maxCount": {
-                "description": "Maximum number of items to return (1-1000).",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 1000
-              },
-              "skip": {
-                "description": "Number of items to skip for pagination.",
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 9007199254740991
-              },
-              "since": {
-                "description": "Show commits more recent than a specific date (ISO 8601 format).",
-                "type": "string"
-              },
-              "until": {
-                "description": "Show commits older than a specific date (ISO 8601 format).",
-                "type": "string"
-              },
-              "author": {
-                "description": "Filter commits by author name or email pattern.",
-                "type": "string"
-              },
-              "grep": {
-                "description": "Filter commits by message pattern (regex supported).",
-                "type": "string"
-              },
-              "branch": {
-                "description": "Show commits from a specific branch or ref (defaults to current branch).",
-                "type": "string",
-                "minLength": 1
-              },
-              "filePath": {
-                "description": "Show commits that affected a specific file path.",
-                "type": "string"
-              },
-              "oneline": {
-                "description": "Show each commit on a single line (abbreviated output).",
-                "default": false,
-                "type": "boolean"
-              },
-              "stat": {
-                "description": "Include file change statistics for each commit.",
-                "default": false,
-                "type": "boolean"
-              },
-              "patch": {
-                "description": "Include the full diff patch for each commit.",
-                "default": false,
-                "type": "boolean"
-              },
-              "showSignature": {
-                "description": "Show GPG signature verification information for each commit.",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_merge",
-          "description": "Merge branches together. Integrates changes from another branch into the current branch with optional merge strategies.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "branch": {
-                "description": "Branch to merge into current branch.",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^~^:?*\\[\\\\]+$"
-              },
-              "strategy": {
-                "description": "Merge strategy to use (ort, recursive, octopus, ours, subtree).",
-                "type": "string",
-                "enum": [
-                  "ort",
-                  "recursive",
-                  "octopus",
-                  "ours",
-                  "subtree"
-                ]
-              },
-              "noFastForward": {
-                "description": "Prevent fast-forward merge (create merge commit).",
-                "default": false,
-                "type": "boolean"
-              },
-              "squash": {
-                "description": "Squash all commits from the branch into a single commit.",
-                "default": false,
-                "type": "boolean"
-              },
-              "message": {
-                "description": "Custom merge commit message.",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 10000
-              },
-              "abort": {
-                "description": "Abort an in-progress merge that has conflicts.",
-                "default": false,
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "branch"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_pull",
-          "description": "Pull changes from a remote repository. Fetches and integrates changes into the current branch.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "remote": {
-                "description": "Remote name (default: origin).",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[a-zA-Z0-9._-]+$"
-              },
-              "branch": {
-                "description": "Branch name (default: current branch).",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^~^:?*\\[\\\\]+$"
-              },
-              "rebase": {
-                "description": "Use rebase instead of merge when integrating changes.",
-                "default": false,
-                "type": "boolean"
-              },
-              "fastForwardOnly": {
-                "description": "Fail if can't fast-forward (no merge commit).",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_push",
-          "description": "Push changes to a remote repository. Uploads local commits to the remote branch.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "remote": {
-                "description": "Remote name (default: origin).",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[a-zA-Z0-9._-]+$"
-              },
-              "branch": {
-                "description": "Branch name (default: current branch).",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^~^:?*\\[\\\\]+$"
-              },
-              "force": {
-                "description": "Force push (overwrites remote history).",
-                "default": false,
-                "type": "boolean"
-              },
-              "forceWithLease": {
-                "description": "Safer force push - only succeeds if remote branch is at expected state.",
-                "default": false,
-                "type": "boolean"
-              },
-              "setUpstream": {
-                "description": "Set upstream tracking relationship for the branch.",
-                "default": false,
-                "type": "boolean"
-              },
-              "tags": {
-                "description": "Push all tags to the remote.",
-                "default": false,
-                "type": "boolean"
-              },
-              "dryRun": {
-                "description": "Preview the operation without executing it.",
-                "default": false,
-                "type": "boolean"
-              },
-              "delete": {
-                "description": "Delete the specified remote branch.",
-                "default": false,
-                "type": "boolean"
-              },
-              "remoteBranch": {
-                "description": "Remote branch name to push to (if different from local branch name).",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^~^:?*\\[\\\\]+$"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_rebase",
-          "description": "Rebase commits onto another branch. Reapplies commits on top of another base tip for a cleaner history.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "mode": {
-                "description": "Rebase operation mode: 'start', 'continue', 'abort', or 'skip'.",
-                "default": "start",
-                "type": "string",
-                "enum": [
-                  "start",
-                  "continue",
-                  "abort",
-                  "skip"
-                ]
-              },
-              "upstream": {
-                "description": "Upstream branch to rebase onto (required for start mode).",
-                "type": "string",
-                "minLength": 1
-              },
-              "branch": {
-                "description": "Branch to rebase (default: current branch).",
-                "type": "string",
-                "minLength": 1
-              },
-              "interactive": {
-                "description": "Interactive rebase (not supported in all providers).",
-                "default": false,
-                "type": "boolean"
-              },
-              "onto": {
-                "description": "Rebase onto different commit than upstream.",
-                "type": "string",
-                "minLength": 1
-              },
-              "preserve": {
-                "description": "Preserve merge commits during rebase.",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_reflog",
-          "description": "View the reference logs (reflog) to track when branch tips and other references were updated. Useful for recovering lost commits.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "ref": {
-                "description": "Show reflog for specific reference (default: HEAD).",
-                "type": "string"
-              },
-              "maxCount": {
-                "description": "Maximum number of items to return (1-1000).",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 1000
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_remote",
-          "description": "Manage remote repositories: list remotes, add new remotes, remove remotes, rename remotes, or get/set remote URLs.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "mode": {
-                "description": "The remote operation to perform.",
-                "default": "list",
-                "type": "string",
-                "enum": [
-                  "list",
-                  "add",
-                  "remove",
-                  "rename",
-                  "get-url",
-                  "set-url"
-                ]
-              },
-              "name": {
-                "description": "Remote name for add/remove/rename/get-url/set-url operations.",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[a-zA-Z0-9._-]+$"
-              },
-              "url": {
-                "description": "Remote URL for add/set-url operations.",
-                "type": "string",
-                "format": "uri"
-              },
-              "newName": {
-                "description": "New remote name for rename operation.",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[a-zA-Z0-9._-]+$"
-              },
-              "push": {
-                "description": "Set push URL separately (for set-url operation).",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_reset",
-          "description": "Reset current HEAD to specified state. Can be used to unstage files (soft), discard commits (mixed), or discard all changes (hard).",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "mode": {
-                "description": "Reset mode: soft (keep changes staged), mixed (unstage changes), hard (discard all changes), merge (reset and merge), keep (reset but keep local changes).",
-                "default": "mixed",
-                "type": "string",
-                "enum": [
-                  "soft",
-                  "mixed",
-                  "hard",
-                  "merge",
-                  "keep"
-                ]
-              },
-              "target": {
-                "description": "Target commit to reset to (default: HEAD).",
-                "type": "string",
-                "minLength": 1
-              },
-              "paths": {
-                "description": "Specific file paths to reset (leaves HEAD unchanged).",
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_set_working_dir",
-          "description": "Set the session working directory for all git operations. This allows subsequent git commands to omit the path parameter and use this directory as the default.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Absolute path to the git repository to use as the working directory.",
-                "type": "string",
-                "minLength": 1
-              },
-              "validateGitRepo": {
-                "description": "Validate that the path is a Git repository.",
-                "default": true,
-                "type": "boolean"
-              },
-              "initializeIfNotPresent": {
-                "description": "If not a Git repository, initialize it with 'git init'.",
-                "default": false,
-                "type": "boolean"
-              },
-              "includeMetadata": {
-                "description": "Include repository metadata (status, branches, remotes, recent commits) in the response. Set to true for immediate repository context understanding. Defaults to false to minimize response size.",
-                "default": false,
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "path"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_show",
-          "description": "Show details of a git object (commit, tree, blob, or tag). Displays commit information and the diff of changes introduced.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "object": {
-                "description": "Git object to show (commit hash, branch, tag, tree, or blob).",
-                "type": "string",
-                "minLength": 1
-              },
-              "format": {
-                "description": "Output format for the git object.",
-                "type": "string",
-                "enum": [
-                  "raw",
-                  "json"
-                ]
-              },
-              "stat": {
-                "description": "Show diffstat instead of full diff.",
-                "default": false,
-                "type": "boolean"
-              },
-              "filePath": {
-                "description": "View specific file at a given commit reference. When provided, shows the file content from the specified object.",
-                "type": "string"
-              }
-            },
-            "required": [
-              "object"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_stash",
-          "description": "Manage stashes: list stashes, save current changes (push), restore changes (pop/apply), or remove stashes (drop/clear).",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "mode": {
-                "description": "The stash operation to perform.",
-                "default": "list",
-                "type": "string",
-                "enum": [
-                  "list",
-                  "push",
-                  "pop",
-                  "apply",
-                  "drop",
-                  "clear"
-                ]
-              },
-              "message": {
-                "description": "Stash message description (for push operation).",
-                "type": "string"
-              },
-              "stashRef": {
-                "description": "Stash reference like stash@{0} (for pop/apply/drop operations).",
-                "type": "string"
-              },
-              "includeUntracked": {
-                "description": "Include untracked files in the stash (for push operation).",
-                "default": false,
-                "type": "boolean"
-              },
-              "keepIndex": {
-                "description": "Don't revert staged changes (for push operation).",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_status",
-          "description": "Show the working tree status including staged, unstaged, and untracked files.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "includeUntracked": {
-                "description": "Include untracked files in the output.",
-                "default": true,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_tag",
-          "description": "Manage tags: list all tags, create a new tag, or delete a tag. Tags are used to mark specific points in history (releases, milestones).",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "mode": {
-                "description": "The tag operation to perform.",
-                "default": "list",
-                "type": "string",
-                "enum": [
-                  "list",
-                  "create",
-                  "delete"
-                ]
-              },
-              "tagName": {
-                "description": "Tag name for create/delete operations.",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^~^:?*\\[\\\\]+$"
-              },
-              "commit": {
-                "description": "Commit to tag (default: HEAD for create operation).",
-                "type": "string",
-                "minLength": 1
-              },
-              "message": {
-                "description": "Tag message (creates annotated tag).",
-                "type": "string"
-              },
-              "annotated": {
-                "description": "Create annotated tag with message.",
-                "default": false,
-                "type": "boolean"
-              },
-              "force": {
-                "description": "Force tag creation/deletion (overwrite existing).",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_worktree",
-          "description": "Manage multiple working trees: list worktrees, add new worktrees for parallel work, remove worktrees, or move worktrees to new locations.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path to the Git repository. Defaults to session working directory set via git_set_working_dir.",
-                "default": ".",
-                "type": "string"
-              },
-              "mode": {
-                "description": "The worktree operation to perform.",
-                "default": "list",
-                "type": "string",
-                "enum": [
-                  "list",
-                  "add",
-                  "remove",
-                  "move",
-                  "prune"
-                ]
-              },
-              "worktreePath": {
-                "description": "Path for the new worktree (for add/move operations).",
-                "type": "string"
-              },
-              "branch": {
-                "description": "Branch to checkout in the new worktree (for add operation).",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^~^:?*\\[\\\\]+$"
-              },
-              "commitish": {
-                "description": "Commit/branch to base the worktree on (for add operation).",
-                "type": "string",
-                "minLength": 1
-              },
-              "force": {
-                "description": "Force operation (for remove operation with uncommitted changes).",
-                "default": false,
-                "type": "boolean"
-              },
-              "newPath": {
-                "description": "New path for the worktree (for move operation).",
-                "type": "string"
-              },
-              "detach": {
-                "description": "Create worktree with detached HEAD (for add operation).",
-                "default": false,
-                "type": "boolean"
-              },
-              "verbose": {
-                "description": "Provide detailed output for worktree operations.",
-                "default": false,
-                "type": "boolean"
-              },
-              "dryRun": {
-                "description": "Preview the operation without executing it (for prune operation).",
-                "default": false,
-                "type": "boolean"
-              }
-            }
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "git_wrapup_instructions",
-          "description": "Provides the user's desired Git wrap-up workflow and instructions. Returns custom workflow steps (if configured) or default best practices for reviewing, documenting, and committing changes. Includes current repository status to guide next actions.",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "acknowledgement": {
-                "description": "Acknowledgement to initiate the wrap-up workflow.",
-                "type": "string",
-                "enum": [
-                  "Y",
-                  "y",
-                  "Yes",
-                  "yes"
-                ]
-              },
-              "updateAgentMetaFiles": {
-                "description": "Include an instruction to update agent-specific meta files.",
-                "type": "string",
-                "enum": [
-                  "Y",
-                  "y",
-                  "Yes",
-                  "yes"
-                ]
-              },
-              "createTag": {
-                "description": "If true, instructs the agent to create a Git tag after committing all changes. Only set to true if given permission to do so.",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "acknowledgement"
-            ]
-          }
-        }
-      }
-    ],
-    "ollama": [
-      {
-        "type": "function",
-        "function": {
-          "name": "list_models",
-          "description": "List all available Ollama models with their details (name, size, digest, modified date).",
-          "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": []
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "show_model",
-          "description": "Show detailed information about a specific model including parameters, template, and system prompt.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "model": {
-                "type": "string",
-                "description": "Model name (e.g., 'mistral:latest', 'llama3:8b')"
-              }
-            },
-            "required": [
-              "model"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "pull_model",
-          "description": "Download/pull a model from the Ollama library. Use this to install new models.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "model": {
-                "type": "string",
-                "description": "Model name to pull (e.g., 'llama3.2:3b', 'qwen2.5:72b')"
-              },
-              "stream": {
-                "type": "boolean",
-                "description": "Whether to stream the download progress (default: false)",
-                "default": false
-              }
-            },
-            "required": [
-              "model"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "delete_model",
-          "description": "Delete a model from Ollama to free up disk space.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "model": {
-                "type": "string",
-                "description": "Model name to delete (e.g., 'mistral:latest')"
-              }
-            },
-            "required": [
-              "model"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "copy_model",
-          "description": "Copy a model to a new name (useful for creating model variants).",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "source": {
-                "type": "string",
-                "description": "Source model name"
-              },
-              "destination": {
-                "type": "string",
-                "description": "Destination model name"
-              }
-            },
-            "required": [
-              "source",
-              "destination"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "generate_embeddings",
-          "description": "Generate embeddings for text using an Ollama embedding model.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "model": {
-                "type": "string",
-                "description": "Embedding model name (e.g., 'embeddinggemma:300m', 'mxbai-embed-large:latest')"
-              },
-              "prompt": {
-                "type": "string",
-                "description": "Text to generate embeddings for"
-              }
-            },
-            "required": [
-              "model",
-              "prompt"
-            ]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "generate_text",
-          "description": "Generate text using /api/generate endpoint (non-chat, simple prompt-response).",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "model": {
-                "type": "string",
-                "description": "Model name"
-              },
-              "prompt": {
-                "type": "string",
-                "description": "Prompt text"
-              },
-              "options": {
-                "type": "object",
-                "description": "Optional model parameters (num_ctx, temperature, etc.)"
-              }
-            },
-            "required": [
-              "model",
-              "prompt"
-            ]
-          }
-        }
-      }
-    ],
-    "thinking": [
-      {
-        "type": "function",
-        "function": {
-          "name": "sequentialthinking",
-          "description": "A detailed tool for dynamic and reflective problem-solving through thoughts.\nThis tool helps analyze problems through a flexible thinking process that can adapt and evolve.\nEach thought can build on, question, or revise previous insights as understanding deepens.\n\nWhen to use this tool:\n- Breaking down complex problems into steps\n- Planning and design with room for revision\n- Analysis that might need course correction\n- Problems where the full scope might not be clear initially\n- Problems that require a multi-step solution\n- Tasks that need to maintain context over multiple steps\n- Situations where irrelevant information needs to be filtered out\n\nKey features:\n- You can adjust total_thoughts up or down as you progress\n- You can question or revise previous thoughts\n- You can add more thoughts even after reaching what seemed like the end\n- You can express uncertainty and explore alternative approaches\n- Not every thought needs to build linearly - you can branch or backtrack\n- Generates a solution hypothesis\n- Verifies the hypothesis based on the Chain of Thought steps\n- Repeats the process until satisfied\n- Provides a correct answer\n\nParameters explained:\n- thought: Your current thinking step, which can include:\n  * Regular analytical steps\n  * Revisions of previous thoughts\n  * Questions about previous decisions\n  * Realizations about needing more analysis\n  * Changes in approach\n  * Hypothesis generation\n  * Hypothesis verification\n- nextThoughtNeeded: True if you need more thinking, even if at what seemed like the end\n- thoughtNumber: Current number in sequence (can go beyond initial total if needed)\n- totalThoughts: Current estimate of thoughts needed (can be adjusted up/down)\n- isRevision: A boolean indicating if this thought revises previous thinking\n- revisesThought: If is_revision is true, which thought number is being reconsidered\n- branchFromThought: If branching, which thought number is the branching point\n- branchId: Identifier for the current branch (if any)\n- needsMoreThoughts: If reaching end but realizing more thoughts needed\n\nYou should:\n1. Start with an initial estimate of needed thoughts, but be ready to adjust\n2. Feel free to question or revise previous thoughts\n3. Don't hesitate to add more thoughts if needed, even at the \"end\"\n4. Express uncertainty when present\n5. Mark thoughts that revise previous thinking or branch into new paths\n6. Ignore information that is irrelevant to the current step\n7. Generate a solution hypothesis when appropriate\n8. Verify the hypothesis based on the Chain of Thought steps\n9. Repeat the process until satisfied with the solution\n10. Provide a single, ideally correct answer as the final output\n11. Only set nextThoughtNeeded to false when truly done and a satisfactory answer is reached",
-          "parameters": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-              "thought": {
-                "description": "Your current thinking step",
-                "type": "string"
-              },
-              "nextThoughtNeeded": {
-                "description": "Whether another thought step is needed",
-                "type": "boolean"
-              },
-              "thoughtNumber": {
-                "description": "Current thought number (numeric value, e.g., 1, 2, 3)",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "totalThoughts": {
-                "description": "Estimated total thoughts needed (numeric value, e.g., 5, 10)",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "isRevision": {
-                "description": "Whether this revises previous thinking",
-                "type": "boolean"
-              },
-              "revisesThought": {
-                "description": "Which thought is being reconsidered",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "branchFromThought": {
-                "description": "Branching point thought number",
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 9007199254740991
-              },
-              "branchId": {
-                "description": "Branch identifier",
-                "type": "string"
-              },
-              "needsMoreThoughts": {
-                "description": "If more thoughts are needed",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "thought",
-              "nextThoughtNeeded",
-              "thoughtNumber",
-              "totalThoughts"
-            ]
-          }
-        }
-      }
-    ]
-  }
+  "mcp_tools": {}
 }

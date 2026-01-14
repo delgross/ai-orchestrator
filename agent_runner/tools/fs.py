@@ -65,7 +65,7 @@ def tool_path_info(state: AgentState, path: str) -> Dict[str, Any]:
         info.update({"is_file": p.is_file(), "is_dir": p.is_dir(), "size": st.st_size if p.is_file() else None, "modified": st.st_mtime})
     return info
 
-def tool_read_text(state: AgentState, path: str, max_bytes: Optional[int] = None) -> Dict[str, Any]:
+def tool_read_text(state: AgentState, path: str, max_bytes: Optional[int] = None, **kwargs: Any) -> Dict[str, Any]:
     root = _ensure_fs_root(state)
     p = _safe_path(state, path)
     max_b = max_bytes if max_bytes is not None else state.max_read_bytes

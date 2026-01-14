@@ -124,7 +124,8 @@ class Sentinel:
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
-                "max_tokens": 100
+                "max_tokens": 100,
+                "options": {"num_ctx": 32768} # [USER] Expanded Context to 32k
             }
             
             resp = await client.post(url, json=payload, timeout=3.0) # Strict timeout

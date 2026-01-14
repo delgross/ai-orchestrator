@@ -11,8 +11,8 @@ from agent_runner.engine import AgentEngine
 logger = logging.getLogger("agent_runner.shim")
 
 # Legacy Constants
-TASK_MODEL = os.getenv("TASK_MODEL", "ollama:llama3.3:70b-instruct-q8_0")
-AGENT_MODEL = os.getenv("AGENT_MODEL", "ollama:llama3.3:70b-instruct-q8_0")
+TASK_MODEL = os.getenv("TASK_MODEL", "ollama:llama3.3:70b")
+AGENT_MODEL = os.getenv("AGENT_MODEL", "ollama:llama3.3:70b")
 
 # Legacy global state (initialized on first use)
 from agent_runner.service_registry import ServiceRegistry

@@ -98,7 +98,7 @@ async def on_startup():
     # [NEW] BOOT_STEP 0/7: Comprehensive Startup Validation
     logger.info("[BOOT_STEP] 0/7 Startup Validation")
     step_start = time.time()
-    # await _send_startup_monitor_message(state, "🚀 Starting system initialization...")
+    await _send_startup_monitor_message(state, "🚀 Starting system initialization...")
     try:
         from agent_runner.startup_validator import validate_startup_dependencies
         from pathlib import Path
@@ -132,7 +132,7 @@ async def on_startup():
     
     logger.info("[BOOT_STEP] 1/7 State Initialization")
     step_start = time.time()
-    # await _send_startup_monitor_message(state, "🔄 Initializing system state...")
+    await _send_startup_monitor_message(state, "🔄 Initializing system state...")
     
     try:
         await state.initialize()
@@ -147,18 +147,18 @@ async def on_startup():
         if not hasattr(state, 'system_event_queue'):
             state.system_event_queue = asyncio.Queue()
         
-        # await state.system_event_queue.put({
-        #     "event": {
-        #         "type": "system_status",  # NOT system_message - goes to frontend, not LLM
-        #         "content": "The system may experience slight delays in the first minute for system tuning.",
-        #         "severity": "info"
-        #     },
-        #     "request_id": None,  # Broadcast to all requests
-        #     "timestamp": time.time()
-        # })
+        await state.system_event_queue.put({
+            "event": {
+                "type": "system_status",  # NOT system_message - goes to frontend, not LLM
+                "content": "The system may experience slight delays in the first minute for system tuning.",
+                "severity": "info"
+            },
+            "request_id": None,  # Broadcast to all requests
+            "timestamp": time.time()
+        })
         
         # Send completion message
-        # await _send_startup_monitor_message(state, f"✅ State initialized ({step_duration:.1f}s)")
+        await _send_startup_monitor_message(state, f"✅ State initialized ({step_duration:.1f}s)")
     except Exception as e:
         step_duration = time.time() - step_start
         logger.error(f"[BOOT_STEP] 1/7 Failed after {step_duration:.2f}s: {e}", exc_info=True)
@@ -175,7 +175,7 @@ async def on_startup():
     # NOTE: state.initialize() already creates memory server, but we need to ensure it's initialized
     logger.info("[BOOT_STEP] 2/7 Memory Server Init")
     step_start = time.time()
-    # await _send_startup_monitor_message(state, "🔄 Connecting to database...")
+    await _send_startup_monitor_message(state, "🔄 Connecting to database...")
     
     from agent_runner.service_registry import ServiceRegistry
     
@@ -245,7 +245,7 @@ async def on_startup():
         logger.info(f"[BOOT_STEP] 2/7 Complete in {step_duration:.2f}s")
         stability_status = "stable" if memory_stable else "unstable"
         logger.info(f"MemoryServer connected: initialized={'✅' if state.memory.initialized else '❌'}, DB={state.config.get('surreal', {}).get('db', 'memory')}, stability={stability_status}")
-        # await _send_startup_monitor_message(state, f"✅ Database connected ({step_duration:.1f}s, {stability_status})")
+        await _send_startup_monitor_message(state, f"✅ Database connected ({step_duration:.1f}s, {stability_status})")
     except Exception as e:
         step_duration = time.time() - step_start
         logger.error(f"[BOOT_STEP] 2/7 Failed after {step_duration:.2f}s: {e}", exc_info=True)
@@ -338,7 +338,7 @@ async def on_startup():
     mcp_start = time.time()
     mcp_failed_servers = []
     try:
-        # await _send_startup_monitor_message(state, "🔄 Loading MCP servers...")
+        await _send_startup_monitor_message(state, "🔄 Loading MCP servers...")
         
         # Reset all MCP servers to enabled in database (early in boot)
         # This gives all servers a fresh chance. Discovery will naturally re-disable failures.
@@ -354,7 +354,7 @@ async def on_startup():
         from agent_runner.config import load_mcp_servers
         await load_mcp_servers(state)
         logger.info(f"Loaded {len(state.mcp_servers)} MCP server configs. Starting discovery...")
-        # await _send_startup_monitor_message(state, f"🔍 Discovering {len(state.mcp_servers)} MCP servers...")
+        await _send_startup_monitor_message(state, f"🔍 Discovering {len(state.mcp_servers)} MCP servers...")
         await engine.discover_mcp_tools()
         mcp_duration = time.time() - mcp_start
         total_tools = sum(len(tools) for tools in engine.executor.mcp_tool_cache.values())
@@ -373,7 +373,7 @@ async def on_startup():
                         non_core_failed_servers.append(server_name)
         
         logger.info(f"MCP Discovery complete: {len(engine.executor.mcp_tool_cache)}/{len(state.mcp_servers)} servers, {total_tools} tools (took {mcp_duration:.2f}s)")
-        # await _send_startup_monitor_message(state, f"✅ MCP Discovery: {len(engine.executor.mcp_tool_cache)}/{len(state.mcp_servers)} servers, {total_tools} tools ({mcp_duration:.1f}s)")
+        await _send_startup_monitor_message(state, f"✅ MCP Discovery: {len(engine.executor.mcp_tool_cache)}/{len(state.mcp_servers)} servers, {total_tools} tools ({mcp_duration:.1f}s)")
         
         # Core service failures are CRITICAL
         if core_failed_servers:
@@ -425,27 +425,17 @@ async def on_startup():
     # Initialize Task Manager and Background Workers
     logger.info("[BOOT_STEP] 4/7 Task Manager")
     step_start = time.time()
-        # await _send_startup_monitor_message(state, "🔄 Starting background tasks...")
+    await _send_startup_monitor_message(state, "🔄 Starting background tasks...")
     tm = None
     try:
-        from agent_runner.background_tasks import get_task_manager, system_health_monitor
+        from agent_runner.background_tasks import get_task_manager
         tm = get_task_manager()
-        
-        # Register System Health Monitor (5s Heartbeat)
-        tm.register(
-            name="system_health_monitor",
-            func=system_health_monitor,
-            interval=5.0,
-            priority="high",
-            description="Performs 5s poll of RAG/DB/Latency for dashboard"
-        )
-        
         await tm.start()
         step_duration = time.time() - step_start
         task_count = len(tm.tasks) if hasattr(tm, 'tasks') else 0
         logger.info(f"Task Manager started: {task_count} tasks registered")
         logger.info(f"[BOOT_STEP] 4/7 Complete in {step_duration:.2f}s")
-        # await _send_startup_monitor_message(state, f"✅ Background tasks started: {task_count} tasks ({step_duration:.1f}s)")
+        await _send_startup_monitor_message(state, f"✅ Background tasks started: {task_count} tasks ({step_duration:.1f}s)")
     except Exception as e:
         step_duration = time.time() - step_start
         logger.error(f"[BOOT_STEP] 4/7 Failed after {step_duration:.2f}s: {e}", exc_info=True)
@@ -456,7 +446,7 @@ async def on_startup():
     # [PHASE 44] Fire-and-Forget System Ingestion
     logger.info("[BOOT_STEP] 5/7 System Ingestion")
     step_start = time.time()
-    # await _send_startup_monitor_message(state, "🔄 Loading system configuration...")
+    await _send_startup_monitor_message(state, "🔄 Loading system configuration...")
     
     try:
         from agent_runner.system_ingestor import SystemIngestor
@@ -506,12 +496,12 @@ async def on_startup():
         # Note: Ingestion runs in background, so this is just a setup warning, not a service failure
     step_duration = time.time() - step_start
     logger.info(f"[BOOT_STEP] 5/7 Complete in {step_duration:.2f}s")
-    # await _send_startup_monitor_message(state, f"✅ System configuration loaded ({step_duration:.1f}s)")
+    await _send_startup_monitor_message(state, f"✅ System configuration loaded ({step_duration:.1f}s)")
     
     # BOOT_STEP 7/7: Registry Validation
     step_start = time.time()
     logger.info("[BOOT_STEP] 7/7 Registry Validation")
-    # await _send_startup_monitor_message(state, "🔄 Validating registry integrity...")
+    await _send_startup_monitor_message(state, "🔄 Validating registry integrity...")
     try:
         from agent_runner.maintenance_tasks import validate_registry_integrity
         validation_result = await validate_registry_integrity(state)
@@ -527,13 +517,13 @@ async def on_startup():
     except Exception as e:
         logger.warning(f"Registry validation failed: {e}", exc_info=True)
     logger.info(f"[BOOT_STEP] 7/7 Complete in {time.time() - step_start:.2f}s")
-    # await _send_startup_monitor_message(state, f"✅ Registry validated ({time.time() - step_start:.1f}s)")
+    await _send_startup_monitor_message(state, f"✅ Registry validated ({time.time() - step_start:.1f}s)")
 
     # [PHASE RAG] Unified Lifecycle: Start RAG Server as Subprocess
     # This ensures it is covered by the 'Safety Net' (atexit) and dies when Agent dies.
     logger.info("[BOOT_STEP] 6/7 RAG Services")
     step_start = time.time()
-    # await _send_startup_monitor_message(state, "🔄 Starting RAG services...")
+    await _send_startup_monitor_message(state, "🔄 Starting RAG services...")
     import sys
     import subprocess
     from agent_runner.transports.stdio import _ACTIVE_SUBPROCESSES
@@ -604,7 +594,7 @@ async def on_startup():
     
     step_duration = time.time() - step_start
     logger.info(f"[BOOT_STEP] 6/7 Complete in {step_duration:.2f}s")
-    # await _send_startup_monitor_message(state, f"✅ RAG services {'started' if rag_running else 'unavailable'} ({step_duration:.1f}s)")
+    await _send_startup_monitor_message(state, f"✅ RAG services {'started' if rag_running else 'unavailable'} ({step_duration:.1f}s)")
 
     try:
         # [NEW] Log Sorter Service (Micro-batch Classifier)
@@ -778,6 +768,16 @@ async def _create_startup_chat_session(state: AgentState, status_message: str):
 
         # Make a streaming request with the startup message directly
         # This will create a chat session and display the startup status immediately
+        headers = {
+            "X-Request-ID": request_id,
+            "X-System-Message": "true",
+            "Content-Type": "application/json"
+        }
+        
+        # Add Authorization header if token is available
+        if state.router_auth_token:
+            headers["Authorization"] = f"Bearer {state.router_auth_token}"
+        
         async with httpx.AsyncClient(timeout=15.0) as client:
             async with client.stream(
                 "POST",
@@ -788,13 +788,12 @@ async def _create_startup_chat_session(state: AgentState, status_message: str):
                         {"role": "user", "content": startup_content}
                     ],
                     "stream": True,
-                    "request_id": request_id
+                    "request_id": request_id,
+                    "options": {
+                        "num_ctx": 2048  # Prevent VRAM bloat on startup (default 32k is wasteful here)
+                    }
                 },
-                headers={
-                    "X-Request-ID": request_id,
-                    "X-System-Message": "true",
-                    "Content-Type": "application/json"
-                }
+                headers=headers
             ) as response:
                 if response.status_code == 200:
                     # Consume the stream to trigger message display
@@ -837,108 +836,152 @@ async def _send_startup_status_to_chat(
     startup_warnings: list
 ):
     """
-    Send simplified startup status message to chat window via router.
+    Send startup status message to chat window via router.
+    This provides user visibility into system startup health.
+    Analyzes errors/warnings to assess chat functionality and impact of missing services.
+    
+    Uses ALL available resources:
+    - Database env vars (all config_state entries)
+    - All MCP servers
+    - All discovered tools
+    - All available services
     """
+    # Initialize early to ensure status is always stored even if exceptions occur
+    status_lines = []
+    status_message = ""
+    missing_env_vars_info = []
+    
     try:
-        # 1. Technical Initialization Log style
-        status_lines = []
-        status_lines.append("Starting Initialization... **Done**")
-        status_lines.append("Connecting to Sovereign Memory... **Done**" if memory_ready else "Connecting to Sovereign Memory... **FAILED**")
-        status_lines.append("Connecting to RAG Service... **Done**" if rag_running else "Connecting to RAG Service... **FAILED**")
-        status_lines.append(f"Loading {mcp_count} MCP Servers... **Done**")
-        status_lines.append("Verifying 13 Internal Models... **Done**")
-        status_lines.append("") # Spacer
-
-        # 2. Summary Table - Parallel Data Fetching
-        status_lines.append("### System Status Summary")
-        status_lines.append("| Component | Status | Details |")
-        status_lines.append("| :--- | :--- | :--- |")
+        # Get disabled servers and tool cache for detailed analysis
+        from agent_runner.agent_runner import get_shared_engine
+        engine = get_shared_engine()
+        disabled_servers = [name for name, cfg in state.mcp_servers.items() if not cfg.get("enabled", True)]
         
-        async def check_rag():
-            import httpx
-            try:
-                async with httpx.AsyncClient(timeout=0.2) as client:
-                    resp = await client.get(f"http://localhost:5555/health")
-                    return resp.status_code == 200
-            except: return False
-
-        async def check_facts():
-            if not (memory_ready and hasattr(state, "memory")): return "N/A"
-            try:
-                from agent_runner.db_utils import run_query
-                res = await run_query(state, "SELECT count() FROM fact GROUP ALL")
-                if res and isinstance(res, list) and len(res) > 0:
-                    return f"{res[0].get('count', 0):,} Facts"
-            except: pass
-            return "Unknown"
-
-        async def check_latency():
-            try:
-                import httpx, time
-                url = "http://localhost:11434"
-                if state.config.get("llm_providers", {}).get("ollama", {}).get("base_url"):
-                    url = state.config["llm_providers"]["ollama"]["base_url"]
-                t0 = time.time()
-                async with httpx.AsyncClient(timeout=0.5) as client:
-                    await client.get(url)
-                return f"{int((time.time()-t0)*1000)}ms"
-            except: return "Timeout"
-
-        # Execute in parallel
-        rag_result, fact_count, latency_ms = await asyncio.gather(
-            check_rag(), check_facts(), check_latency()
+        # Analyze startup issues/warnings to assess chat functionality
+        # Re-check RAG status at status message time (may have changed since startup)
+        from common.port_utils import port_in_use
+        rag_port = state.config.get("mcp_servers", {}).get("rag", {}).get("port", 5555)
+        rag_running_current = port_in_use(rag_port)
+        
+        chat_analysis = _analyze_chat_functionality(
+            startup_issues, startup_warnings, rag_running_current, memory_ready, 
+            mcp_count, mcp_tools, state.internet_available,
+            disabled_servers=disabled_servers,
+            mcp_tool_cache=engine.executor.mcp_tool_cache if hasattr(engine, 'executor') else {}
         )
-
-        # RAG
-        rag_status = "✅ Online" if rag_result else "❌ Offline"
-        status_lines.append(f"| **RAG Service** | {rag_status} | `http://localhost:5555` |")
         
-        # Memory
-        mem_status = "✅ Online" if memory_ready else "❌ Offline"
-        status_lines.append(f"| **Memory** | {mem_status} | SurrealDB @ `:8000` |")
-        status_lines.append(f"| **Knowledge** | 📚 Available | {fact_count} |")
+        # Build status message
+        status_lines = ["## 🚀 System Startup Complete"]
+        status_lines.append(f"**Duration**: {total_duration:.2f}s")
+        status_lines.append(f"**Mode**: `{state.active_mode.upper()}`")
+        status_lines.append(f"**Internet**: {'🟢 Online' if state.internet_available else '🔴 Offline'}")
+        status_lines.append(f"**Location**: {location_city}")
+        status_lines.append(f"**MCP Servers**: {mcp_count} active, {mcp_tools} tools")
+        status_lines.append(f"**Background Tasks**: {task_count} registered")
+        status_lines.append(f"**Services**: RAG={'✅' if rag_running else '❌'}, Memory={'✅' if memory_ready else '❌'}")
         
-        # MCP
-        mcp_status = "✅ Active" if mcp_count > 0 else "⚠️ None"
-        status_lines.append(f"| **MCP Services** | {mcp_status} | {mcp_count} servers, {mcp_tools} tools |")
-
-        # Connectivity
-        net_status = "✅ Connected"
-        net_details = "Cloud Models Available"
-        if hasattr(state, "internet_available") and not state.internet_available:
-            net_status = "❌ Offline"
-            net_details = "Local Models Only"
-        status_lines.append(f"| **Connectivity** | {net_status} | {net_details} |")
-
-        # Latency
-        status_lines.append(f"| **LLM Latency** | ⚡ {latency_ms} | Primary Provider |")
-
-        # Registry
-        status_lines.append(f"| **Registry** | ✅ Verified | 13 Internal Models Loaded |")
-        
-        # Circuit Breakers
-        open_breakers = []
-        if hasattr(state, "mcp_circuit_breaker"):
-             for name, breaker in state.mcp_circuit_breaker.breakers.items():
-                 if breaker.state.value == "open":
-                     open_breakers.append(name)
-        
-        if open_breakers:
-             status_lines.append(f"| **Circuit Breakers** | ⚠️ Alert | Open: {', '.join(open_breakers)} |")
+        # Add chat functionality assessment
+        status_lines.append("")
+        status_lines.append("### 💬 Chat Functionality Assessment")
+        if chat_analysis["chat_functional"]:
+            status_lines.append(f"✅ **Chat is functional** - You can use the chat interface normally.")
         else:
-             status_lines.append(f"| **Circuit Breakers** | ✅ Healthy | All Closed |")
-
-        # Errors / Issues
-        error_count = len(startup_issues)
-        warning_count = len(startup_warnings)
-        if error_count > 0 or warning_count > 0:
-             status_lines.append(f"| **System Issues** | ⚠️ Issues | {error_count} Errors, {warning_count} Warnings |")
-        else:
-             status_lines.append(f"| **System Issues** | ✅ Clean | 0 Errors, 0 Warnings |")
-
-        status_message = "\n".join(status_lines)
+            status_lines.append(f"❌ **Chat may be limited** - Some features may not work as expected.")
         
-        # ALWAYS store in state first (reliable fallback)
+        # Add impact analysis
+        if chat_analysis["blocking_issues"]:
+            status_lines.append("")
+            status_lines.append("**Blocking Issues** (prevent chat from working):")
+            for issue in chat_analysis["blocking_issues"]:
+                status_lines.append(f"- ❌ {issue}")
+        
+        if chat_analysis["non_blocking_issues"]:
+            status_lines.append("")
+            status_lines.append("**Non-Blocking Issues** (chat works but features limited):")
+            for issue in chat_analysis["non_blocking_issues"]:
+                status_lines.append(f"- ⚠️ {issue}")
+        
+        if chat_analysis["missing_tools"]:
+            status_lines.append("")
+            status_lines.append("**Missing Tools/Services** (may affect specific features):")
+            for tool in chat_analysis["missing_tools"]:
+                status_lines.append(f"- 🔧 {tool}")
+        
+        # Add MCP server failures with actionable fixes
+        if disabled_servers:
+            status_lines.append("")
+            status_lines.append("### ⚠️ MCP Server Failures")
+            status_lines.append("The following MCP servers failed to start and were automatically disabled:")
+            for server_name in disabled_servers:
+                status_lines.append(f"- ❌ **{server_name}**: Disabled")
+                status_lines.append(f"  💡 Check logs for specific error. You can re-enable with:")
+                status_lines.append(f"     `tool_toggle_mcp_server('{server_name}', enabled=True)`")
+        
+        # Add missing env var warnings
+        if missing_env_vars_info:
+            status_lines.append("")
+            status_lines.append("### 🔑 Missing Environment Variables")
+            status_lines.append("The following environment variables are required but not found in database:")
+            unique_vars = {}
+            for info in missing_env_vars_info:
+                var = info["var"]
+                if var not in unique_vars:
+                    unique_vars[var] = []
+                unique_vars[var].append(f"{info['server']} ({info['location']})")
+            
+            for var_name, locations in unique_vars.items():
+                status_lines.append(f"- ❌ **{var_name}**: Required by {', '.join(locations)}")
+                status_lines.append(f"  💡 To fix: `tool_set_env_var('{var_name}', 'your_value_here')`")
+                status_lines.append(f"  Or: `INSERT INTO config_state (key, value) VALUES ('{var_name}', 'your_value_here')`")
+        
+        if chat_analysis["degraded_features"]:
+            status_lines.append("")
+            status_lines.append("**Degraded Features**:")
+            for feature in chat_analysis["degraded_features"]:
+                status_lines.append(f"- ⚠️ {feature}")
+        
+        # Add missing tool details if available
+        if chat_analysis.get("missing_tool_details"):
+            status_lines.append("")
+            status_lines.append("**Missing Tool Details**:")
+            for detail in chat_analysis["missing_tool_details"][:5]:  # Limit to 5
+                tool_list = ", ".join(detail["tools"][:5])  # Show first 5 tools
+                if len(detail["tools"]) > 5:
+                    tool_list += f" ... (+{len(detail['tools']) - 5} more)"
+                status_lines.append(f"- 🔧 **{detail['server']}**: {detail['count']} tools unavailable ({tool_list})")
+        
+        # Add recovery suggestions if available
+        if chat_analysis.get("recovery_suggestions"):
+            status_lines.append("")
+            status_lines.append("**Recovery Suggestions**:")
+            for suggestion in chat_analysis["recovery_suggestions"][:3]:  # Limit to 3 most important
+                status_lines.append(f"- 💡 **{suggestion['issue']}**: {suggestion['suggestion']}")
+                if suggestion.get('command'):
+                    status_lines.append(f"  `{suggestion['command']}`")
+        
+        # Note: Chat status will be added after testing (if router available)
+        
+        # Add warnings if any
+        if startup_warnings:
+            status_lines.append("")
+            status_lines.append("### ⚠️ Warnings")
+            for warning in startup_warnings[:5]:  # Limit to 5 most important
+                status_lines.append(f"- {warning}")
+            if len(startup_warnings) > 5:
+                status_lines.append(f"- ... and {len(startup_warnings) - 5} more (check logs)")
+        
+        # Add issues if any
+        if startup_issues:
+            status_lines.append("")
+            status_lines.append("### ❌ Issues")
+            for issue in startup_issues[:5]:  # Limit to 5 most important
+                status_lines.append(f"- {issue}")
+            if len(startup_issues) > 5:
+                status_lines.append(f"- ... and {len(startup_issues) - 5} more (check logs)")
+        
+        status_message = "\n".join(status_lines) if status_lines else "## ⚠️ Startup Status\n\nStatus generation in progress..."
+        
+        # ALWAYS store in state first (reliable fallback) - BEFORE any network calls
         if not hasattr(state, 'startup_status'):
             state.startup_status = {}
         state.startup_status = {
@@ -946,16 +989,23 @@ async def _send_startup_status_to_chat(
             "timestamp": time.time(),
             "duration": total_duration,
             "issues": startup_issues,
-            "warnings": startup_warnings
+            "warnings": startup_warnings,
+            "mcp_count": mcp_count,
+            "mcp_tools": mcp_tools,
+            "task_count": task_count,
+            "location": location_city,
+            "rag_running": rag_running,
+            "memory_ready": memory_ready,
+            "internet_available": state.internet_available
         }
+        logger.info("✅ Startup status stored in state (always available via /api/admin/startup-status)")
         
         # Inject startup status into chat stream via Nexus (preferred method)
+        # Also create a startup chat session so message appears immediately
         try:
             from agent_runner.agent_runner import get_shared_engine
             engine = get_shared_engine()
             if engine and hasattr(engine, 'nexus') and engine.nexus:
-                # Attempt to "clear" by sending a prominent break or special event if supported.
-                # Since we don't have a specific 'clear' event, we just send the message.
                 await engine.nexus.inject_stream_event({
                     "type": "system_message",
                     "content": status_message,
@@ -965,24 +1015,444 @@ async def _send_startup_status_to_chat(
                 logger.info("✅ Startup status injected into chat stream via Nexus")
                 
                 # Create a startup chat session so message appears immediately
+                # This triggers the stream which will display the queued system message
+                # Run immediately (not delayed) to ensure startup message appears right away
                 async def create_session_immediate():
-                    # Wait for server to be ready
-                    await asyncio.sleep(1.0) 
+                    # Wait for server to be ready by checking health endpoint
+                    max_retries = 10
+                    retry_delay = 0.5
+
+                    for attempt in range(max_retries):
+                        try:
+                            import httpx
+                            async with httpx.AsyncClient(timeout=2.0) as client:
+                                health_resp = await client.get("http://127.0.0.1:5460/health")
+                                if health_resp.status_code == 200:
+                                    break  # Server is ready
+                        except Exception:
+                            pass
+
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(retry_delay)
+                        else:
+                            logger.warning("Agent runner health check failed, proceeding anyway")
+
+                    # Now create the startup chat session
                     try:
                         await _create_startup_chat_session(state, status_message)
                         logger.info("✅ Startup status message injected into chat window immediately")
                     except Exception as session_err:
                         logger.warning(f"Could not create startup chat session: {session_err}")
+                        # Fallback: message will appear on first user query
 
+                # Create task but don't await (non-blocking)
                 asyncio.create_task(create_session_immediate())
 
+                # Also try direct injection as additional fallback
+                async def direct_injection_fallback():
+                    await asyncio.sleep(2.0)  # Wait a bit longer
+                    try:
+                        # Try direct router endpoint for system message injection
+                        router_url = state.gateway_base or "http://127.0.0.1:5455"
+                        system_msg_url = f"{router_url}/api/system/message"
+
+                        import httpx
+                        async with httpx.AsyncClient(timeout=5.0) as client:
+                            resp = await client.post(
+                                system_msg_url,
+                                json={
+                                    "message": status_message,
+                                    "type": "startup_status",
+                                    "priority": "high"
+                                }
+                            )
+                            if resp.status_code == 200:
+                                logger.info("✅ Startup status injected via direct router endpoint")
+                    except Exception as direct_err:
+                        logger.debug(f"Direct injection failed: {direct_err}")
+                        # Multiple fallbacks ensure message appears
+
+                asyncio.create_task(direct_injection_fallback())
         except Exception as nexus_err:
             logger.debug(f"Failed to inject via Nexus: {nexus_err}")
+            # Fallback to router endpoint if Nexus injection fails
+            router_url = state.gateway_base or "http://localhost:8000"
+            chat_endpoint = f"{router_url}/v1/chat/completions"
+            health_endpoint = f"{router_url}/health"
             
+            router_available = False
+            warning_msg = None
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    # First check if router is available
+                    try:
+                        health_response = await client.get(health_endpoint, timeout=2.0)
+                        if health_response.status_code == 200:
+                            router_available = True
+                            logger.debug("Router is available, attempting to send startup status to chat")
+                        else:
+                            # Router returned non-200 status (e.g., 503, 500)
+                            warning_msg = f"Router health check returned {health_response.status_code} (router may be starting or degraded)"
+                            logger.warning(warning_msg)
+                            startup_warnings.append(warning_msg)
+                            router_available = False
+                    except (httpx.ConnectError, httpx.TimeoutException) as health_err:
+                        # Router not reachable or timed out
+                        warning_msg = f"Router not reachable during startup: {type(health_err).__name__}"
+                        logger.warning(warning_msg)
+                        startup_warnings.append(warning_msg)
+                        router_available = False
+                    except Exception as health_err:
+                        # Other unexpected errors
+                        warning_msg = f"Router health check failed: {health_err}"
+                        logger.warning(warning_msg)
+                        startup_warnings.append(warning_msg)
+                        router_available = False
+                    
+                    # Only try to send to chat if router is available
+                    chat_functional = False
+                    chat_status_message = None
+                    
+                    if router_available:
+                        # Check if any chat clients are connected
+                        clients_connected = False
+                        client_count = 0
+                        try:
+                            clients_response = await client.get(f"{router_url}/clients/list", timeout=2.0)
+                            if clients_response.status_code == 200:
+                                clients_data = clients_response.json()
+                                client_count = clients_data.get("count", 0)
+                                clients_connected = client_count > 0
+                                if clients_connected:
+                                    logger.debug(f"Found {client_count} connected chat client(s)")
+                        except Exception as clients_err:
+                            logger.debug(f"Could not check connected clients: {clients_err}")
+                        
+                        # Test chat functionality if clients are connected
+                        if clients_connected:
+                            chat_functional, chat_status_message = await _test_chat_functionality(
+                                client, router_url, chat_endpoint, status_message
+                            )
+                        else:
+                            chat_status_message = f"No chat clients connected ({client_count} clients)"
+                            logger.debug("No chat clients connected, skipping chat notification")
+                            logger.info("Startup status available in state and via /api/admin/startup-status endpoint (will appear when client connects)")
+                    else:
+                        chat_status_message = "Router not available (chat cannot be tested)"
+                    
+                    # Add chat status to warnings if chat is not functional
+                    if not chat_functional and chat_status_message:
+                        if router_available and clients_connected:
+                            # Chat test failed - this is a warning
+                            startup_warnings.append(f"Chat functionality test failed: {chat_status_message}")
+                        elif not router_available:
+                            # Router not available - already in warnings
+                            pass
+                        elif not clients_connected:
+                            # No clients - informational, not a warning
+                            pass
+                    
+                    # Add chat status to status message
+                    if chat_status_message:
+                        if chat_functional:
+                            status_lines.append(f"**Chat**: ✅ Functional ({chat_status_message})")
+                        else:
+                            status_lines.append(f"**Chat**: ⚠️ {chat_status_message}")
+                    
+                    # Rebuild status message with chat status
+                    status_message = "\n".join(status_lines)
+            except Exception as e:
+                # Router not available at all (outer exception - httpx client creation failed, etc.)
+                warning_msg = f"Could not check router availability: {e}"
+            if warning_msg:
+                logger.warning(warning_msg)
+            if warning_msg not in startup_warnings:
+                startup_warnings.append(warning_msg)
+            logger.info("Startup status stored in state (router not available). Available via /api/admin/startup-status endpoint")
+        
+        # Update state with final warnings (including health check results)
+        if startup_warnings:
+            state.startup_status["warnings"] = startup_warnings
+            # Rebuild status message with updated warnings
+            status_message = "\n".join(status_lines)
+            state.startup_status["message"] = status_message
+        
+        # Also try to store in database for persistence (if memory is available)
+        if hasattr(state, 'memory') and state.memory:
+            try:
+                from agent_runner.db_utils import run_query
+                await run_query(
+                    state,
+                    "CREATE startup_status SET message = $msg, timestamp = time::now(), duration = $dur, issues = $issues, warnings = $warnings",
+                    {
+                        "msg": status_message,
+                        "dur": total_duration,
+                        "issues": startup_issues,
+                        "warnings": startup_warnings
+                    }
+                )
+                logger.debug("Startup status stored in database")
+            except Exception as db_err:
+                logger.debug(f"Could not store startup status in database: {db_err}")
     except Exception as e:
         logger.warning(f"Error sending startup status to chat: {e}", exc_info=True)
 
-# Removed _analyze_chat_functionality and _test_chat_functionality as they were too verbose/complex for simplified requirements
+def _analyze_chat_functionality(
+    startup_issues: list,
+    startup_warnings: list,
+    rag_running: bool,
+    memory_ready: bool,
+    mcp_count: int,
+    mcp_tools: int,
+    internet_available: bool,
+    disabled_servers: Optional[list] = None,
+    mcp_tool_cache: Optional[dict] = None
+) -> dict:
+    """
+    Analyze startup issues and warnings to assess chat functionality.
+    Categorizes issues into blocking vs non-blocking and identifies missing tools/services.
+    
+    Args:
+        startup_issues: List of critical startup issues
+        startup_warnings: List of startup warnings
+        rag_running: Whether RAG service is running
+        memory_ready: Whether memory service is ready
+        mcp_count: Number of active MCP servers
+        mcp_tools: Total number of MCP tools discovered
+        internet_available: Whether internet is available
+        disabled_servers: Optional list of disabled server names
+        mcp_tool_cache: Optional dict of server_name -> tools for detailed analysis
+    
+    Returns:
+        {
+            "chat_functional": bool,
+            "blocking_issues": list,
+            "non_blocking_issues": list,
+            "missing_tools": list,
+            "degraded_features": list,
+            "missing_tool_details": list,  # Enhanced: specific tools missing
+            "recovery_suggestions": list   # Enhanced: how to fix issues
+        }
+    """
+    from typing import Optional
+    blocking_issues = []
+    non_blocking_issues = []
+    missing_tools = []
+    degraded_features = []
+    missing_tool_details = []
+    recovery_suggestions = []
+    
+    disabled_servers = disabled_servers or []
+    mcp_tool_cache = mcp_tool_cache or {}
+    
+    # Critical issues that prevent chat from working
+    for issue in startup_issues:
+        issue_lower = issue.lower()
+        if any(keyword in issue_lower for keyword in [
+            "failed to load mcp servers", "database connection failed",
+            "memory server failed", "state initialization failed",
+            "agent engine failed", "router not available"
+        ]):
+            blocking_issues.append(issue)
+        else:
+            non_blocking_issues.append(issue)
+    
+    # Warnings that don't block chat but limit functionality
+    for warning in startup_warnings:
+        warning_lower = warning.lower()
+        
+        # MCP server failures - non-blocking but tools missing
+        if "mcp" in warning_lower and ("failed" in warning_lower or "disabled" in warning_lower):
+            # Extract server names from warning message
+            # Format: "MCP Discovery: X non-core server(s) failed and were disabled: server1, server2, server3"
+            import re
+            # Try to extract comma-separated list of servers after the colon
+            # Pattern: look for "disabled: " or "failed: " followed by server names
+            server_list_match = re.search(r"(?:failed|disabled)[:\s]+([^\.]+)", warning_lower)
+            if server_list_match:
+                server_list_str = server_list_match.group(1).strip()
+                # Split by comma and clean up server names
+                server_names = [s.strip() for s in server_list_str.split(',') if s.strip()]
+                # Filter out common words that aren't server names (like "and", "were", etc.)
+                filtered_servers = [s for s in server_names if s not in ['and', 'were', 'the', 'a', 'an'] and len(s) > 1 and not s.startswith('and ')]
+                
+                if filtered_servers:
+                    # Add each server individually
+                    for server_name in filtered_servers:
+                        missing_tools.append(f"MCP server '{server_name}' unavailable - related tools disabled")
+                        # Get specific tools from this server if available
+                        if server_name in mcp_tool_cache:
+                            tool_names = [t.get('function', {}).get('name', 'unknown') for t in mcp_tool_cache[server_name]]
+                            if tool_names:
+                                missing_tool_details.append({
+                                    "server": server_name,
+                                    "tools": tool_names,
+                                    "count": len(tool_names)
+                                })
+                else:
+                    missing_tools.append("Some MCP servers failed - related tools unavailable")
+            else:
+                missing_tools.append("Some MCP servers failed - related tools unavailable")
+            degraded_features.append("Some MCP tools may not be available")
+        
+        # Router issues - may affect chat
+        elif "router" in warning_lower:
+            if "not reachable" in warning_lower or "not available" in warning_lower:
+                blocking_issues.append("Router unavailable - chat interface may not work")
+            else:
+                non_blocking_issues.append(warning)
+        
+        # Internet issues - affects cloud models
+        elif "internet" in warning_lower or "connectivity" in warning_lower:
+            if not internet_available:
+                degraded_features.append("Cloud models unavailable (internet offline)")
+                missing_tools.append("Cloud LLM providers (requires internet)")
+        
+        # Ingestion warnings are non-blocking (runs in background)
+        elif "ingestion" in warning_lower:
+            # Ingestion runs in background, so failures are non-critical
+            non_blocking_issues.append(warning)
+        
+        # Other warnings
+        else:
+            non_blocking_issues.append(warning)
+    
+    # Service availability checks
+    if not memory_ready:
+        degraded_features.append("Memory service unavailable - conversation history may not persist")
+        missing_tools.append("Memory persistence (conversation history)")
+    
+    if not rag_running:
+        degraded_features.append("RAG service unavailable - document search/retrieval disabled")
+        missing_tools.append("RAG (document search and retrieval)")
+    
+    # Ingestion status check
+    if state.ingestion_status.get("status") == "failed":
+        degraded_features.append(f"System ingestion failed - configuration may be incomplete: {state.ingestion_status.get('error', 'Unknown error')}")
+        missing_tools.append("System configuration sync (may affect some features)")
+    elif state.ingestion_status.get("status") == "running":
+        # Still running - not an error, but note it
+        non_blocking_issues.append("System ingestion still in progress")
+    
+    # MCP tool availability
+    if mcp_count == 0:
+        degraded_features.append("No MCP servers loaded - external tools unavailable")
+        missing_tools.append("All MCP tools (external integrations)")
+    elif mcp_tools == 0:
+        degraded_features.append("MCP servers loaded but no tools discovered")
+        missing_tools.append("MCP tools (discovery failed)")
+    
+    # Add recovery suggestions
+    if not memory_ready:
+        recovery_suggestions.append({
+            "issue": "Memory service unavailable",
+            "suggestion": "Check SurrealDB connection. Verify database is running on port 8000.",
+            "command": "Check logs: tail -f logs/agent_runner.log | grep -i memory"
+        })
+    if not rag_running:
+        recovery_suggestions.append({
+            "issue": "RAG service unavailable",
+            "suggestion": "Check RAG server health. Restart if needed.",
+            "command": "curl http://localhost:5555/health"
+        })
+    if disabled_servers:
+        recovery_suggestions.append({
+            "issue": f"{len(disabled_servers)} MCP server(s) disabled",
+            "suggestion": "Review server logs and circuit breaker status. Re-enable if issues resolved.",
+            "command": f"Use tool: toggle_mcp_server(name='{disabled_servers[0]}', enabled=True)"
+        })
+    if not internet_available:
+        recovery_suggestions.append({
+            "issue": "Internet offline",
+            "suggestion": "Check network connection. Cloud models will be unavailable until restored.",
+            "command": "Check connectivity: ping 8.8.8.8"
+        })
+    
+    # Determine if chat is functional
+    # Chat is functional if no blocking issues and core services are available
+    chat_functional = (
+        len(blocking_issues) == 0 and
+        memory_ready  # Memory is required for chat to work properly
+    )
+    
+    return {
+        "chat_functional": chat_functional,
+        "blocking_issues": blocking_issues,
+        "non_blocking_issues": non_blocking_issues,
+        "missing_tools": missing_tools,
+        "degraded_features": degraded_features,
+        "missing_tool_details": missing_tool_details,
+        "recovery_suggestions": recovery_suggestions
+    }
+
+async def _test_chat_functionality(
+    client, router_url: str, chat_endpoint: str, status_message: str
+) -> tuple[bool, str]:
+    """
+    Test if chat functionality is working by attempting to send a message.
+    Returns (is_functional: bool, status_message: str)
+    """
+    # Test 1: Try push-message endpoint
+    try:
+        push_endpoint = f"{router_url}/admin/push-message"
+        push_response = await client.post(
+            push_endpoint,
+            json={
+                "message": status_message,
+                "message_type": "info",
+                "title": "System Startup Complete"
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=5.0
+        )
+        if push_response.status_code == 200:
+            push_data = push_response.json()
+            sent_count = push_data.get("sent_count", 0)
+            if sent_count > 0:
+                logger.info(f"✅ Chat functional: Startup status pushed to {sent_count} chat client(s)")
+                return True, f"Chat functional (pushed to {sent_count} client(s))"
+            else:
+                # Push endpoint exists but no clients received message
+                logger.warning("⚠️ Chat push endpoint returned but no clients received message")
+                return False, "Push endpoint returned but no clients received message"
+        else:
+            logger.debug(f"Push endpoint returned {push_response.status_code}, testing chat endpoint")
+            # Fall through to chat endpoint test
+    except (httpx.ConnectError, httpx.TimeoutException) as push_err:
+        logger.debug(f"Push endpoint not available: {push_err}, testing chat endpoint")
+        # Fall through to chat endpoint test
+    except Exception as push_err:
+        logger.debug(f"Push endpoint error: {push_err}, testing chat endpoint")
+        # Fall through to chat endpoint test
+    
+    # Test 2: Try chat endpoint (fallback)
+    try:
+        response = await client.post(
+            chat_endpoint,
+            json={
+                "model": "router",
+                "messages": [
+                    {"role": "system", "content": status_message},
+                    {"role": "assistant", "content": status_message}
+                ],
+                "stream": False
+            },
+            headers={"Content-Type": "application/json", "X-System-Message": "true"},
+            timeout=5.0
+        )
+        if response.status_code == 200:
+            logger.info("✅ Chat functional: Startup status sent via chat endpoint")
+            return True, "Chat functional (sent via chat endpoint)"
+        else:
+            logger.warning(f"⚠️ Chat endpoint returned {response.status_code}")
+            return False, f"Chat endpoint returned {response.status_code}"
+    except (httpx.ConnectError, httpx.TimeoutException) as chat_err:
+        logger.warning(f"⚠️ Chat endpoint not reachable: {type(chat_err).__name__}")
+        return False, f"Chat endpoint not reachable: {type(chat_err).__name__}"
+    except Exception as chat_err:
+        logger.warning(f"⚠️ Chat endpoint error: {chat_err}")
+        return False, f"Chat endpoint error: {str(chat_err)}"
 
 async def _send_via_chat_endpoint(client, chat_endpoint: str, status_message: str):
     """Fallback: Send message via chat endpoint."""
@@ -1029,6 +1499,16 @@ from fastapi import FastAPI
 def create_app() -> FastAPI:
     """Create the FastAPI application."""
     app = FastAPI(title="Agent Runner", lifespan=lifespan)
+    
+    # [FIX] Enable CORS for Browser Access
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Pydantic AI Integration - Phase 1: Logfire Observability
     if LOGFIRE_AVAILABLE and logfire:
@@ -1055,9 +1535,8 @@ def create_app() -> FastAPI:
             logger.info("💡 To enable cloud logging, set LOGFIRE_TOKEN environment variable")
 
     # Register Routes
-    from agent_runner.routes import chat, admin, mcp, server, files, models
+    from agent_runner.routes import chat, admin, mcp, server, files
     app.include_router(chat.router, prefix="/v1", tags=["chat"])
-    app.include_router(models.router, prefix="/v1", tags=["models"])
     app.include_router(admin.router, prefix="/admin", tags=["admin"])
     app.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
     app.include_router(server.router, prefix="/system", tags=["system"]) # Assuming server.py has router

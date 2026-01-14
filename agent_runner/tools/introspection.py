@@ -110,8 +110,15 @@ async def tool_get_active_configuration(state: AgentState) -> Dict[str, Any]:
             key = item.get("key")
             val = item.get("value")
             if key and val:
+                # Parse JSON strings for readability
+                if key in ["MODEL_INTELLIGENCE", "PERSONAS", "MCP_SERVERS", "PROVIDERS"] and isinstance(val, str):
+                    try:
+                        import json
+                        config_dict[key] = json.loads(val)
+                    except:
+                        config_dict[key] = val
                 # Mask secrets (keys containing API_KEY, SECRET, PASSWORD, TOKEN, PASS)
-                if any(secret_word in key.upper() for secret_word in ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "PASS"]):
+                elif any(secret_word in key.upper() for secret_word in ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "PASS"]):
                     config_dict[key] = "***"
                 else:
                     config_dict[key] = val

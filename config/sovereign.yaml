@@ -13,8 +13,8 @@ network:
 
 models:
   # The "Rogue Six" - Consolidated
-  agent: "ollama:llama3.1:latest" # Primary Agent (Speed + Intelligence)
-  router: "ollama:llama3.1:latest"   # Maître d' Logic (Speed)
+  agent: "ollama:llama3.3:70b" # Primary Agent (Intelligence + Speed)
+  router: "ollama:llama3.3:70b"   # Maître d' Logic (70B for Unified Residency)
   healer: "ollama:qwen3:30b"        # Log Sorter / Diagnostics (Balanced)
   summarizer: "ollama:llama3.1:latest" # Memory Consolidation (Speed)
   auditor: "ollama:qwen3:30b"       # Memory Fact Auditing (Balanced)
@@ -29,88 +29,63 @@ policies:
   night_shift: false                # Replaces NIGHT_SHIFT env vars
 
 triggers:
-  - pattern: "cwindow"
-    action_type: "control_ui"
-    action_data:
-      action: "open_window"
-      target: "chat_secondary"
-    description: "Open a secondary chat window."
-
-  - pattern: "wizard"
-    action_type: "control_ui"
-    action_data:
-      target: "/v2/mcp_wizard.html"
-    description: "Launch the MCP Smart Import Wizard."
-  
-  - pattern: "debug_mode"
-    action_type: "system_prompt"
-    action_data:
-      key: "preferences.debug"
-      value: true
-    description: "Enable verbose debug logging in chat."
-
-  - pattern: "status"
+  - pattern: "list servers"
     action_type: "tool_call"
     action_data:
-      tool: "check_system_health"
+      tool: "list_active_mcp_servers"
       args: {}
-    description: "Show System/Agent Health Report"
 
-  - pattern: "qq"
-    action_type: "menu"
-    action_data: {}
-    description: "Show the System Menu."
-
-  - pattern: "restart"
+  - pattern: "list mcp"
     action_type: "tool_call"
     action_data:
-      tool: "restart_agent"
-    action_data:
-      tool: "restart_agent"
-    description: "Reboot the Agent Runner (Graceful)."
+        tool: "list_active_mcp_servers"
+        args: {}
 
-  - pattern: "restore_chat"
+  - pattern: "health check"
     action_type: "tool_call"
     action_data:
-      tool: "set_mode"
-      args:
-        mode: "chat"
-    description: "Reset to default Chat Mode."
-
-  - pattern: "latency"
+      tool: "get_system_health"
+      args: {}
+      
+  - pattern: "system status"
     action_type: "tool_call"
     action_data:
-      tool: "investigate_system_performance"
-      args:
-        components: ["latency"]
-    description: "Run system latency diagnostics."
+      tool: "get_system_health"
+      args: {}
 
-  - pattern: "zombies"
+  - pattern: "show prompt"
+    action_type: "system_action" # Maître d' specialized
+    action_data:
+      action: "prompt"
+
+  - pattern: "restart the system"
     action_type: "tool_call"
     action_data:
-      tool: "investigate_system_performance"
-      args:
-        components: ["zombies"]
-    description: "Check for stuck processes."
-
-  - pattern: "diagnose"
-    action_type: "tool_call"
-    action_data:
-      tool: "investigate_system_performance"
-    description: "Run full system investigation (Latency, MCP, Ingestor, Zombies)."
-
-  - pattern: "latency"
-    action_type: "tool_call"
-    action_data:
-      tool: "run_latency_tests"
-    description: "Run full system latency diagnostic."
+      tool: "restart"
+      args: {}
 
 
 
 modes:
   chat:
-    prompt_suffix: "Focus on natural, engaging conversation."
+    prompt_suffix: "Act as a helpful and capable partner. Be conversational and proactive. If you use a tool, integrate the result naturally into your response without exposing the mechanics. NO raw JSON in text response."
   coding:
     prompt_suffix: "You are an experienced developer. Prioritize code correctness and best practices."
   admin:
     prompt_suffix: "You can manage system configuration and settings when needed."
+
+prompts:
+  system_template: |
+    You are Antigravity, a capable and intelligent AI assistant.
+
+    CONTEXT:
+    - Time: {{current_time_iso}}
+    - Location: {{timezone}}
+
+    CORE DIRECTIVES:
+    1. Be Helpful: Resolve the user's need with intelligence and warmth.
+    2. Be Honest: If you don't know, say so, then offer a way to find out.
+    3. Use Tools Proactively: If you need data, use your tools immediately. Don't ask for permission.
+    4. Speak Naturally: Never output raw JSON in your final answer. Hide the tool calls behind a natural conversation flow.
+
+    Your goal is to be a friction-free, sovereign partner.

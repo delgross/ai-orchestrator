@@ -1311,7 +1311,9 @@ async def tool_get_system_dashboard(state: AgentState) -> str:
             res = await run_query(state, "SELECT count() FROM fact GROUP ALL")
             if res and isinstance(res, list) and len(res) > 0:
                 return f"{res[0].get('count', 0):,} Facts"
-        except: pass
+        except Exception as e:
+
+            logger.debug(f"Failed to check service status: {e}")
         return "Unknown"
 
     async def check_latency():

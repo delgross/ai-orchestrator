@@ -154,8 +154,13 @@ class OllamaServer:
     async def generate_text(self, model: str, prompt: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Generate text using /api/generate (non-chat endpoint)."""
         payload = {"model": model, "prompt": prompt, "stream": False}
-        if options:
-            payload["options"] = options
+        # [Optimization] Smart Context Sizing (MCP Level)
+        final_options = options or {}
+        if "num_ctx" not in final_options:
+             final_options["num_ctx"] = 2048
+        
+        if final_options:
+            payload["options"] = final_options
         
         result = await self._call_ollama_api("POST", "/api/generate", json=payload)
         if not result.get("ok"):
@@ -181,7 +186,7 @@ class OllamaServer:
 # MCP Server implementation
 server = OllamaServer()
 
-def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
     """Handle MCP JSON-RPC requests."""
     method = request.get("method")
     request_id: Any = request.get("id")
@@ -364,7 +369,8 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
         
         # Execute tool asynchronously
         try:
-            result = asyncio.run(execute_tool())
+            # [FIX] Do not use asyncio.run() inside an async function
+            result = await execute_tool()
             # Log successful tool execution (debug level)
             if result.get("ok"):
                 log(f"Tool '{tool_name}' executed successfully", "DEBUG")
@@ -422,7 +428,8 @@ async def main():
                 continue
             
             request = json.loads(line)
-            response = handle_request(request)
+            # [FIX] Await the async handle_request
+            response = await handle_request(request)
             
             # Write response to stdout
             print(json.dumps(response))

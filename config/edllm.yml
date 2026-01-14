@@ -1,0 +1,71 @@
+agent_runner:
+  enable_command_execution: true
+  periodic_tasks:
+    graph_optimizer:
+      type: module
+      module: agent_runner.maintenance_tasks
+      function: graph_optimization_task
+      schedule: '86400'
+      enabled: false
+      description: Nightly Graph Gardening
+    stale_pruner:
+      type: module
+      module: agent_runner.maintenance_tasks
+      function: stale_memory_pruner_task
+      interval: 604800
+      enabled: false
+      description: Weekly Fact Pruning
+  fallback:
+    model: ollama:qwen2.5:7b-instruct
+system:
+  alert_file_path: ~/Desktop/Antigravity_Alerts.md
+  dev_mode: true
+  internet_check_interval: 5
+  log_level: INFO
+  persistence_dir: ~/ai/agent_data
+  keep_alive: -1 # Models loaded forever
+  
+  # --- THE BRAIN (Deep Intelligence: 70B / 32k) ---
+  agent_model: ollama:llama3.3:70b
+  intent_model: ollama:llama3.3:70b
+  
+  # --- THE NERVOUS SYSTEM (Fast Transactions: Qwen 7B / 32k) ---
+  router_model: ollama:qwen2.5:7b-instruct
+  task_model: ollama:qwen2.5:7b-instruct
+  summarization_model: ollama:qwen2.5:7b-instruct
+  mcp_model: ollama:qwen2.5:7b-instruct
+  finalizer_model: ollama:qwen2.5:7b-instruct
+  critic_model: ollama:qwen2.5:7b-instruct
+  healer_model: ollama:qwen2.5:7b-instruct
+  fallback_model: ollama:qwen2.5:7b-instruct
+  pruner_model: ollama:qwen2.5:7b-instruct
+  query_refinement_model: ollama:qwen2.5:7b-instruct
+  
+  # --- SPECIALIZED CORTEX ---
+  vision_model: ollama:llama3.2-vision:latest
+  embedding_model: ollama:mxbai-embed-large:latest
+  
+  finalizer_enabled: true
+  router_enabled: true
+  fallback_enabled: true
+
+# Router & Network Configuration
+router:
+  agent_runner:
+    limits:
+      max_read_bytes: 50000000
+      max_tool_steps: 20
+    url: http://127.0.0.1:5460
+  auth_token: antigravity_router_token_2025
+  base_url: http://127.0.0.1:5455
+  host: 127.0.0.1
+  http_timeout: 300
+  local_concurrency: 1
+  max_body_bytes: 10000000
+  max_concurrency: 20
+  models_cache_ttl: 300
+  port: 5455
+  ollama:
+    auto_adjust_context: true
+    base_url: http://127.0.0.1:11434
+    num_ctx: 32768

@@ -497,12 +497,33 @@ async def main():
             elif name == "list_active_mcp_servers":
                 # Wrapper around health check to extract just the MCP list
                 health = await controller.get_system_health()
-                agent_section = health.get("agent_runner", {})
-                if agent_section.get("status") == "online":
-                     details = agent_section.get("details", {})
-                     res = details.get("mcp", {"error": "No MCP section in health payload"})
+                
+                mcp_servers = {}
+                # Strategy 1: New Detailed Report (Topology at root)
+                if "topology" in health:
+                    mcp_servers = health.get("topology", {}).get("components", {}).get("mcp_servers", {})
+                
+                # Strategy 2: Legacy Fallback (Agent Runner Section)
+                elif "agent_runner" in health:
+                     agent_section = health.get("agent_runner", {})
+                     if agent_section.get("status") == "online":
+                         details = agent_section.get("details", {})
+                         # Legacy details might have 'mcp' key directly or via topology
+                         mcp_servers = details.get("mcp", details.get("topology", {}).get("components", {}).get("mcp_servers", {}))
+
+                # Transform to List for Display
+                if mcp_servers:
+                     server_list = []
+                     for s_name, s_data in mcp_servers.items():
+                         server_list.append({
+                             "name": s_name,
+                             "status": s_data.get("status", "unknown"),
+                             "failures": s_data.get("circuit_breaker", {}).get("failures", 0),
+                             "tool_count": len(s_data.get("tools", []))
+                         })
+                     res = server_list
                 else:
-                     res = {"error": f"Agent Runner is {agent_section.get('status', 'unknown')}", "health_dump": health}
+                     res = {"error": "No MCP servers found in health report", "health_dump": health}
             elif name == "get_ingestion_status":
                 res = await controller.get_ingestion_status()
             elif name == "read_service_logs":
@@ -532,7 +553,8 @@ async def main():
                 
             return [TextContent(type="text", text=json.dumps(res, indent=2))]
         except Exception as e:
-             return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+             log(f"Tool Error in {name}: {e}", level="ERROR")
+             return [TextContent(type="text", text=json.dumps({"error": f"Server unavailable: {str(e)}"}))]
 
     async with stdio_server() as (r, w):
         await server.run(r, w, server.create_initialization_options())

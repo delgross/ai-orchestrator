@@ -28,7 +28,7 @@ async def health_check():
         "uptime_s": time.time() - state.started_at
     }
 
-@router.get("/admin/ingestion/status")
+@router.get("/ingestion/status")
 async def get_ingestion_status():
     """Return status of the RAG ingestion pipeline."""
     from agent_runner.rag_ingestor import INGEST_DIR
@@ -49,7 +49,7 @@ async def get_ingestion_status():
         "ingest_dir": str(INGEST_DIR)
     }
 
-@router.post("/admin/ingestion/resume")
+@router.post("/ingestion/resume")
 async def resume_ingestion():
     """Resume a paused ingestion pipeline."""
     from agent_runner.rag_ingestor import INGEST_DIR
@@ -63,7 +63,7 @@ async def resume_ingestion():
             return {"ok": False, "error": str(e)}
     return {"ok": True, "message": "Ingestion was not paused"}
 
-@router.post("/admin/ingestion/pause")
+@router.post("/ingestion/pause")
 async def pause_ingestion():
     """Manually pause the ingestion pipeline."""
     from agent_runner.rag_ingestor import INGEST_DIR
@@ -75,7 +75,7 @@ async def pause_ingestion():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-@router.post("/admin/ingestion/clear-and-resume")
+@router.post("/ingestion/clear-and-resume")
 async def clear_and_resume_ingestion():
     """Delete the problem file that caused the pause and resume."""
     from agent_runner.rag_ingestor import INGEST_DIR
@@ -100,7 +100,7 @@ async def clear_and_resume_ingestion():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-@router.get("/admin/memory/status")
+@router.get("/memory/status")
 async def get_memory_status():
     """Detailed status of the Memory Engine (SurrealDB)."""
     state = get_shared_state()
@@ -122,7 +122,7 @@ async def get_memory_status():
         "mode": "Transactional (HNSW Enabled)" if db_ok else "Offline"
     }
 
-@router.get("/admin/health/detailed")
+@router.get("/health/detailed")
 async def health_check_detailed():
     """Return a comprehensive health report including topology."""
     from agent_runner.health_monitor import get_detailed_health_report
@@ -161,7 +161,7 @@ async def metrics():
         }
     }
 
-@router.get("/admin/startup-status")
+@router.get("/startup-status")
 async def startup_status():
     """
     Get the startup status message that was generated during system initialization.
@@ -181,7 +181,7 @@ async def startup_status():
             "available": False
         }
 
-@router.get("/admin/system-status")
+@router.get("/system-status")
 async def system_status():
     state = get_shared_state()
     
@@ -258,7 +258,7 @@ async def system_status():
         }
     }
 
-@router.post("/admin/config/models")
+@router.post("/config/models")
 async def update_models(config: Dict[str, str] = Body(...)):
     """Update system models dynamically."""
     state = get_shared_state()
@@ -273,7 +273,7 @@ async def update_models(config: Dict[str, str] = Body(...)):
     current_models = {k: getattr(state, k) for k in MODEL_ROLES}
     return {"ok": True, "models": current_models}
 
-@router.post("/admin/config/update")
+@router.post("/config/update")
 async def update_single_config(body: Dict[str, Any] = Body(...)):
     """
     Update a single configuration value or secret.
@@ -320,7 +320,7 @@ async def save_system_config(state):
     except Exception as e:
         logger.error(f"Failed to save system_config.json: {e}")
 
-@router.post("/admin/tasks/consolidation")
+@router.post("/tasks/consolidation")
 async def trigger_consolidation():
     """Manually trigger memory consolidation."""
     state = get_shared_state()
@@ -328,7 +328,7 @@ async def trigger_consolidation():
     asyncio.create_task(memory_consolidation_task(state))
     return {"ok": True, "message": "Memory consolidation triggered in background"}
 
-@router.post("/admin/tasks/backup")
+@router.post("/tasks/backup")
 async def trigger_backup():
     """Manually trigger memory backup."""
     # We use the shell script via manage.sh wrapper or direct execution
@@ -358,7 +358,7 @@ async def trigger_backup():
     
     return {"ok": True, "message": "Backup triggered in background"}
 
-@router.get("/admin/circuit-breaker/status")
+@router.get("/circuit-breaker/status")
 async def circuit_breaker_status():
     state = get_shared_state()
     return {
@@ -366,19 +366,19 @@ async def circuit_breaker_status():
         "breakers": state.mcp_circuit_breaker.get_status()
     }
 
-@router.post("/admin/circuit-breaker/reset/{name}")
+@router.post("/circuit-breaker/reset/{name}")
 async def reset_circuit_breaker(name: str):
     state = get_shared_state()
     state.mcp_circuit_breaker.reset(name)
     return {"ok": True, "message": f"Circuit breaker '{name}' reset"}
 
-@router.post("/admin/circuit-breaker/reset-all")
+@router.post("/circuit-breaker/reset-all")
 async def reset_all_circuit_breakers():
     state = get_shared_state()
     state.mcp_circuit_breaker.reset_all()
     return {"ok": True, "message": "All circuit breakers reset"}
 
-@router.post("/admin/telemetry/log")
+@router.post("/telemetry/log")
 async def log_telemetry(request: Request):
     """Receive logs/errors from the frontend dashboard."""
     try:
@@ -402,7 +402,7 @@ async def log_telemetry(request: Request):
         logger.error(f"Failed to process telemetry: {e}")
         return {"ok": False}
 
-@router.get("/admin/background-tasks")
+@router.get("/background-tasks")
 async def list_tasks():
     status = get_task_manager().get_status()
     return {
@@ -414,13 +414,13 @@ async def list_tasks():
         }
     }
 
-@router.get("/admin/system-prompt")
+@router.get("/system-prompt")
 async def get_system_prompt():
     engine = get_shared_engine()
     prompt = await engine.get_system_prompt()
     return {"ok": True, "prompt": prompt}
 
-@router.get("/admin/memory/facts")
+@router.get("/memory/facts")
 async def get_memory_facts(query: str = "", limit: int = 100):
     state = get_shared_state()
     from agent_runner.tools.mcp import tool_mcp_proxy
@@ -430,14 +430,14 @@ async def get_memory_facts(query: str = "", limit: int = 100):
         res = await tool_mcp_proxy(state, "project-memory", "get_memory_stats", {})
     return res
 
-@router.get("/admin/dashboard/insights")
+@router.get("/dashboard/insights")
 async def get_dashboard_insights():
     state = get_shared_state()
     # Logic moved to dashboard_tracker potentially, but for now matching main.py
     # (Assuming it was a simple passthrough or mock)
     return {"ok": True, "insights": []}
 
-@router.get("/admin/dashboard/state")
+@router.get("/dashboard/state")
 async def get_dashboard_state():
     """Aggregate system state for the V2 Dashboard."""
     state = get_shared_state()
@@ -488,21 +488,21 @@ async def get_dashboard_state():
         }
     }
 
-@router.post("/admin/dashboard/errors")
+@router.post("/dashboard/errors")
 async def track_dashboard_error(body: Dict[str, Any]):
     from agent_runner.dashboard_tracker import get_dashboard_tracker
     tracker = get_dashboard_tracker()
     tracker.record_error(**body)
     return {"ok": True}
 
-@router.post("/admin/dashboard/interactions")
+@router.post("/dashboard/interactions")
 async def track_dashboard_interaction(body: Dict[str, Any]):
     from agent_runner.dashboard_tracker import get_dashboard_tracker
     tracker = get_dashboard_tracker()
     tracker.record_interaction(**body)
     return {"ok": True}
 
-@router.get("/admin/system/logs")
+@router.get("/system/logs")
 async def get_logs_tail(lines: int = 100):
     """Return the last N lines of the agent runner log."""
     log_file = "logs/agent_runner.log"
@@ -522,7 +522,7 @@ async def get_logs_tail(lines: int = 100):
 # Note: sse_starlette.sse.EventSourceResponse was removed to avoid dependency
 # Using FastAPI's StreamingResponse instead
 
-@router.get("/admin/llm/roles")
+@router.get("/llm/roles")
 async def get_llm_roles():
     state = get_shared_state()
     # Attempt to load defaults from config.yaml for comparison
@@ -550,7 +550,7 @@ async def get_llm_roles():
         "defaults": defaults
     }
 
-@router.post("/admin/llm/roles")
+@router.post("/llm/roles")
 async def update_llm_roles(request: Request):
     state = get_shared_state()
     try:
@@ -565,7 +565,7 @@ async def update_llm_roles(request: Request):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-@router.post("/admin/system/process/stop")
+@router.post("/system/process/stop")
 async def stop_process():
     """Stop the Agent Runner process."""
     import sys
@@ -578,7 +578,7 @@ async def stop_process():
     logger.warning("Agent Runner process termination requested.")
     return {"ok": True, "message": "Agent Runner stopping in 1s..."}
 
-@router.get("/admin/mcp/server/status")
+@router.get("/mcp/server/status")
 async def get_mcp_server_status():
     """Get status of the internal MCP Server (SSE)."""
     from agent_runner.mcp_server.router import transport
@@ -600,7 +600,7 @@ async def get_mcp_server_status():
         "clients": active_sessions
     }
 
-@router.get("/admin/logs/stream")
+@router.get("/logs/stream")
 async def stream_logs(request: Request, services: str = "agent_runner"):
     """
     Stream logs via SSE using native StreamingResponse.
@@ -654,7 +654,7 @@ async def stream_logs(request: Request, services: str = "agent_runner"):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@router.post("/admin/system/restart")
+@router.post("/system/restart")
 async def restart_system_endpoint():
     """Trigger a full system restart script."""
     import os
@@ -676,7 +676,7 @@ async def restart_system_endpoint():
          logger.error(f"Failed to trigger restart: {e}")
          return {"ok": False, "error": str(e)}
 
-@router.get("/admin/diagnostics/stream")
+@router.get("/diagnostics/stream")
 async def stream_diagnostics(request: Request):
     """
     Stream diagnostic logs directly from the diagnostic_log table.
@@ -749,7 +749,7 @@ async def stream_diagnostics(request: Request):
                      
     return StreamingResponse(diag_generator(), media_type="text/event-stream")
 
-@router.post("/admin/tools/execute")
+@router.post("/tools/execute")
 async def execute_tool_endpoint(body: Dict[str, Any] = Body(...)):
     """
     Directly execute a defined tool/function.
@@ -780,7 +780,7 @@ async def execute_tool_endpoint(body: Dict[str, Any] = Body(...)):
     else:
         return {"ok": False, "error": f"Executor not ready. Engine: {engine}, Dir: {dir(engine)}"}
 
-@router.get("/admin/registry/health")
+@router.get("/registry/health")
 async def registry_health(state: AgentState = Depends(get_shared_state)):
     """
     Check registry integrity and return validation status.
@@ -794,7 +794,7 @@ async def registry_health(state: AgentState = Depends(get_shared_state)):
         return {"ok": False, "error": str(e), "issues": [], "warnings": []}
 
 
-@router.get("/admin/task-health")
+@router.get("/task-health")
 async def task_health(state: AgentState = Depends(get_shared_state)):
     """
     Get health statistics for fire-and-forget tasks.
@@ -804,7 +804,7 @@ async def task_health(state: AgentState = Depends(get_shared_state)):
     return {"ok": True, "task_health": summary}
 
 
-@router.post("/admin/validate-changes")
+@router.post("/validate-changes")
 async def validate_changes():
     """
     Validate all recent changes (last 2 hours).
@@ -814,7 +814,7 @@ async def validate_changes():
     return await validate_all_changes()
 
 
-@router.post("/admin/chat-latency-test")
+@router.post("/chat-latency-test")
 async def chat_latency_test(
     iterations: int = Body(5, embed=True),
     test_message: Optional[str] = Body(None, embed=True)

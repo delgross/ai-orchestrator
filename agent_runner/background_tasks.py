@@ -21,14 +21,12 @@ from enum import Enum
 
 logger = logging.getLogger("agent_runner.background_tasks")
 
-
 class TaskType(Enum):
     """Task execution type."""
     PERIODIC = "periodic"  # Run every N seconds
     SCHEDULED = "scheduled"  # Cron-like scheduling
     ONCE = "once"  # Run once after delay
     MONITOR = "monitor"  # Health monitoring tasks
-
 
 class TaskPriority(Enum):
     """Task priority levels."""
@@ -37,7 +35,6 @@ class TaskPriority(Enum):
     MEDIUM = "medium"  # Normal priority
     LOW = "low"  # Low priority, can skip if busy
     BACKGROUND = "background"  # Best effort, don't care if skipped
-
 
 @dataclass
 class Task:
@@ -63,11 +60,9 @@ class Task:
     error_count: int = 0
     last_error: Optional[str] = None
     last_duration: Optional[float] = None  # Actual duration of last run
-    last_duration: Optional[float] = None  # Actual duration of last run
     running: bool = False  # Whether task is currently executing
     min_tempo: Optional[Any] = None # Minimum Tempo required to run (e.g. Tempo.REFLECTIVE)
     time_of_day: Optional[str] = None  # Time-of-day requirement: "NIGHT" or None
-
 
 class BackgroundTaskManager:
     """Manages background tasks and scheduling."""
@@ -77,7 +72,6 @@ class BackgroundTaskManager:
         self.running = False
         self._task_handles: Dict[str, asyncio.Task] = {}
         self._idle_checker: Optional[Callable[[], bool]] = None
-        self._idle_checker: Optional[Callable[[], bool]] = None
         self._notification_subscribed = False
         
         # GLOBAL CIRCUIT BREAKER
@@ -85,11 +79,11 @@ class BackgroundTaskManager:
         self._global_error_history: List[float] = [] # Timestamps of errors
         self._global_cb_tripped = False
         self._global_cb_reset_time = 0.0
-    
+
     def set_idle_checker(self, checker: Callable[[], bool]) -> None:
         """Set the function to check if system is idle."""
         self._idle_checker = checker
-    
+
     def _subscribe_to_notifications(self) -> None:
         """Subscribe to health notifications to react automatically."""
         if self._notification_subscribed:
@@ -193,10 +187,7 @@ class BackgroundTaskManager:
             min_tempo=min_tempo,
             time_of_day=time_of_day,
         )
-        # Apply extra kwargs if we didn't add to init yet (safe approach) or update object
-        # Actually better to just update the object after init since we don't want to break signature of register unless we fully updated it
-        # But we can update signature of register above, let's just do it cleanly.
-        
+
         self.tasks[name] = task
         tt_val = task_type.value if hasattr(task_type, "value") else str(task_type)
         p_val = priority.value if hasattr(priority, "value") else str(priority)
@@ -215,7 +206,7 @@ class BackgroundTaskManager:
         if name in self._task_handles:
              # Already running (or at least handle exists)
              return
-
+        
         if task.task_type == TaskType.PERIODIC:
             handle = asyncio.create_task(self._run_periodic_task(task))
         elif task.task_type == TaskType.SCHEDULED:
@@ -226,7 +217,7 @@ class BackgroundTaskManager:
             return
         
         self._task_handles[name] = handle
-    
+
     def unregister(self, name: str) -> None:
         """Unregister a task."""
         if name in self.tasks:
@@ -234,17 +225,17 @@ class BackgroundTaskManager:
         if name in self._task_handles:
             self._task_handles[name].cancel()
             del self._task_handles[name]
-    
+
     def enable(self, name: str) -> None:
         """Enable a task."""
         if name in self.tasks:
             self.tasks[name].enabled = True
-    
+
     def disable(self, name: str) -> None:
         """Disable a task."""
         if name in self.tasks:
             self.tasks[name].enabled = False
-    
+
     def _parse_schedule(self, schedule: str) -> Optional[float]:
         """
         Parse schedule string and return seconds until next run.
@@ -292,7 +283,7 @@ class BackgroundTaskManager:
         
         logger.warning(f"Unsupported schedule format: {schedule}")
         return None
-    
+
     def _calculate_next_run(self, task: Task) -> float:
         """Calculate next run time for a task."""
         now = time.time()
@@ -315,7 +306,7 @@ class BackgroundTaskManager:
             return now
         
         return now
-    
+
     async def _run_task(self, task: Task) -> None:
         """Execute a single task."""
         if not task.enabled:
@@ -347,7 +338,7 @@ class BackgroundTaskManager:
                 return
             logger.debug(f"Skipping idle-only task '{task.name}': System not idle")
             return
-
+            
         # Check Tempo (Idle-based requirement)
         if task.min_tempo:
             from agent_runner.agent_runner import get_shared_state
@@ -372,10 +363,10 @@ class BackgroundTaskManager:
             
             if cur_val < req_val:
                 # System is too busy for this task
-                if task.priority != TaskPriority.BACKGROUND:
-                     logger.debug(f"Skipping task '{task.name}': Current Tempo {current_tempo.name} < Min Tempo {task.min_tempo}")
+                if task.priority != TaskPriority.BACKGROUND: 
+                    logger.debug(f"Skipping task '{task.name}': Current Tempo {current_tempo.name} < Min Tempo {task.min_tempo}")
                 return
-        
+
         # Check time of day (e.g., NIGHT)
         if task.time_of_day:
             from agent_runner.agent_runner import get_shared_state
@@ -434,6 +425,7 @@ class BackgroundTaskManager:
                     f"Task '{task.name}' failed (attempt {task.consecutive_failures}/{task.max_retries}), "
                     f"retrying in {actual_delay:.1f}s (jittered from {task.retry_delay}s)"
                 )
+                
                 # For periodic tasks, adjust next_run to retry time
                 if task.task_type == TaskType.PERIODIC:
                     task.next_run = retry_time
@@ -493,8 +485,8 @@ class BackgroundTaskManager:
                         )
                 except Exception as notify_err:
                     logger.warning(f"Failed to send task failure notification: {notify_err}", exc_info=True)
-                    # Don't let notification errors break task execution, but log them
             
+            # Don't let notification errors break task execution, but log them
             logger.error(f"Task '{task.name}' failed: {e}", exc_info=True)
             
             # Update Global Circuit Breaker
@@ -515,9 +507,11 @@ class BackgroundTaskManager:
                     message="The Task Scheduler has paused for 10 minutes due to excessive task failures (>10 in 5m).",
                     source="BackgroundTaskManager"
                 )
+
         finally:
             task.running = False
-    
+
+
     async def _run_periodic_task(self, task: Task) -> None:
         """Run a periodic task in a loop."""
         # Wait for initial interval before first run (prevents immediate execution on startup)
@@ -533,7 +527,7 @@ class BackgroundTaskManager:
             except Exception as e:
                 logger.error(f"Periodic task '{task.name}' loop error: {e}")
                 await asyncio.sleep(task.interval or 60)
-    
+
     async def _run_scheduled_task(self, task: Task) -> None:
         """Run a scheduled task."""
         while self.running and task.enabled:
@@ -557,7 +551,7 @@ class BackgroundTaskManager:
             except Exception as e:
                 logger.error(f"Scheduled task '{task.name}' loop error: {e}")
                 task.next_run = time.time() + 3600  # Retry in 1 hour
-    
+
     async def _run_once_task(self, task: Task) -> None:
         """Run a one-time task."""
         if task.delay:
@@ -599,14 +593,14 @@ class BackgroundTaskManager:
                         async with aiofiles.open(file_path, "r") as f:
                             content = await f.read()
                             task_config = yaml.safe_load(content)
-                            
+                        
                         if not task_config:
                             continue
                             
                         # If name not in body, infer from filename
                         if "name" not in task_config:
                             task_config["name"] = file_path.stem
-
+                        
                         task_name = task_config["name"]
                         
                         # Check if we need to register/update
@@ -624,14 +618,14 @@ class BackgroundTaskManager:
                         # This registers or updates the task in self.tasks
                         # The loader handles checking if it exists/needs update
                         await register_tasks_from_config(self, wrapper_config)
-                        
+                    
                     except Exception as e:
                         logger.error(f"Failed to load task definition {file_path.name}: {e}")
 
                 # 3. [Optional] Remove tasks whose files were deleted?
                 # For now, we assume "disable in file" is the preferred method vs deleting file.
-                # Deleting logic is risky if task is running. 
-                
+                # Deleting logic is risky if task is running.
+             
             except Exception as e:
                 logger.error(f"Task scanner loop error: {e}")
             
@@ -660,7 +654,7 @@ class BackgroundTaskManager:
             
             self._start_task_wrapper(name, task)
             logger.info(f"Started task: {name}")
-    
+
     async def stop(self) -> None:
         """Stop all tasks."""
         if not self.running:
@@ -677,7 +671,7 @@ class BackgroundTaskManager:
                 pass
         
         self._task_handles.clear()
-    
+
     async def trigger_task(self, name: str) -> Dict[str, Any]:
         """Manually trigger a task to run immediately."""
         if name not in self.tasks:
@@ -690,7 +684,7 @@ class BackgroundTaskManager:
         # Run task in background (don't wait for completion)
         asyncio.create_task(self._run_task(task))
         return {"ok": True, "message": f"Task '{name}' triggered"}
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get status of all tasks."""
         now = time.time()
@@ -721,7 +715,7 @@ class BackgroundTaskManager:
                 for name, task in self.tasks.items()
             }
         }
-    
+
     def get_upcoming_tasks(self, time_window: float) -> List[Dict[str, Any]]:
         """Get tasks scheduled to run within the given time window (seconds)."""
         now = time.time()
@@ -761,8 +755,6 @@ class BackgroundTaskManager:
 
 # Global task manager instance
 _task_manager: Optional[BackgroundTaskManager] = None
-
-
 from agent_runner.service_registry import ServiceRegistry
 
 def get_task_manager() -> BackgroundTaskManager:
@@ -776,7 +768,6 @@ def get_task_manager() -> BackgroundTaskManager:
             ServiceRegistry.register_task_manager(_task_manager)
     return _task_manager
 
-
 # MEMORY HEALTH MONITORING TASK
 async def memory_health_monitor():
     """
@@ -786,20 +777,19 @@ async def memory_health_monitor():
     try:
         from agent_runner.agent_runner import get_shared_state
         from agent_runner.service_registry import ServiceRegistry
-
         state = get_shared_state()
         if not state or not hasattr(state, 'memory') or not state.memory:
             logger.debug("Memory health monitor: No memory server to monitor")
             return
-
+        
         memory = state.memory
         was_unstable = getattr(state, 'memory_unstable', False)
-
+        
         # Quick connectivity test
         try:
             test_result = await memory._execute_query("INFO FOR DB;")
             connection_healthy = test_result is not None
-
+            
             if connection_healthy and was_unstable:
                 # Memory has recovered from instability
                 logger.info("Memory health monitor: Connection restored, clearing instability flag")
@@ -810,7 +800,6 @@ async def memory_health_monitor():
                 logger.warning("Memory health monitor: Connection lost, marking as unstable")
                 state.memory_unstable = True
                 # Could trigger fallback mode here
-
         except Exception as e:
             if not was_unstable:
                 logger.warning(f"Memory health monitor: Connection test failed: {e}")
@@ -818,7 +807,6 @@ async def memory_health_monitor():
 
     except Exception as e:
         logger.error(f"Memory health monitor task failed: {e}")
-
 
 # Register memory health monitoring task
 _memory_monitor_task = Task(
@@ -829,7 +817,6 @@ _memory_monitor_task = Task(
     enabled=True,
     priority=TaskPriority.HIGH
 )
-
 
 # SYSTEM HEALTH MONITOR (5s Heartbeat)
 async def system_health_monitor():
@@ -843,7 +830,7 @@ async def system_health_monitor():
         
         state = get_shared_state()
         if not state: return
-
+        
         # 1. Parallel Checks
         async def check_rag():
             try:
@@ -851,7 +838,7 @@ async def system_health_monitor():
                     resp = await client.get(f"http://localhost:5555/health")
                     return resp.status_code == 200
             except: return False
-
+            
         async def check_facts():
             if not (hasattr(state, "memory") and state.memory and state.memory.initialized): return "N/A"
             try:
@@ -859,9 +846,10 @@ async def system_health_monitor():
                 res = await run_query(state, "SELECT count() FROM fact GROUP ALL")
                 if res and isinstance(res, list) and len(res) > 0:
                     return f"{res[0].get('count', 0):,} Facts"
-            except: pass
+            except Exception as e:
+                logger.debug(f"Failed to count facts: {e}")
             return "N/A"
-
+            
         async def check_latency():
             try:
                 t0 = time.time()
@@ -876,7 +864,7 @@ async def system_health_monitor():
         rag_online, fact_count, latency = await asyncio.gather(
             check_rag(), check_facts(), check_latency()
         )
-
+        
         # 2. Gather Local State
         memory_online = hasattr(state, "memory") and state.memory and state.memory.initialized
         
@@ -891,7 +879,7 @@ async def system_health_monitor():
              for name, breaker in state.mcp_circuit_breaker.breakers.items():
                  if breaker.state.value == "open":
                      open_breakers.append(name)
-
+        
         # 3. Construct Snapshot
         snapshot = {
             "rag_online": rag_online,
@@ -902,9 +890,9 @@ async def system_health_monitor():
             "internet_online": internet,
             "latency": latency,
             "open_breakers": open_breakers,
-            "timestamp": time.time() 
-        }
-
+            "timestamp": time.time()
+         }
+        
         # 4. Compare & Update
         current_cache = getattr(state, "system_dashboard_data", {})
         
@@ -938,12 +926,12 @@ async def system_health_monitor():
                  q = f"""
                  LET $data = {json.dumps(snapshot)};
                  UPDATE system_state SET details = $data WHERE item = 'dashboard_monitor';
-                 IF count(SELECT * FROM system_state WHERE item = 'dashboard_monitor') == 0 THEN 
-                    CREATE system_state SET item = 'dashboard_monitor', details = $data 
+                 IF count(SELECT * FROM system_state WHERE item = 'dashboard_monitor') == 0 THEN
+                     CREATE system_state SET item = 'dashboard_monitor', details = $data 
                  END;
                  """
                  await run_query(state, q)
                  # logger.debug("Persisted new system dashboard snapshot to DB")
-                 
+    
     except Exception as e:
         logger.warning(f"System Health Monitor failed: {e}")

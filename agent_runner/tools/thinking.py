@@ -651,7 +651,7 @@ Respond with a JSON object:
         # Use agent model (or fallback if circuit broken)
         model = state.agent_model
         if not state.mcp_circuit_breaker.is_allowed(model):
-            model = state.fallback_model or "ollama:llama3.3:70b-instruct-q8_0"
+            model = state.fallback_model or "ollama:llama3.3:70b"
         
         payload = {
             "model": model,

@@ -354,10 +354,10 @@ class StartupValidator:
         
         # Optional vars (features disabled if missing)
         optional_vars = [
-            ("OPENWEATHER_API_KEY", "Weather MCP server"),
-            ("SURREAL_URL", "SurrealDB connection"),
-            ("SURREAL_USER", "SurrealDB authentication"),
-            ("SURREAL_PASS", "SurrealDB authentication"),
+            # ("OPENWEATHER_API_KEY", "Weather MCP server"),
+            # ("SURREAL_URL", "SurrealDB connection"),
+            # ("SURREAL_USER", "SurrealDB authentication"),
+            # ("SURREAL_PASS", "SurrealDB authentication"),
         ]
         
         for var_name, description in required_vars:

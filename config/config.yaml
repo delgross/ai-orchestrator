@@ -159,21 +159,21 @@ system:
   internet_check_interval: 5
   log_level: INFO
   persistence_dir: ~/ai/agent_data
+  keep_alive: -1
   agent_model: ollama:llama3.3:70b
-  router_model: ollama:llama3.1:latest
+  router_model: ollama:qwen2.5:7b-instruct
   vision_model: ollama:llama3.2-vision:latest
-  task_model: ollama:llama3.1:latest
-  summarization_model: ollama:llama3.1:latest
-  mcp_model: ollama:llama3.3:70b
-  finalizer_model: ollama:llama3.1:latest
-  critic_model: ollama:llama3.1:latest
-  healer_model: ollama:qwq:latest
-  fallback_model: ollama:llama3.1:latest
-  intent_model: ollama:llama3.1:latest
-  pruner_model: ollama:llama3.1:latest
+  task_model: ollama:qwen2.5:7b-instruct
+  summarization_model: ollama:qwen2.5:7b-instruct
+  mcp_model: ollama:qwen2.5:7b-instruct
+  finalizer_model: ollama:qwen2.5:7b-instruct
+  critic_model: ollama:qwen2.5:7b-instruct
+  healer_model: ollama:qwen2.5:7b-instruct
+  fallback_model: ollama:qwen2.5:7b-instruct
+  intent_model: ollama:llama3.3:70b
+  pruner_model: ollama:qwen2.5:7b-instruct
   embedding_model: ollama:mxbai-embed-large:latest
-  query_refinement_model: ollama:llama3.2
+  query_refinement_model: ollama:qwen2.5:7b-instruct
   finalizer_enabled: true
   router_enabled: true
   fallback_enabled: true
-# force sync 2 (Pivoting to 8B for Maître d')
