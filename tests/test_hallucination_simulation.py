@@ -76,7 +76,8 @@ This will ensure that Secure Shell (SSH), which is essentially an implementation
         print("\n🤖 No LLM-specific issues detected")
 
     # Test what the corrected response would look like
-    print("\n🔧 Simulated Corrected Response:")    if result.severity.value == "critical":
+    print("\n🔧 Simulated Corrected Response:")
+    if result.severity.value == "critical":
         corrected = "I apologize, but I cannot provide accurate information about that topic. Please consult the official documentation or try rephrasing your question."
         print(f"CRITICAL: {corrected}")
     elif result.severity.value == "high":
@@ -88,8 +89,8 @@ This will ensure that Secure Shell (SSH), which is essentially an implementation
     # Cleanup
     await detector.cleanup()
 
-    print("
-✅ Hallucination Detection Test Complete!"    return result
+    print("\n✅ Hallucination Detection Test Complete!")
+    return result
 
 if __name__ == "__main__":
     asyncio.run(simulate_hallucination_detection())

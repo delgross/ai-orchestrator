@@ -17,7 +17,7 @@ except ImportError:
 
     yaml = None
 
-# [FIX] Force Parent Path to resolve 'common' package regardless of env vars
+# Force Parent Path to resolve 'common' package regardless of env vars
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.circuit_breaker import CircuitBreakerRegistry

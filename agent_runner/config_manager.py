@@ -754,7 +754,7 @@ class ConfigManager:
             # For now, we allow high-level keys to update runtime attributes.
             
             for key, val in cfg.items():
-                # [FIX] Handle Nested 'system' block
+                # Handle Nested 'system' block
                 if key == "system" and isinstance(val, dict):
                     logger.info("[Watcher] Flattening 'system' block from config.yaml...")
                     for subkey, subval in val.items():

@@ -38,18 +38,27 @@ class ClientSession:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 class AgentState:
-    def __init__(self):
+    def __init__(self, skip_memory_init: bool = False):
         # Init Circuit Breakers (Safety System)
         self.mcp_circuit_breaker = CircuitBreakerRegistry()
-        
+
         # Client Registry (Orchestration)
         self.clients: Dict[str, ClientSession] = {}
         self.active_client_id: Optional[str] = None
+
+        # Memory server - defer initialization to avoid import-time database connections
+        self._memory_server_initialized = False
+        if not skip_memory_init:
+            from agent_runner.memory_server import MemoryServer
+            self.memory = MemoryServer(self)
         
         
         # System Event Queue for Nexus Multiplexing
         self.system_event_queue: asyncio.Queue = asyncio.Queue()
-        
+
+        # Async signaling for component initialization
+        self.memory_initialized_event: asyncio.Event = asyncio.Event()
+
         # Configuration
         self.gateway_base = os.getenv("GATEWAY_BASE", "http://127.0.0.1:5455").rstrip("/")
         self.location: Dict[str, Any] = {"city": "Unknown"} # Safe default
@@ -60,7 +69,7 @@ class AgentState:
         # --- 1. THE BRAIN (Deep Intelligence: 70B) ---
         # CODIFIED: These are now hardcoded. Config/DB are ignored.
         self._agent_model = "ollama:llama3.3:70b"
-        self._intent_model = "ollama:llama3.3:70b"
+        self._intent_model = "ollama:llama3.2:1b"
 
         # --- 2. THE NERVOUS SYSTEM (Fast Transactions: Qwen 7B) ---
         self._router_model = "ollama:qwen2.5:7b-instruct"
@@ -73,6 +82,7 @@ class AgentState:
         self._fallback_model = "ollama:qwen2.5:7b-instruct"
         self._pruner_model = "ollama:qwen2.5:7b-instruct"
         self._query_refinement_model = "ollama:qwen2.5:7b-instruct"
+        self._auditor_model = "ollama:qwen2.5:7b-instruct"
 
         # --- 3. SPECIALIZED CORTEX ---
         self._vision_model = "ollama:llama3.2-vision:latest"
@@ -127,7 +137,8 @@ class AgentState:
         self.max_tool_count = int(os.getenv("AGENT_MAX_TOOLS", "120"))
         self.http_timeout = float(os.getenv("AGENT_HTTP_TIMEOUT_S", "300.0"))
         self.router_auth_token = os.getenv("ROUTER_AUTH_TOKEN") or "antigravity_router_token_2025"
-        
+        self.memory_mode = os.getenv("MEMORY_MODE", "direct")  # Default to direct for performance
+
         # Performance & Readiness
         self.cloud_gpu_ready = False # Dynamic state
         
@@ -317,7 +328,10 @@ class AgentState:
         t_mem_inst = time.time()
         await self.memory.initialize()
         logger.info(f"[PROFILE] MemoryServer.initialize() took {time.time() - t_mem_inst:.3f}s")
-        
+
+        # Signal that memory is initialized for async waiters
+        self.memory_initialized_event.set()
+
         self.is_initialized = True
         logger.info("AgentState initialized.")
 
@@ -442,6 +456,7 @@ class AgentState:
             return
 
         if key == "ROUTER_AUTH_TOKEN": self.router_auth_token = val
+        elif key == "MEMORY_MODE": self.memory_mode = val
         elif key == "ACTIVE_MODE": self._active_mode = val
         elif key == "MODES":
              import json
@@ -466,8 +481,9 @@ class AgentState:
     MODEL_KEYS = [
         "agent_model", "router_model", "task_model", "summarization_model",
         "vision_model", "mcp_model", "finalizer_model", "critic_model",
+        "vision_model", "mcp_model", "finalizer_model", "critic_model",
         "healer_model", "fallback_model", "intent_model", "pruner_model",
-        "embedding_model", "query_refinement_model"
+        "embedding_model", "query_refinement_model", "auditor_model"
     ]
     # --- CONFIGURATION LOADING ---
     def _load_base_config(self):
@@ -477,8 +493,8 @@ class AgentState:
         """
         import yaml
         
-        base_path = Path(__file__).parent.parent / "config" / "edollama.yaml"
-        llm_path = Path(__file__).parent.parent / "config" / "edllm.yml"
+        base_path = Path(__file__).parent.parent / "config" / "sovereign.yaml"
+        llm_path = Path(__file__).parent.parent / "config" / "edllm.yaml"
         
         cfg_data = {}
         
@@ -536,6 +552,31 @@ class AgentState:
                 attr_name = f"_{key}"
                 setattr(self, attr_name, val)
                 logger.info(f"Initialized {key} => {val}")
+
+        # 4. Try Sovereign Models Block (New Schema)
+        models_cfg = cfg_data.get("models", {})
+        if models_cfg:
+            # Map short keys (agent) to long keys (agent_model)
+            # Schema: models: { agent: "...", router: "..." }
+            for short_key, model_val in models_cfg.items():
+                if not model_val: continue
+                
+                # Construct internal key (e.g. agent -> agent_model)
+                if short_key == "cloud_vision": internal_key = "vision_model"
+                elif "_" in short_key: internal_key = short_key # Already long?
+                else: internal_key = f"{short_key}_model"
+                
+                if internal_key in self.MODEL_KEYS:
+                     setattr(self, f"_{internal_key}", model_val) 
+                     logger.info(f"Initialized {internal_key} (from models.{short_key}) => {model_val}")
+
+        # Load Policies
+        policies_cfg = cfg_data.get("policies", {})
+        if policies_cfg:
+            for policy_key, policy_val in policies_cfg.items():
+                if policy_key == "memory_mode":
+                    self.memory_mode = policy_val
+                    logger.info(f"Initialized memory_mode (from policies.memory_mode) => {policy_val}")
 
     
     
@@ -688,6 +729,11 @@ class AgentState:
     def query_refinement_model(self): return self._resolve_sovereign_model(self._query_refinement_model)
     @query_refinement_model.setter
     def query_refinement_model(self, value): self._query_refinement_model = value
+
+    @property
+    def auditor_model(self): return self._resolve_sovereign_model(self._auditor_model)
+    @auditor_model.setter
+    def auditor_model(self, value): self._auditor_model = value
 
     @property
     def embedding_model(self): return self._resolve_sovereign_model(self._embedding_model, fallback_override="ollama:mxbai-embed-large:latest")

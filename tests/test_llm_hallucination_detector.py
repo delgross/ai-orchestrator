@@ -90,8 +90,8 @@ async def test_llm_hallucination_detector():
                 print(f"❌ Test result unclear - Severity: {result.severity.value}, Is hallucination: {result.is_hallucination}")
 
         # Test LLM analyzer directly
-        print("
-🔬 Testing LLM Analyzer Directly"        print("-" * 40)
+        print("\n🔬 Testing LLM Analyzer Directly")
+        print("-" * 40)
 
         if detector.llm_analyzer:
             test_query = "What is 2 + 2?"
@@ -114,15 +114,15 @@ async def test_llm_hallucination_detector():
         else:
             print("❌ LLM analyzer not available")
 
-        print("
-📊 System Statistics"        print("-" * 30)
+        print("\n📊 System Statistics")
+        print("-" * 30)
         print(f"Detector stats: {detector.get_stats()}")
 
         # Cleanup
         await detector.cleanup()
 
-        print("
-🎉 LLM Hallucination Detection Testing Complete!"    except Exception as e:
+        print("\n🎉 LLM Hallucination Detection Testing Complete!")
+    except Exception as e:
         print(f"❌ Test failed: {e}")
         import traceback
         traceback.print_exc()

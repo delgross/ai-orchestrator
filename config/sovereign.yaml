@@ -14,10 +14,11 @@ network:
 models:
   # The "Rogue Six" - Consolidated
   agent: "ollama:llama3.3:70b" # Primary Agent (Intelligence + Speed)
-  router: "ollama:llama3.3:70b"   # Maître d' Logic (70B for Unified Residency)
-  healer: "ollama:qwen3:30b"        # Log Sorter / Diagnostics (Balanced)
-  summarizer: "ollama:llama3.1:latest" # Memory Consolidation (Speed)
-  auditor: "ollama:qwen3:30b"       # Memory Fact Auditing (Balanced)
+  router: "ollama:qwen2.5:7b-instruct"   # Maître d' Logic (7B for Speed < 1.5s)
+  intent: "ollama:qwen2.5:7b-instruct"   # Maître d' Intent (7B for Speed < 1.5s)
+  healer: "ollama:qwen2.5:7b-instruct"        # Log Sorter / Diagnostics
+  summarizer: "ollama:qwen2.5:7b-instruct" # Memory Consolidation
+  auditor: "ollama:qwen2.5:7b-instruct"       # Memory Fact Auditing
   cloud_vision: "Qwen/Qwen2.5-VL-72B-Instruct-AWQ" # Modal Cloud Vision
   stt: "medium.en"                  # Whisper Local STT
 
@@ -27,6 +28,7 @@ policies:
   allow_commands: true              # Consolidated 'enable_command_execution'
   cloud_compute: false              # Replaces ENABLE_MODAL
   night_shift: false                # Replaces NIGHT_SHIFT env vars
+  memory_mode: "direct"             # Memory client implementation: "direct" or "mcp"
 
 triggers:
   - pattern: "list servers"

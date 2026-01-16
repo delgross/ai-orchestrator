@@ -677,9 +677,19 @@ END;"""
                         # Strip "ollama:" prefix if present for some calls, though Ollama usually handles it if model name matches
                         # specifically mxbai-embed-large:latest
                         clean_model = model.replace("ollama:", "")
+                        
+                        # [FIX] Defensive: Handle List inputs (e.g. from unexpected callers)
+                        # Ollama API expects 'prompt' as string, but 'input' as string/list.
+                        # We use 'prompt' for /api/embeddings.
+                        prompt_text = text
+                        if isinstance(text, list):
+                            logger.warning(f"MemoryServer: get_embedding received LIST (len={len(text)}). Joining with newlines.")
+                            # Join with newlines (standard for batch embedding in single vector context)
+                            prompt_text = "\n".join([str(t) for t in text])
+                        
                         resp = await client.post(
                             "http://127.0.0.1:11434/api/embeddings",
-                            json={"model": clean_model, "prompt": text},
+                            json={"model": clean_model, "prompt": prompt_text},
                             timeout=30.0
                         )
                         if resp.status_code == 200:
@@ -1636,8 +1646,12 @@ END;"""
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    async def consult_advice(self, topic: str):
+    async def consult_advice(self, topic: str = "", query: str = ""):
         """Retrieve advice for a specific topic, INCLUDING graph traversal (Parents). Never raises."""
+        topic = topic or query
+        if not topic:
+             return {"ok": False, "error": "Missing required parameter: 'topic' or 'query'"}
+        
         await self.ensure_connected()
         try:
             # 1. Find Node

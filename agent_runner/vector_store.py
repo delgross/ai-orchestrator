@@ -29,15 +29,13 @@ class ToolsetVectorIndex:
         if not tools:
             return
 
-        # [FIX] Wait for memory to be initialized (Race Condition Protection)
+        # Wait for memory to be initialized (proper async signaling)
         # Executor spawns this task before AgentState.initialize() completes
-        retries = 60 # Increased from 30 to 60 (30s) for heavy startups
-        while getattr(self.state, "memory", None) is None or not getattr(self.state.memory, "initialized", False):
-            if retries <= 0:
-                logger.warning("Timed out waiting for MemoryServer initialization. Skipping tool indexing.")
-                return
-            await asyncio.sleep(0.5)
-            retries -= 1
+        try:
+            await asyncio.wait_for(self.state.memory_initialized_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning("Timed out waiting for MemoryServer initialization. Skipping tool indexing.")
+            return
 
         
         logger.info(f"Indexing {len(tools)} tools into Vector Store...")

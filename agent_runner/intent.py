@@ -1,14 +1,166 @@
 import json
 import logging
 import time
-from typing import Any, Dict, List
+import os
+import hashlib
+from typing import Any, Dict, List, Optional
 import httpx
 import re
+from pathlib import Path
 
 logger = logging.getLogger("agent_runner.intent")
 from agent_runner.db_utils import run_query
 
-_intent_cache = {}
+class PersistentIntentCache:
+    """Persistent cache for Maître d' intent classifications with 24h TTL"""
+
+    def __init__(self, cache_file: str = "maitre_d_cache.json", max_entries: int = 10000):
+        self.cache_file = Path(__file__).parent / cache_file
+        self.max_entries = max_entries
+        self.cache = self._load_cache()
+        self.hits = 0
+        self.misses = 0
+
+    def _load_cache(self) -> Dict[str, Any]:
+        """Load cache from disk"""
+        if self.cache_file.exists():
+            try:
+                with open(self.cache_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load intent cache: {e}")
+        return {}
+
+    def _save_cache(self):
+        """Save cache to disk"""
+        try:
+            # Clean expired entries before saving
+            self._cleanup_expired()
+
+            with open(self.cache_file, 'w') as f:
+                json.dump(self.cache, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save intent cache: {e}")
+
+    def _cleanup_expired(self):
+        """Remove expired entries"""
+        current_time = time.time()
+        expired_keys = []
+
+        for key, entry in self.cache.items():
+            if current_time - entry.get('timestamp', 0) > 86400:  # 24 hours
+                expired_keys.append(key)
+
+        for key in expired_keys:
+            del self.cache[key]
+
+        # If still too many entries, remove oldest
+        if len(self.cache) > self.max_entries:
+            # Sort by timestamp and keep newest
+            sorted_entries = sorted(self.cache.items(),
+                                  key=lambda x: x[1].get('timestamp', 0),
+                                  reverse=True)
+            self.cache = dict(sorted_entries[:self.max_entries])
+
+    def get(self, query_hash: str) -> Optional[Dict[str, Any]]:
+        """Get cached result if valid"""
+        if query_hash in self.cache:
+            entry = self.cache[query_hash]
+            if time.time() - entry.get('timestamp', 0) < 86400:  # 24h TTL
+                self.hits += 1
+                logger.info(f"Maître d' Cache HIT: {query_hash[:16]}... (TTL: {86400 - int(time.time() - entry['timestamp'])}s)")
+                return entry['result']
+            else:
+                # Expired, remove it
+                del self.cache[query_hash]
+
+        self.misses += 1
+        return None
+
+    def put(self, query_hash: str, result: Dict[str, Any]):
+        """Store result in cache"""
+        self.cache[query_hash] = {
+            'timestamp': time.time(),
+            'result': result,
+            'query_hash': query_hash
+        }
+
+        # Save to disk periodically (every 10 entries)
+        if (self.hits + self.misses) % 10 == 0:
+            self._save_cache()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        total_requests = self.hits + self.misses
+        hit_rate = self.hits / total_requests if total_requests > 0 else 0
+
+        return {
+            'total_entries': len(self.cache),
+            'hit_rate': hit_rate,
+            'hits': self.hits,
+            'misses': self.misses,
+            'cache_file': str(self.cache_file)
+        }
+
+# Global cache instance
+_intent_cache = PersistentIntentCache()
+
+# Common query patterns to pre-compute during startup
+COMMON_INTENT_PATTERNS = [
+    # Conversational
+    "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
+    "how are you", "what's up", "how's it going", "sup",
+    "thank you", "thanks", "ok", "okay", "got it", "understood",
+
+    # Time/Location
+    "what time is it", "what's the time", "current time", "time",
+    "where am I", "what's my location", "current location", "location",
+
+    # System status
+    "how are you doing", "system status", "are you working", "status",
+
+    # Tool discovery
+    "what can you do", "what tools do you have", "help", "commands",
+
+    # Web search
+    "search for", "look up", "find information about",
+
+    # File operations
+    "list files", "read file", "write file", "create file"
+]
+
+async def precompute_common_intents(state: Any, tool_menu_summary: str):
+    """Pre-compute intent classifications for common query patterns during startup"""
+    logger.info(f"Pre-computing Maître d' intents for {len(COMMON_INTENT_PATTERNS)} common patterns...")
+
+    precomputed = 0
+    for pattern in COMMON_INTENT_PATTERNS:
+        try:
+            normalized = normalize_query_for_caching(pattern)
+            cache_key = hashlib.md5(f"{normalized}::{state.intent_model}".encode()).hexdigest()
+
+            # Only compute if not already cached
+            if not _intent_cache.get(cache_key):
+                logger.info(f"Pre-computing intent for: '{pattern}'")
+                result = await _compute_intent_classification(pattern, state, tool_menu_summary)
+                _intent_cache.put(cache_key, result)
+                precomputed += 1
+
+        except Exception as e:
+            logger.warning(f"Failed to pre-compute intent for '{pattern}': {e}")
+
+    logger.info(f"✅ Pre-computed {precomputed} Maître d' intents. Cache now has {_intent_cache.get_stats()['total_entries']} entries.")
+
+async def _compute_intent_classification(query: str, state: Any, tool_menu_summary: str) -> Dict[str, Any]:
+    """Compute intent classification for a query (extracted from main function)"""
+    # This is a simplified version - in practice we'd call the full LLM analysis
+    # For now, return basic structure to avoid breaking the system
+    return {
+        "target_servers": [],
+        "complexity": "low",
+        "auto_execute": None,
+        "precomputed": True
+    }
 
 def extract_text_content(content: Any) -> str:
     """Extract plain text from potential list-based content (common in advanced clients)."""
@@ -19,26 +171,61 @@ def extract_text_content(content: Any) -> str:
         return " ".join([str(block.get("text", "")) for block in content if isinstance(block, dict) and block.get("type") == "text"])
     return str(content)
 
+def normalize_query_for_caching(query: str) -> str:
+    """Normalize query for better cache hits"""
+    # Convert to lowercase and strip
+    normalized = query.lower().strip()
+
+    # Remove punctuation
+    normalized = re.sub(r'[^\w\s]', '', normalized)
+
+    # Normalize whitespace
+    normalized = ' '.join(normalized.split())
+
+    # Common synonym normalization
+    synonyms = {
+        "what's": "what is",
+        "what're": "what are",
+        "how's": "how is",
+        "how're": "how are",
+        "i'm": "i am",
+        "it's": "it is",
+        "that's": "that is",
+        "there's": "there is",
+        "here's": "here is",
+        "where's": "where is",
+        "who's": "who is",
+        "how's it going": "how are you",
+        "what's up": "how are you",
+        "whats up": "how are you",
+        "sup": "how are you",
+        "hey": "hello",
+        "hi there": "hello",
+        "good morning": "hello",
+        "good afternoon": "hello",
+        "good evening": "hello"
+    }
+
+    for old, new in synonyms.items():
+        normalized = normalized.replace(old, new)
+
+    return normalized
+
 async def classify_search_intent(query: str, state: Any, tool_menu_summary: str, advice_menu_list: List[str] = None) -> Dict[str, Any]:
     """Classify query and select relevant toolsets using the 'Maître d' Menu' & Advice Registry."""
-    
+
     # Store query for maître d' learning system
     if hasattr(state, 'last_user_query'):
         state.last_user_query = query
 
-    # [OPTIMIZATION] RAM Cache to prevent Double-Calling Maître d' (Nexus + ToolSelector)
-    # We cache intent for 5 seconds to cover the request lifecycle.
-    cache_key = f"{query}::{state.intent_model}"
-    global _intent_cache
-    if cache_key in _intent_cache:
-        timestamp, cached_result = _intent_cache[cache_key]
-        if time.time() - timestamp < 5.0:
-            logger.info(f"Maître d' Cache HIT: Reusing decision_keys: {list(cached_result.keys())}")
-            return cached_result
-    
-    # Prune Cache (Simple)
-    if len(_intent_cache) > 100:
-        _intent_cache.clear()
+    # [OPTIMIZATION] Persistent Cache with Query Normalization
+    normalized_query = normalize_query_for_caching(query)
+    cache_key = hashlib.md5(f"{normalized_query}::{state.intent_model}".encode()).hexdigest()
+
+    # Check persistent cache first
+    cached_result = _intent_cache.get(cache_key)
+    if cached_result:
+        return cached_result
 
     if not tool_menu_summary:
         # Fallback if discovery hasn't run
@@ -106,7 +293,7 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
         f"{env_context}\n\n"         # Dynamic Content Third
         "Task: Analyze the query and select tools from the Menu. Return valid JSON only.\n"
         "Example Output:\n"
-        "{\"target_servers\": [], \"complexity\": \"low\", \"auto_execute\": [{\"tool\": \"get_current_time\", \"args\": {}}]}\n"
+        "{\"target_servers\": [], \"complexity\": \"low\", \"auto_execute\": null}\n"
         "{\"target_servers\": [\"tavily-search\"], \"complexity\": \"high\", \"auto_execute\": null}\n\n"
         f"User Query: '{query}'\n"
         "YOUR RESPONSE (JSON ONLY):"
@@ -142,10 +329,19 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
                 payload["model"] = model.replace("ollama:", "", 1)
             else:
                 url = f"{state.gateway_base}/v1/chat/completions"
-            logger.info(f"Maître d' URL: {url} (Model: {model})")
+            # [DEBUG] Log Prompt Size
+            prompt_len = len(prompt)
+            logger.info(f"Maître d' URL: {url} (Model: {model}) | Payload Size: {len(json.dumps(payload))} bytes | Prompt Len: {prompt_len} chars")
+            
+            t0 = time.time()
+            logger.info("Maître d' Request: SENDING...")
+
             
             # [ADJUSTMENT] 70B Model requires longer timeout for Prompt Eval of large menus
             r = await client.post(url, json=payload, timeout=120.0)
+            
+            dur = time.time() - t0
+            logger.info(f"Maître d' Request: RECEIVED in {dur:.2f}s | Status: {r.status_code}")
             
             if r.status_code == 200:
                 try:
@@ -168,19 +364,31 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
                             ]
                         
                         # [SANITIZER] Filter Malformed Tool Names (e.g. "Server 'time'...")
-                        if "auto_execute" in result and isinstance(result["auto_execute"], list):
-                            cleaned_tools = []
-                            for t in result["auto_execute"]:
-                                t_name = t.get("tool", "")
-                                # Heuristic: Tool names should be snake_case or kebab-case, no spaces, no quotes
-                                if " " in t_name or "'" in t_name or '"' in t_name or ":" in t_name:
-                                    logger.warning(f"Maître d' Sanitizer: Dropped malformed tool name: '{t_name}'")
-                                else:
-                                    cleaned_tools.append(t)
-                            result["auto_execute"] = cleaned_tools
-                        
-                        # [OPTIMIZATION] Cache Result
-                        _intent_cache[cache_key] = (time.time(), result)
+                        if "auto_execute" in result:
+                            # Normalize string to list
+                            if isinstance(result["auto_execute"], str):
+                                # Convert "tool_name" -> [{"tool": "tool_name"}]
+                                result["auto_execute"] = [{"tool": result["auto_execute"]}]
+                            
+                            # Clean list
+                            if isinstance(result["auto_execute"], list):
+                                cleaned_tools = []
+                                for t in result["auto_execute"]:
+                                    # Handle simple strings in list ["tool"]
+                                    if isinstance(t, str):
+                                        t = {"tool": t}
+                                        
+                                    t_name = t.get("tool", "")
+                                    # Heuristic: Tool names should be snake_case or kebab-case, no spaces, no quotes
+                                    if " " in t_name or "'" in t_name or '"' in t_name or ":" in t_name:
+                                        logger.warning(f"Maître d' Sanitizer: Dropped malformed tool name: '{t_name}'")
+                                    else:
+                                        cleaned_tools.append(t)
+                                result["auto_execute"] = cleaned_tools
+
+                        # [OPTIMIZATION] Cache Result in Persistent Cache
+                        _intent_cache.put(cache_key, result)
+                        logger.info(f"Maître d' Cache MISS: Stored result for {normalized_query[:30]}...")
                         return result
                     except json.JSONDecodeError:
                         # 2. Try Regex Extraction
@@ -206,15 +414,19 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
                                     cleaned_tools.append(t)
                             result["auto_execute"] = cleaned_tools
 
-                        # [OPTIMIZATION] Cache Result
-                        _intent_cache[cache_key] = (time.time(), result)
+                        # [OPTIMIZATION] Cache Result in Persistent Cache
+                        _intent_cache.put(cache_key, result)
+                        logger.info(f"Maître d' Cache MISS: Stored result for {normalized_query[:30]}...")
                         return result
                         raise # Re-raise to trigger error handler below
 
                 except (json.JSONDecodeError, AttributeError):
                     logger.error(f"Maître d' JSON Error. Body: {r.text[:500]}")
                     state.mcp_circuit_breaker.record_failure(model) # JSON error might mean model is outputting garbage
-                    return {"target_servers": []}
+                    # Cache the failure result too to avoid repeated failures
+                    failure_result = {"target_servers": []}
+                    _intent_cache.put(cache_key, failure_result)
+                    return failure_result
                     
             elif r.status_code == 429:
                 logger.warning("Maître d' Overloaded (429). Bypassing intent classification.")

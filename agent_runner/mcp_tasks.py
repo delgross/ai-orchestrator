@@ -19,7 +19,7 @@ async def mcp_refresh_task():
         engine = get_shared_engine()
         state = engine.state
         
-        # [FIX] Only refresh tools for servers that are already enabled and have tools cached
+        # Only refresh tools for servers that are already enabled and have tools cached
         # This prevents the refresh from disabling servers that are temporarily unavailable
         enabled_servers = [
             name for name, cfg in state.mcp_servers.items() 

@@ -33,7 +33,8 @@ class SlashCommandProcessor:
         if last_msg.get("role") != "user":
             return messages, None
             
-        content = last_msg.get("content", "").strip()
+        from common.message_utils import get_message_text
+        content = get_message_text(last_msg)
         if not content.startswith("/"):
             return messages, None
             

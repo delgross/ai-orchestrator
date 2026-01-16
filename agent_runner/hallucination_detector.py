@@ -96,9 +96,10 @@ class DetectorConfig:
 class LLMHallucinationAnalyzer:
     """LLM-based hallucination analysis using llama3.2:latest."""
 
-    def __init__(self, ollama_base: str = "http://127.0.0.1:11434"):
+    def __init__(self, ollama_base: str = "http://127.0.0.1:11434", model_name: str = "llama3.3:70b"):
         self.ollama_base = ollama_base.rstrip("/")
-        self.model_name = "llama3.2:latest"
+        # [FIX] Strip 'ollama:' prefix for API compatibility
+        self.model_name = model_name.replace("ollama:", "") if model_name else model_name
         self.client = None
 
     async def _ensure_client(self):
@@ -274,7 +275,10 @@ class HallucinationDetector:
         self.feedback_history: List[Dict[str, Any]] = []
 
         # LLM analyzer
-        self.llm_analyzer = LLMHallucinationAnalyzer()
+        # [FIX] Use dynamic model from config (Auditor Role) to prevent thrashing
+        auditor_model = state.auditor_model if state else "ollama:llama3.3:70b"
+        logger.info(f"🛡️ HallucinationDetector initializing with model: {auditor_model}")
+        self.llm_analyzer = LLMHallucinationAnalyzer(model_name=auditor_model)
 
         # Initialize detectors
         self._initialize_detectors()

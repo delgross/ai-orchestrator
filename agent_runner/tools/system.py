@@ -7,6 +7,23 @@ from agent_runner.state import AgentState
 
 logger = logging.getLogger("agent_runner.tools.system")
 
+
+class SystemRegistry:
+    """Basic system configuration registry for validation."""
+
+    @staticmethod
+    def validate_toggle_value(key: str, value: Any) -> bool:
+        """Validate a toggle configuration value."""
+        # Basic validation - could be expanded
+        if isinstance(value, bool):
+            return True
+        return False
+
+    @staticmethod
+    def get_toggle(key: str):
+        """Get toggle configuration (placeholder)."""
+        return None
+
 async def tool_run_command(state: AgentState, command: str, background: bool = False, dry_run: bool = False) -> Dict[str, Any]:
     """
     Run a shell command in the agent's environment.
@@ -401,11 +418,11 @@ async def tool_set_system_config(state: AgentState, key: str, value: str) -> Dic
     Set a system configuration key.
     persist=True always.
     """
-    # TODO: SystemRegistry not yet implemented - validation skipped for now
-    # if not SystemRegistry.validate_toggle_value(key, value):
-    #     toggle = SystemRegistry.get_toggle(key)
-    #     valid_opts = toggle.options if toggle else "Unknown Key"
-    #     return {"ok": False, "error": f"Invalid value '{value}' for key '{key}'. Valid options: {valid_opts}"}
+    # Basic validation using SystemRegistry
+    if not SystemRegistry.validate_toggle_value(key, value):
+        toggle = SystemRegistry.get_toggle(key)
+        valid_opts = toggle.options if toggle else "boolean values only"
+        return {"ok": False, "error": f"Invalid value '{value}' for key '{key}'. Valid options: {valid_opts}"}
 
     try:
         base = state.gateway_base
@@ -464,7 +481,7 @@ async def tool_register_trigger(state: AgentState, pattern: str, action_type: st
             except:
                 return {"ok": False, "error": "action_data must be valid JSON string"}
 
-        # TODO: SystemRegistry not yet implemented - using sovereign triggers instead
+        # SystemRegistry trigger management not implemented - using sovereign triggers instead
         from common.sovereign import get_sovereign_triggers
         # For now, triggers are managed via sovereign.yaml
         # SystemRegistry.add_trigger(pattern, action_type, data, description)
@@ -475,7 +492,7 @@ async def tool_register_trigger(state: AgentState, pattern: str, action_type: st
 async def tool_remove_trigger(state: AgentState, pattern: str) -> Dict[str, Any]:
     """Remove a dynamic trigger by its pattern."""
     try:
-        # TODO: SystemRegistry not yet implemented
+        # SystemRegistry trigger management not implemented
         # SystemRegistry.remove_trigger(pattern)
         return {"ok": False, "error": "Trigger removal not yet implemented. Edit sovereign.yaml for now."}
     except Exception as e:
@@ -483,7 +500,7 @@ async def tool_remove_trigger(state: AgentState, pattern: str) -> Dict[str, Any]
 
 async def tool_list_triggers(state: AgentState) -> Dict[str, Any]:
     """List all active triggers in the registry."""
-    # TODO: SystemRegistry not yet implemented - using sovereign triggers instead
+    # SystemRegistry trigger management not implemented - using sovereign triggers instead
     from common.sovereign import get_sovereign_triggers
     triggers = get_sovereign_triggers()
     return {"ok": True, "triggers": triggers}

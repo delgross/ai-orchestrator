@@ -32,6 +32,35 @@ if ! launchctl print "$DOMAIN" >/dev/null 2>&1; then
   DOMAIN="user/$USER_UID"
 fi
 
+# Detect if we're in a sandbox environment (check for common restrictions)
+detect_sandbox() {
+  # Check if we can access system launchd
+  if ! launchctl print "$DOMAIN" >/dev/null 2>&1; then
+    return 0  # In sandbox
+  fi
+
+  # Check if we can bootstrap services (common sandbox restriction)
+  if ! launchctl bootstrap "$DOMAIN" /dev/null 2>/dev/null; then
+    return 0  # In sandbox
+  fi
+
+  # Check for other sandbox indicators
+  if [ -n "$SANDBOXED" ] || [ "$USER" != "bee" ] || ! pgrep -x "Finder" >/dev/null 2>&1; then
+    return 0  # In sandbox
+  fi
+
+  return 1  # Not in sandbox
+}
+
+# Check if we're in sandbox
+IN_SANDBOX=false
+if detect_sandbox; then
+  IN_SANDBOX=true
+  echo "🔒 Sandbox environment detected - using direct process management"
+else
+  echo "🖥️  Production environment detected - using launchd service management"
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -43,7 +72,12 @@ NC='\033[0m' # No Color
 # Check if a port is in use
 port_in_use() {
   local port=$1
-  lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+  if [ "$IN_SANDBOX" = "true" ]; then
+    # In sandbox, just check if service responds (simpler approach)
+    curl -s --max-time 1 "http://127.0.0.1:$port/health" >/dev/null 2>&1
+  else
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+  fi
 }
 
 # Check if a launchd job is loaded
@@ -84,7 +118,11 @@ wait_for_health() {
 # Get PID using a port
 get_port_pid() {
   local port=$1
-  lsof -t -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || echo ""
+  if [ "$IN_SANDBOX" = "true" ]; then
+    echo ""  # PID not available in sandbox mode
+  else
+    lsof -t -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || echo ""
+  fi
 }
 
 # Check router status
@@ -162,21 +200,37 @@ check_rag() {
   local http_ok=false
   local launchd_ok=false
   local pid=""
-  
+
   if port_in_use "$RAG_PORT"; then
     port_ok=true
     pid=$(get_port_pid "$RAG_PORT")
   fi
-  
+
   if service_responding "http://127.0.0.1:$RAG_PORT/health"; then
     http_ok=true
   fi
-  
+
   if job_loaded "$RAG_LABEL"; then
     launchd_ok=true
   fi
-  
+
   echo "$port_ok|$http_ok|$launchd_ok|$pid"
+}
+
+# Check Ollama status
+check_ollama() {
+  local http_ok=false
+  local pid=""
+
+  # Check if Ollama API is responding
+  if service_responding "http://127.0.0.1:11434/api/tags" 3; then
+    http_ok=true
+  fi
+
+  # Try to find Ollama process (this is a best effort in sandbox)
+  pid=$(pgrep -f "ollama serve" 2>/dev/null || echo "")
+
+  echo "true|$http_ok|true|$pid"  # Always consider port "true" since it's not a fixed port check
 }
 
 # Show status
@@ -270,11 +324,25 @@ show_status() {
   else
     echo -e "${RED}✗ Not running${NC}"
   fi
-  
+
+  # Ollama
+  local ollama_status=$(check_ollama)
+  IFS='|' read -r ollama_port ollama_http ollama_launchd ollama_pid <<< "$ollama_status"
+
+  echo -n "Ollama (port 11434): "
+  if [ "$ollama_http" = "true" ]; then
+    echo -e "${GREEN}✓ Running${NC}"
+    if [ -n "$ollama_pid" ]; then
+      echo "  PID: $ollama_pid"
+    fi
+  else
+    echo -e "${RED}✗ Not running${NC}"
+  fi
+
   echo ""
   
   # Health check
-  if [ "$router_http" = "true" ] && [ "$agent_http" = "true" ] && [ "$surreal_http" = "true" ]; then
+  if [ "$router_http" = "true" ] && [ "$agent_http" = "true" ] && [ "$surreal_http" = "true" ] && [ "$ollama_http" = "true" ]; then
     echo -e "${GREEN}✓ All services healthy${NC}"
     
     # Check if dashboard is reachable (check HTTP status code)
@@ -296,17 +364,77 @@ show_status() {
 
 # Start router
 start_router() {
-  # MANUAL MANAGEMENT: Start router directly to avoid cached bytecode issues
-  echo "Starting router manually (no launchd)..."
-  if pgrep -f "uvicorn.*router.*5455" > /dev/null; then
-    echo -e "${GREEN}Router already running${NC}"
-    return 0
+  if [ "$IN_SANDBOX" = "true" ]; then
+    # SANDBOX MODE: Start router directly
+    echo "Starting router (sandbox mode)..."
+    if service_responding "http://127.0.0.1:$ROUTER_PORT/health" 1; then
+      echo -e "${GREEN}Router already running${NC}"
+      return 0
+    fi
+
+    # Ensure logs directory exists
+    mkdir -p logs
+
+    # Start router in background
+    PYTHONPATH=. nohup python -m uvicorn router.main:app --host 127.0.0.1 --port 5455 --log-level info > logs/router.log 2>&1 &
+    local router_pid=$!
+    echo $router_pid > /tmp/ai_router.pid 2>/dev/null || true
+
+    # Wait for startup (longer timeout for sandbox)
+    local attempts=0
+    while [ $attempts -lt 15 ]; do
+      if curl -s http://127.0.0.1:5455/health > /dev/null 2>&1; then
+        echo -e "${GREEN}Router started successfully (PID: $router_pid)${NC}"
+        return 0
+      fi
+      sleep 1
+      attempts=$((attempts + 1))
+    done
+
+    echo -e "${RED}Router failed to start within 15 seconds${NC}"
+    return 1
+  else
+    # PRODUCTION MODE: Try launchd first, fallback to direct
+    echo "Starting router via launchd..."
+    if [ -f "$ROUTER_PLIST" ]; then
+      if ! job_loaded "$ROUTER_LABEL"; then
+        launchctl bootstrap "$DOMAIN" "$ROUTER_PLIST" 2>/dev/null || {
+          echo "Launchd failed, falling back to direct start..."
+          start_router_direct
+          return $?
+        }
+      fi
+      launchctl kickstart -k "$DOMAIN/$ROUTER_LABEL" 2>/dev/null || {
+        echo "Launchd kickstart failed, falling back to direct start..."
+        start_router_direct
+        return $?
+      }
+      sleep 2
+    else
+      echo -e "${YELLOW}Warning: launchd plist not found, using direct start${NC}"
+      start_router_direct
+    fi
+  fi
+}
+
+# Direct router start (fallback)
+start_router_direct() {
+  if [ "$IN_SANDBOX" = "true" ]; then
+    if service_responding "http://127.0.0.1:$ROUTER_PORT/health" 1; then
+      echo -e "${GREEN}Router already running${NC}"
+      return 0
+    fi
+  else
+    if pgrep -f "uvicorn.*router.*5455" > /dev/null; then
+      echo -e "${GREEN}Router already running${NC}"
+      return 0
+    fi
   fi
 
-  # Start router in background
+  mkdir -p logs
   PYTHONPATH=. nohup python -m uvicorn router.main:app --host 127.0.0.1 --port 5455 --log-level info > logs/router.log 2>&1 &
   local router_pid=$!
-  echo $router_pid > /tmp/ai_router.pid
+  echo $router_pid > /tmp/ai_router.pid 2>/dev/null || true
 
   # Wait for startup
   local attempts=0
@@ -325,18 +453,90 @@ start_router() {
 
 # Start agent-runner
 start_agent() {
-  if [ -f "$AGENT_PLIST" ]; then
-    echo "Starting agent-runner via launchd..."
-    if ! job_loaded "$AGENT_LABEL"; then
-      launchctl bootstrap "$DOMAIN" "$AGENT_PLIST" 2>/dev/null || true
+  if [ "$IN_SANDBOX" = "true" ]; then
+    # SANDBOX MODE: Start agent-runner directly
+    echo "Starting agent-runner (sandbox mode)..."
+    if service_responding "http://127.0.0.1:$AGENT_PORT/health" 1; then
+      echo -e "${GREEN}Agent-runner already running${NC}"
+      return 0
     fi
-    launchctl kickstart -k "$DOMAIN/$AGENT_LABEL" 2>/dev/null || true
-    sleep 2
-  else
-    echo -e "${YELLOW}Warning: launchd plist not found at $AGENT_PLIST${NC}"
-    echo "Run './setup_launchd.sh' first to create plists."
+
+    # Ensure logs directory exists
+    mkdir -p logs
+
+    # Start agent-runner in background
+    PYTHONPATH=. nohup python agent_runner/main.py > logs/agent_runner.log 2>&1 &
+    local agent_pid=$!
+    echo $agent_pid > /tmp/ai_agent.pid 2>/dev/null || true
+
+    # Wait for startup (agent takes longer to initialize)
+    local attempts=0
+    while [ $attempts -lt 30 ]; do
+      if curl -s http://127.0.0.1:5460/health > /dev/null 2>&1; then
+        echo -e "${GREEN}Agent-runner started successfully (PID: $agent_pid)${NC}"
+        return 0
+      fi
+      sleep 1
+      attempts=$((attempts + 1))
+    done
+
+    echo -e "${RED}Agent-runner failed to start within 30 seconds${NC}"
     return 1
+  else
+    # PRODUCTION MODE: Try launchd first, fallback to direct
+    echo "Starting agent-runner via launchd..."
+    if [ -f "$AGENT_PLIST" ]; then
+      if ! job_loaded "$AGENT_LABEL"; then
+        launchctl bootstrap "$DOMAIN" "$AGENT_PLIST" 2>/dev/null || {
+          echo "Launchd failed, falling back to direct start..."
+          start_agent_direct
+          return $?
+        }
+      fi
+      launchctl kickstart -k "$DOMAIN/$AGENT_LABEL" 2>/dev/null || {
+        echo "Launchd kickstart failed, falling back to direct start..."
+        start_agent_direct
+        return $?
+      }
+      sleep 5  # Agent takes longer to start
+    else
+      echo -e "${YELLOW}Warning: launchd plist not found, using direct start${NC}"
+      start_agent_direct
+    fi
   fi
+}
+
+# Direct agent-runner start (fallback)
+start_agent_direct() {
+  if [ "$IN_SANDBOX" = "true" ]; then
+    if service_responding "http://127.0.0.1:$AGENT_PORT/health" 1; then
+      echo -e "${GREEN}Agent-runner already running${NC}"
+      return 0
+    fi
+  else
+    if pgrep -f "agent_runner.*main" > /dev/null; then
+      echo -e "${GREEN}Agent-runner already running${NC}"
+      return 0
+    fi
+  fi
+
+  PYTHONPATH=. nohup python agent_runner/main.py > logs/agent_runner.log 2>&1 &
+  local agent_pid=$!
+  echo $agent_pid > /tmp/ai_agent.pid 2>/dev/null || true
+
+  # Wait for startup
+  local attempts=0
+  while [ $attempts -lt 25 ]; do
+    if curl -s http://127.0.0.1:5460/health > /dev/null 2>&1; then
+      echo -e "${GREEN}Agent-runner started successfully (PID: $agent_pid)${NC}"
+      return 0
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+
+  echo -e "${RED}Agent-runner failed to start within 25 seconds${NC}"
+  return 1
 }
 
 # Start RAG-server
@@ -344,6 +544,82 @@ start_rag() {
   echo "Starting RAG-server..."
   # Use the shared project venv
   nohup "$ROOT_DIR/.venv/bin/python3" rag_server.py > "$ROOT_DIR/logs/rag.log" 2>&1 &
+  sleep 2
+}
+
+# Start Ollama
+start_ollama() {
+  echo "Starting Ollama..."
+  if command -v ollama >/dev/null 2>&1; then
+    if [ "$IN_SANDBOX" = "true" ]; then
+      # SANDBOX MODE: Start Ollama directly
+      if pgrep -f "ollama serve" > /dev/null; then
+        echo -e "${GREEN}Ollama already running${NC}"
+        return 0
+      fi
+
+      echo "Starting Ollama directly (sandbox mode)..."
+      nohup ollama serve > "$ROOT_DIR/logs/ollama.log" 2>&1 &
+      sleep 3
+
+      # Verify Ollama is responding
+      if service_responding "http://127.0.0.1:11434/api/tags" 5; then
+        echo -e "${GREEN}Ollama started successfully${NC}"
+        return 0
+      else
+        echo -e "${YELLOW}Ollama started but not yet responding, continuing...${NC}"
+        return 0
+      fi
+    else
+      # PRODUCTION MODE: Try launchd first
+      if [ -f "$HOME/Library/LaunchAgents/homebrew.mxcl.ollama.plist" ]; then
+        echo "Starting Ollama via launchd..."
+        launchctl load "$HOME/Library/LaunchAgents/homebrew.mxcl.ollama.plist" 2>/dev/null || {
+          echo "Launchd failed, falling back to direct start..."
+          start_ollama_direct
+          return $?
+        }
+        sleep 3
+      else
+        start_ollama_direct
+      fi
+
+      # Verify Ollama is responding
+      if service_responding "http://127.0.0.1:11434/api/tags" 3; then
+        echo -e "${GREEN}Ollama started successfully${NC}"
+        return 0
+      else
+        echo -e "${YELLOW}Ollama started but not yet responding, continuing...${NC}"
+        return 0
+      fi
+    fi
+  else
+    echo -e "${RED}Ollama command not found${NC}"
+    return 1
+  fi
+}
+
+# Direct Ollama start (fallback)
+start_ollama_direct() {
+  if pgrep -f "ollama serve" > /dev/null; then
+    echo -e "${GREEN}Ollama already running${NC}"
+    return 0
+  fi
+
+  nohup ollama serve > "$ROOT_DIR/logs/ollama.log" 2>&1 &
+  sleep 3
+}
+
+# Stop Ollama
+stop_ollama() {
+  echo "Stopping Ollama..."
+  if [ -f "$HOME/Library/LaunchAgents/homebrew.mxcl.ollama.plist" ]; then
+    echo "Stopping Ollama via launchd..."
+    launchctl unload "$HOME/Library/LaunchAgents/homebrew.mxcl.ollama.plist" 2>/dev/null || true
+  fi
+
+  # Kill any running Ollama processes
+  pkill -f "ollama serve" 2>/dev/null || true
   sleep 2
 }
 
@@ -506,18 +782,23 @@ start_all() {
 
   echo -e "${BLUE}Starting AI Orchestrator services...${NC}\n"
 
-  # CONFIG VALIDATION: Check critical configuration before starting
+  # CONFIG VALIDATION: Check critical configuration (non-blocking for development)
   echo -e "${CYAN}🔍 Validating configuration...${NC}"
-  # TEMPORARILY DISABLED FOR PYDANTIC AI TESTING
-  echo -e "${YELLOW}⚠️  Config validation temporarily disabled for Pydantic AI testing${NC}"
-  # if [ -f "scripts/validate_config.py" ]; then
-  #   if ! python3 scripts/validate_config.py; then
-  #     echo -e "${RED}❌ Configuration validation failed. Please fix issues above before starting services.${NC}"
-  #     return 1
-  #   fi
-  # else
-  #   echo -e "${YELLOW}⚠️  Configuration validator not found. Skipping validation.${NC}"
-  # fi
+  if [ -f "scripts/validate_config.py" ]; then
+    if python3 scripts/validate_config.py; then
+      echo -e "${GREEN}✅ Configuration validation passed${NC}"
+    else
+      if [ "$IN_SANDBOX" = "true" ]; then
+        echo -e "${YELLOW}⚠️  Configuration issues detected but continuing in sandbox mode${NC}"
+        echo -e "${YELLOW}    (Some optional services may not be available)${NC}"
+      else
+        echo -e "${RED}❌ Configuration validation failed. Please fix critical issues before starting services.${NC}"
+        return 1
+      fi
+    fi
+  else
+    echo -e "${YELLOW}⚠️  Configuration validator not found. Skipping validation.${NC}"
+  fi
 
   # OPTIMIZATION: Only clear cache on dev-start, not normal start
   # Cache clearing is expensive and should only be done when explicitly requested
@@ -547,6 +828,16 @@ start_all() {
     echo -e "${GREEN}SurrealDB already running${NC}"
   else
     start_surreal
+  fi
+
+  # Check Ollama status
+  local ollama_status=$(check_ollama)
+  IFS='|' read -r ollama_port ollama_http ollama_launchd ollama_pid <<< "$ollama_status"
+
+  if [ "$ollama_http" = "true" ]; then
+    echo -e "${GREEN}Ollama already running${NC}"
+  else
+    start_ollama
   fi
 
   if [ "$router_http" = "true" ]; then
@@ -775,6 +1066,9 @@ Commands:
   start-rag     Start only RAG Server
   stop-rag      Stop only RAG Server
   restart-rag   Restart only RAG Server
+  start-ollama  Start only Ollama
+  stop-ollama   Stop only Ollama
+  restart-ollama Restart only Ollama
   sync          Sync all code changes to Git
   backup        Trigger a manual memory backup
   dashboard     High-density system status overview
@@ -843,6 +1137,9 @@ case "${1:-status}" in
     fi
     show_status
     ;;
+  start-ollama) start_ollama; show_status ;;
+  stop-ollama) stop_ollama; show_status ;;
+  restart-ollama) stop_ollama; sleep 2; start_ollama; show_status ;;
   sync) sync_git ;;
   backup) run_backup ;;
   dashboard)

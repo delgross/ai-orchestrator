@@ -94,8 +94,8 @@ async def test_hallucination_detector():
                 print(f"❌ Test FAILED - Expected {expected}, got {actual}")
 
         # Test knowledge base
-        print("
-🧠 Testing Knowledge Base"        print("-" * 30)
+        print("\n🧠 Testing Knowledge Base")
+        print("-" * 30)
 
         facts_to_test = [
             "2 + 2 = 4",
@@ -107,13 +107,13 @@ async def test_hallucination_detector():
             result = await kb.verify_fact(fact)
             print(f"Fact: '{fact}' -> Verified: {result.verified} (confidence: {result.confidence:.2f})")
 
-        print("
-📊 System Statistics"        print("-" * 30)
+        print("\n📊 System Statistics")
+        print("-" * 30)
         print(f"Detector stats: {detector.get_stats()}")
         print(f"KB stats: {kb.get_stats()}")
 
-        print("
-🎉 Hallucination Detection Testing Complete!"    except Exception as e:
+        print("\n🎉 Hallucination Detection Testing Complete!")
+    except Exception as e:
         print(f"❌ Test failed: {e}")
         import traceback
         traceback.print_exc()

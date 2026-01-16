@@ -44,15 +44,14 @@ class ConfigValidator:
             self.errors.append(f"Failed to read providers.env: {e}")
             return False
 
-        # Required MCP API keys
-        required_keys = {
+        # Core required API keys (essential for basic functionality)
+        required_keys = {}
+
+        # Optional MCP API keys (services work without them)
+        optional_keys = {
             'OPENWEATHER_API_KEY': 'Weather MCP server',
             'BRAVE_API_KEY': 'Brave Search MCP server',
-            'TAVILY_API_KEY': 'Tavily Search MCP server'
-        }
-
-        # Optional but recommended keys
-        optional_keys = {
+            'TAVILY_API_KEY': 'Tavily Search MCP server',
             'XAI_API_KEY': 'xAI API (optional)',
             'OPENAI_API_KEY': 'OpenAI API (optional)',
             'OPENROUTER_API_KEY': 'OpenRouter API (optional)',
@@ -109,7 +108,7 @@ class ConfigValidator:
             for name, url in services:
                 success, status = await check_service(name, url)
                 if not success:
-                    if name in ["Router", "Agent Runner"]:  # Critical services
+                    if name in ["Router", "Agent Runner", "Ollama"]:  # Critical services
                         self.errors.append(f"{name} service unavailable: {status}")
                     else:  # Optional services
                         self.warnings.append(f"{name} service unavailable: {status}")
@@ -150,11 +149,13 @@ class ConfigValidator:
             if not models:
                 self.warnings.append("No models defined in sovereign.yaml")
             else:
-                # Check for common model roles
-                expected_roles = ['agent_model', 'router_model', 'task_model']
-                for role in expected_roles:
+                # Check for common model roles (using short form keys as defined in YAML)
+                # The system maps short keys (agent) to long keys (agent_model) internally
+                expected_short_roles = ['agent', 'router']  # Core models defined in sovereign.yaml
+                for role in expected_short_roles:
                     if role not in models:
                         self.warnings.append(f"Missing model role in sovereign.yaml: {role}")
+                        # Note: task_model is not defined in sovereign.yaml but has hardcoded defaults
 
         except Exception as e:
             self.errors.append(f"Failed to validate sovereign.yaml: {e}")

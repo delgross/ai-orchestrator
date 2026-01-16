@@ -97,12 +97,15 @@
             let firstToken = true;
 
             try {
-                // Accessing via 127.0.0.1 (IPv4 explicit)
-                const response = await fetch('http://127.0.0.1:5460/v1/chat/completions', {
+                // Accessing via router (port 5455)
+                const response = await fetch('http://127.0.0.1:5455/v1/chat/completions', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer antigravity_router_token_2025'
+                    },
                     body: JSON.stringify({
-                        model: 'agent',
+                        model: 'agent:mcp',
                         messages: [{ role: 'user', content: text }],
                         stream: true
                     })

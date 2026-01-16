@@ -1,180 +1,40 @@
-agent_runner:
-  enable_command_execution: true
-  periodic_tasks:
-    graph_optimizer:
-      type: module
-      module: agent_runner.maintenance_tasks
-      function: graph_optimization_task
-      schedule: '86400'
-      enabled: false
-      description: Nightly Graph Gardening (Llama 3.3)
-    stale_pruner:
-      type: module
-      module: agent_runner.maintenance_tasks
-      function: stale_memory_pruner_task
-      interval: 604800
-      enabled: false
-      description: Weekly Fact Pruning (Grok)
-  fallback:
-    model: ollama:llama3.1:latest
-mcp_servers: {}
-model_intelligence:
-  agent:mcp:
-    preferred_for:
-    - universal
-    skills:
-    - Full System Orchestration
-    - Multi-Agent Coordination
-    - Long-term Memory Access
-    weaknesses:
-    - Operational overhead
-  ollama:llama3.3:70b:
-    preferred_for:
-    - automator
-    - pollinator
-    - architect
-    skills:
-    - Omni-modal Intelligence
-    - Perfect Tool Following
-  ollama:llama3.1:latest:
-    preferred_for:
-    - interface_designer
-    - mechanic
-    skills:
-    - Fast Response
-    - Clean Summarization
-  openai:o1:
-    preferred_for:
-    - architect
-    - knowledge_architect
-    skills:
-    - Ph.D. Level Reasoning
-    - Advanced Mathematics
-    weaknesses:
-    - High latency
-    - No system prompt support
-personas:
-  architect:
-    mission: Expert in project structure, modular design, and high-level coding standards.
-    name: The Architect
-    preferred_model: ollama:llama3.3:70b
-    tools:
-    - list_dir
-    - read_text
-    - write_text
-    - path_info
-    - sequential_thinking
-    - run_command
-    - trigger_task
-    - report_missing_tool
-  automator:
-    mission: Expert in browser control and OS-level automation.
-    name: The Automator
-    preferred_model: openai:gpt-4o-mini
-    tools:
-    - mcp__playwright__browser_navigate
-    - mcp__playwright__browser_click
-    - mcp__macos_automator__execute_script
-    - run_command
-    - trigger_task
-    - report_missing_tool
-  mechanic:
-    mission: Expert in system health, log analysis, and automated error recovery.
-    name: The System Mechanic
-    preferred_model: ollama:llama3.1:latest
-    tools:
-    - run_command
-    - list_dir
-    - read_text
-    - get_memory_status
-    - check_system_health
-    - trigger_task
-    - report_missing_tool
-providers:
-  google:
-    api_key_env: GEMINI_API_KEY
-    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
-    type: openai_compat
-  openai:
-    api_key_env: OPENAI_API_KEY
-    base_url: https://api.openai.com/v1
-    type: openai_compat
-  xai:
-    api_key_env: GROK_API_KEY
-    base_url: https://api.x.ai/v1
-    type: openai_compat
-router:
-  agent_runner:
-    limits:
-      max_read_bytes: 50000000
-      max_tool_steps: 20
-    url: http://127.0.0.1:5460
-  auth_token: antigravity_router_token_2025
-  base_url: http://127.0.0.1:5455
-  host: 127.0.0.1
-  http_timeout: 300
-  local_concurrency: 1
-  max_body_bytes: 10000000
-  max_concurrency: 20
-  models_cache_ttl: 300
-  ollama:
-    auto_adjust_context: true
-    base_url: http://127.0.0.1:11434
-    model_options:
-      default:
-        temperature: 0.7
-        top_p: 0.9
-      qwen3:30b:
-        min_p: 0.0
-        temperature: 0.7
-        top_k: 20
-        top_p: 0.8
-    num_ctx: 8192
-    router:
-      enabled: true
-      model: ollama:qwen3:30b
-      tool_filtering:
-        enabled: true
-        min_confidence: 0.95
-        mode: core_only
-        max_tools: 10
-  port: 5455
-  preferred_models:
-  - xai:grok-3
-  - ollama:llama3.3:70b
-  - ollama:llama3.1:latest
-  - openai:gpt-4o-mini
-  - agent:mcp
-  - ollama:qwq:latest
-  - gemini-1.5-pro
-  - gemini-exp-1206
-  - grok-4-1-fast-reasoning
-  - grok-3
-  rag:
-    base_url: http://127.0.0.1:5555
-    query_path: /query
+# OLLAMA CONFIGURATION (Source of Truth)
+# ==========================================
+# This file governs the Ollama Service Settings and Model Options.
+
+ollama:
+  auto_adjust_context: true
+  base_url: http://127.0.0.1:11434
+  num_ctx: 8192 # Default fallback
+
+  model_options:
+    default:
+      temperature: 0.7
+      top_p: 0.9
+
+    # THE BRAIN: Llama 3.3 70B
+    "llama3.3:70b":
+      num_ctx: 32768
+      temperature: 0.7
+      top_p: 0.9
+      keep_alive: -1
+
+    "qwen2.5:7b-instruct":
+      num_ctx: 16384
+      temperature: 0.5 # Lower temp for logic/routing
+      top_p: 0.8
+      keep_alive: -1
+    
+    # THE EYES: Vision
+    "llama3.2-vision:latest":
+      num_ctx: 8192
+      keep_alive: -1
+
+# System Settings
 system:
-  alert_file_path: ~/Desktop/Antigravity_Alerts.md
-  dev_mode: true
-  internet_check_interval: 5
-  log_level: INFO
-  persistence_dir: ~/ai/agent_data
   keep_alive: -1 # Models loaded forever
-  agent_model: ollama:qwen2.5-coder:32b
-  router_model: ollama:qwen2.5:7b-instruct
-  vision_model: ollama:llama3.2-vision:latest
-  task_model: ollama:qwen2.5:7b-instruct
-  summarization_model: ollama:qwen2.5:7b-instruct
-  mcp_model: ollama:llama3.3:70b
-  finalizer_model: ollama:qwen2.5:7b-instruct
-  critic_model: ollama:qwen2.5:7b-instruct
-  healer_model: ollama:qwq:latest
-  fallback_model: ollama:qwen2.5:7b-instruct
-  intent_model: ollama:llama3.3:70b
-  pruner_model: ollama:qwen2.5:7b-instruct
-  embedding_model: ollama:mxbai-embed-large:latest
-  query_refinement_model: ollama:qwen2.5:7b-instruct
+  
+  # Toggles
   finalizer_enabled: true
   router_enabled: true
   fallback_enabled: true
-# force sync 2 (Pivoting to 8B for Maître d')

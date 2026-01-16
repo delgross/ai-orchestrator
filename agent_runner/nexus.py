@@ -51,7 +51,50 @@ class Nexus:
         3. LLM Handover (With context)
         """
         logger.info(f"Nexus Dispatch: [{request_id}] '{user_message[:50]}...'")
-        
+
+        # EARLY CONVERSATIONAL OPTIMIZATION - Before any expensive operations
+        print(f"DEBUG NEXUS: Processing '{user_message}' with context={context}")
+        msg_lower = user_message.strip().lower()
+        word_count = len(msg_lower.split())
+        has_action_words = any(word in msg_lower for word in ['run', 'create', 'analyze', 'search', 'find', 'show', 'list', 'get', 'execute', 'calculate'])
+        context_len = len(context) if context else 0
+
+        print(f"DEBUG NEXUS: msg_lower='{msg_lower}', word_count={word_count}, has_action_words={has_action_words}, context_len={context_len}")
+        logger.info(f"🎯 CONVERSATIONAL CHECK: msg='{msg_lower}', words={word_count}, has_action={has_action_words}, context_len={context_len}, context_type={type(context)}, context_bool={bool(context)}")
+
+        condition_met = word_count <= 4 and not has_action_words and context_len == 0
+        print(f"DEBUG NEXUS: condition_met={condition_met}")
+        logger.info(f"🎯 CONDITION CHECK: words_ok={word_count <= 4}, no_action={not has_action_words}, context_empty={context_len == 0}, OVERALL={condition_met}")
+
+        if condition_met:
+            # Pure conversational query with no context - respond instantly
+            logger.info(f"🎯 NEXUS CONVERSATIONAL OPTIMIZATION: Fast response for '{msg_lower}' - TRIGGERED!")
+            print(f"DEBUG: CONVERSATIONAL OPTIMIZATION TRIGGERED for '{msg_lower}'")
+            yield {
+                "type": "token",
+                "content": "Hello! How can I assist you today?",
+                "request_id": request_id
+            }
+            yield {
+                "type": "done",
+                "usage": {"prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14},
+                "stop_reason": "stop",
+                "request_id": request_id
+            }
+            return
+            yield {
+                "type": "token",
+                "content": "Hello! How can I assist you today?",
+                "request_id": request_id
+            }
+            yield {
+                "type": "done",
+                "usage": {"prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14},
+                "stop_reason": "stop",
+                "request_id": request_id
+            }
+            return
+
         # Check for system events (not sent to LLM) - existing mechanism
         if hasattr(self.state, 'system_event_queue') and self.state.system_event_queue:
             try:
@@ -158,7 +201,11 @@ class Nexus:
         # We wrap the engine's stream AND monitor the system event queue concurrently.
         # This allows deep-system events (like Healer warnings) to interrupt/augment the stream.
         try:
-            stream_iterator = self.engine._protected_agent_stream(messages, request_id=request_id).__aiter__()
+            # Reconstruct full messages list for agent_stream
+            # context contains messages[:-1], we need to add back the user_message
+            full_messages = context.copy() if context else []
+            full_messages.append({"role": "user", "content": user_message})
+            stream_iterator = self.engine.agent_stream(full_messages, model=None, request_id=request_id, skip_refinement=False).__aiter__()
             
             # Tasks
             task_stream = asyncio.create_task(stream_iterator.__anext__())
@@ -376,7 +423,22 @@ class Nexus:
                 # We need to call engine's classifier, but it might depend on state being ready.
                 # Assuming Nexus runs after startup.
                 if hasattr(self.engine, "_classify_search_intent"):
-                    intent = await self.engine._classify_search_intent(text)
+                    # [FIX] Ensure Maître d' receives a STRING, not a List/Dict from multimodal input.
+                    # Use 'lower_text' if original case lost, or re-extract here.
+                    # We'll use a local helper to extract original case text.
+                    query_str = text
+                    if isinstance(text, list):
+                         parts = []
+                         for block in text:
+                             if isinstance(block, dict) and block.get("type") == "text":
+                                 parts.append(block.get("text", ""))
+                         query_str = " ".join(parts)
+                    elif isinstance(text, str) and (text.strip().startswith("[") or text.strip().startswith("{")):
+                        # Try to parse stringified JSON manually if we suspect it wasn't parsed above
+                        # (Though L246 handles this, let's be safe)
+                        pass
+
+                    intent = await self.engine._classify_search_intent(str(query_str))
 
                     # [FIX] Handle List Return from Maître d' (Multi-intent support)
                     if isinstance(intent, list) and len(intent) > 0:

@@ -57,34 +57,32 @@ async def chat_completions(request: Request):
             }
         }, status_code=429)
 
+    # Initialize variables to prevent UnboundLocalError
+    completion = {}
+    t0_stats = time.time()
+
     # Use the engine to process the request
     state.active_requests += 1
-    state.last_interaction_time = time.time()
-    
-    # Timer for stats endpoint (distinct from log_time)
-    t0_stats = time.time()
-    
+
+    stream_mode = body.get("stream", False)
+    requested_model = body.get(OBJ_MODEL)
+
+    # Prevent infinite recursion / invalid model names
+    if requested_model == "agent:mcp" or not requested_model or ":" not in requested_model:
+        requested_model = None
+
+    logger.info(f"REQ [{request_id}] Agent Execution: Model='{requested_model}' Stream={stream_mode} SkipRefinement={skip_refinement}")
+
+    # Extract the raw user input (last message) for trigger check
+    last_msg = messages[-1].get("content") if messages else ""
+
     try:
-        requested_model = body.get(OBJ_MODEL)
-        stream_mode = body.get("stream", False)
-
-        logger.info(f"REQ [{request_id}] Agent Execution: Model='{requested_model}' Stream={stream_mode} SkipRefinement={skip_refinement}")
-        logger.info(f"REQ [{request_id}] Message content: {messages[0].get('content', '')[:100] if messages else 'No messages'}")
-
-        # Prevent infinite recursion / invalid model names
-        if requested_model == "agent:mcp" or not requested_model or ":" not in requested_model:
-            requested_model = None
-            
-        # [PHASE 60] I/O Nexus Integration
-        # Extract the raw user input (last message) for trigger check
-        last_msg = messages[-1].get("content") if messages else ""
-            
         if stream_mode:
             async def sse_wrapper():
                 try:
                     async with log_time(f"Agent Stream [{request_id}]", level=logging.INFO, logger_override=logger):
                         # Propagate skip_refinement to stream
-                        
+
                         # Check for system events to inject (from startup, health checks, etc.)
                         if hasattr(state, 'system_event_queue') and state.system_event_queue:
                             try:
@@ -111,7 +109,7 @@ async def chat_completions(request: Request):
                                         yield f"data: {json.dumps(chunk)}\n\n"
                             except asyncio.QueueEmpty:
                                 pass
-                        
+
                         # Pass through the Nexus Regulator
                         # Nexus handles Trigger Checks -> Execution -> Engine Handoff
 
@@ -121,19 +119,19 @@ async def chat_completions(request: Request):
                             # 1. Classify Intent
                             intent_res = await engine._classify_search_intent(last_msg)
                             auto_exec = intent_res.get("auto_execute")
-                            
+
                             if auto_exec and isinstance(auto_exec, dict):
                                 tool_name = auto_exec.get("tool")
                                 tool_args = auto_exec.get("args", {})
-                                
+
                                 # [FIX] Prevent execution of None/null tools (Maître d' hallucination)
                                 if not tool_name or str(tool_name).lower() == "none":
                                     logger.warning(f"Fast Lane skipped: Invalid tool name '{tool_name}' in auto_execute.")
                                     raise ValueError("Fast Lane Abort: Invalid tool name")
-                                
+
                                 logger.info(f"🚀 STREAMING FAST LANE: Auto-Executing '{tool_name}'")
-                                    
-                                    # 2. Execute Immediate Tool
+
+                                # 2. Execute Immediate Tool
                                 fake_tool_call = {
                                     "function": {
                                         "name": tool_name,
@@ -142,106 +140,50 @@ async def chat_completions(request: Request):
                                     "id": f"fast-{uuid.uuid4()}"
                                 }
                                 tool_result = await engine.execute_tool_call(fake_tool_call, request_id)
-                                
-                                # Format output naturally [FIXED output extraction]
-                                final_output = "Done."
+
+                                # Convert result to streaming format
+                                content = "Done."
                                 if "output" in tool_result:
-                                    final_output = tool_result["output"]
+                                    content = tool_result["output"]
                                 elif "result" in tool_result:
                                     res = tool_result["result"]
                                     if isinstance(res, dict):
-                                       # Smart formatting for common tools
-                                       if "time" in res: 
-                                           final_output = f"The current time is {res['time']}."
-                                       elif "weather" in res:
-                                           final_output = json.dumps(res, indent=2)
-                                       else:
-                                           final_output = json.dumps(res, indent=2)
+                                        # Smart formatting for common tools
+                                        if "time" in res:
+                                            content = f"The current time is {res['time']}."
+                                        elif "weather" in res:
+                                            content = json.dumps(res, indent=2)
+                                        else:
+                                            content = json.dumps(res, indent=2)
                                     else:
-                                        final_output = str(res)
+                                        content = str(res)
                                 elif "error" in tool_result:
-                                    final_output = f"Error: {tool_result['error']}"
-                                else:
-                                    final_output = json.dumps(tool_result, indent=2)
-                                
-                                # 3. Stream the Result
-                                # Stream simulated "token" to look like LLM output
-                                chunk = {
-                                    "id": f"chatcmpl-{request_id}",
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": "fast-lane",
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {"content": final_output},
-                                        "finish_reason": None
-                                    }]
-                                }
-                                yield f"data: {json.dumps(chunk)}\n\n"
-                                
-                                # Stream Done
-                                chunk_done = {
-                                    "id": f"chatcmpl-{request_id}",
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": "fast-lane",
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {},
-                                        "finish_reason": "stop"
-                                    }]
-                                }
-                                yield f"data: {json.dumps(chunk_done)}\n\n"
-                                fast_lane_activated = True
-                        except Exception as flexs:
-                             logger.warning(f"Fast Lane Stream Check Failed: {flexs}")
-                        
-                        if fast_lane_activated:
-                            yield "data: [DONE]\n\n"
-                            return
+                                    content = f"Error: {tool_result['error']}"
 
-                        async for event in engine.nexus.dispatch(
-                            user_message=last_msg,
-                            request_id=request_id,
-                            context=messages[:-1] # Nexus rebuilds context
-                        ):
-                            evt_type = event.get("type")
+                                # Stream the result
+                                yield f"data: {json.dumps({'id': f'chatcmpl-{request_id}', 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': requested_model or 'agent', 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': 'stop'}]})}\n\n"
+                                yield f"data: {json.dumps({'id': f'chatcmpl-{request_id}', 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': requested_model or 'agent', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
 
-                            # Handle different event types from agent_stream
-                            if evt_type == "done":
-                                chunk = {
-                                    "id": f"chatcmpl-{request_id}",
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": requested_model or "agent",
-                                    "choices": [
-                                        {
-                                            "index": 0,
-                                            "delta": {},
-                                            "finish_reason": event.get("stop_reason", "stop")
-                                        }
-                                    ]
-                                }
-                                if "usage" in event:
-                                    chunk["usage"] = event["usage"]
-                                yield f"data: {json.dumps(chunk)}\n\n"
-                                continue
+                        except Exception as fast_err:
+                            logger.warning(f"Fast Lane Failed: {fast_err}. Falling back to Agent.")
+                            # Continue to normal streaming flow
 
-                            elif evt_type == "error":
-                                err_chunk = {
-                                    "error": {
-                                        "message": event.get("error", "Unknown Agent Error"),
-                                        "type": "internal_server_error",
-                                        "code": 500
-                                    }
-                                }
-                                yield f"data: {json.dumps(err_chunk)}\n\n"
-                                continue
+                        if not fast_lane_activated:
+                            async for event in engine.nexus.dispatch(
+                                user_message=last_msg,
+                                request_id=request_id,
+                                context=messages[:-1] # Nexus rebuilds context
+                            ):
+                                evt_type = event.get("type")
 
-                            elif evt_type == "token":
-                                # Handle streaming content tokens
-                                content = event.get("content", "")
-                                if content:
+                                try:
+                                    evt_type = event.get("type")
+                                except Exception as e:
+                                    logger.error(f"Malformed event in stream [{request_id}]: {e}, event: {event}")
+                                    continue
+
+                                # Handle different event types from agent_stream
+                                if evt_type == "done":
                                     chunk = {
                                         "id": f"chatcmpl-{request_id}",
                                         "object": "chat.completion.chunk",
@@ -250,46 +192,102 @@ async def chat_completions(request: Request):
                                         "choices": [
                                             {
                                                 "index": 0,
-                                                "delta": {"content": content},
+                                                "delta": {},
+                                                "finish_reason": event.get("stop_reason", "stop")
+                                            }
+                                        ]
+                                    }
+                                    if "usage" in event:
+                                        chunk["usage"] = event["usage"]
+                                    yield f"data: {json.dumps(chunk)}\n\n"
+                                    continue
+
+                                elif evt_type == "error":
+                                    err_chunk = {
+                                        "error": {
+                                            "message": event.get("error", "Unknown Agent Error"),
+                                            "type": "internal_server_error",
+                                            "code": 500
+                                        }
+                                    }
+                                    yield f"data: {json.dumps(err_chunk)}\n\n"
+                                    continue
+
+                                elif evt_type == "token":
+                                    # Handle streaming content tokens
+                                    content = event.get("content", "")
+                                    if content:
+                                        chunk = {
+                                            "id": f"chatcmpl-{request_id}",
+                                            "object": "chat.completion.chunk",
+                                            "created": int(time.time()),
+                                            "model": requested_model or "agent",
+                                            "choices": [
+                                                {
+                                                    "index": 0,
+                                                    "delta": {"content": content},
+                                                    "finish_reason": None
+                                                }
+                                            ]
+                                        }
+                                        logger.debug(f"Sending token chunk: {content[:50]}...")
+                                        yield f"data: {json.dumps(chunk)}\n\n"
+
+                                elif evt_type == "control_ui":
+                                    # Stream custom control events to the frontend
+                                    # The frontend should handle these "control" deltas specifically
+                                    chunk = {
+                                        "id": f"chatcmpl-{request_id}",
+                                        "object": "chat.completion.chunk",
+                                        "created": int(time.time()),
+                                        "model": requested_model or "agent",
+                                        "choices": [
+                                            {
+                                                "index": 0,
+                                                "delta": {
+                                                    "control": {
+                                                        "type": "ui",
+                                                        "target": event.get("target"),
+                                                        "action": "open"
+                                                    }
+                                                },
                                                 "finish_reason": None
                                             }
                                         ]
                                     }
                                     yield f"data: {json.dumps(chunk)}\n\n"
 
-                            elif evt_type == "control_ui":
-                                # Stream custom control events to the frontend
-                                # The frontend should handle these "control" deltas specifically
-                                chunk = {
-                                    "id": f"chatcmpl-{request_id}",
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": requested_model or "agent",
-                                    "choices": [
-                                        {
-                                            "index": 0,
-                                            "delta": {
-                                                "control": {
-                                                    "type": "ui",
-                                                    "target": event.get("target"),
-                                                    "action": "open"
-                                                }
-                                            },
-                                            "finish_reason": None
-                                        }
-                                    ]
-                                }
-                                yield f"data: {json.dumps(chunk)}\n\n"
+                                elif evt_type in ["tool_start", "thinking_start"]:
+                                    # Skip tool start events
+                                    continue
 
-                            elif evt_type in ["tool_start", "thinking_start"]:
-                                # Skip tool start events
-                                continue
-                            
-                            elif evt_type == "tool_end":
-                                # [FIX] Allow Sovereign Triggers (Nexus Diagnostic Tools) to separate their output
-                                if event.get("tool") == "nexus_trigger":
-                                     content = event.get("output", "")
-                                     if content:
+                                elif evt_type == "tool_end":
+                                    # [FIX] Allow Sovereign Triggers (Nexus Diagnostic Tools) to separate their output
+                                    if event.get("tool") == "nexus_trigger":
+                                        content = event.get("output", "")
+                                        if content:
+                                            chunk = {
+                                                "id": f"chatcmpl-{request_id}",
+                                                "object": "chat.completion.chunk",
+                                                "created": int(time.time()),
+                                                "model": requested_model or "agent",
+                                                "choices": [
+                                                    {
+                                                        "index": 0,
+                                                        "delta": {"content": content},
+                                                        "finish_reason": None
+                                                    }
+                                                ]
+                                            }
+                                            yield f"data: {json.dumps(chunk)}\n\n"
+                                    else:
+                                        # Hide standard internal tool outputs
+                                        continue
+
+                                # Handle legacy content events (backward compatibility)
+                                elif "content" in event:
+                                    content = event.get("content", "")
+                                    if content:
                                         chunk = {
                                             "id": f"chatcmpl-{request_id}",
                                             "object": "chat.completion.chunk",
@@ -304,30 +302,8 @@ async def chat_completions(request: Request):
                                             ]
                                         }
                                         yield f"data: {json.dumps(chunk)}\n\n"
-                                else:
-                                    # Hide standard internal tool outputs
-                                    continue
 
-                            # Handle legacy content events (backward compatibility)
-                            elif "content" in event:
-                                content = event.get("content", "")
-                                if content:
-                                    chunk = {
-                                        "id": f"chatcmpl-{request_id}",
-                                        "object": "chat.completion.chunk",
-                                        "created": int(time.time()),
-                                        "model": requested_model or "agent",
-                                        "choices": [
-                                            {
-                                                "index": 0,
-                                                "delta": {"content": content},
-                                                "finish_reason": None
-                                            }
-                                        ]
-                                    }
-                                    yield f"data: {json.dumps(chunk)}\n\n"
-                            
-                    yield "data: [DONE]\n\n"
+                        yield "data: [DONE]\n\n"
                 except Exception as e:
                     logger.error(f"Stream Error [{request_id}]: {e}")
                     # Try to yield error if stream is still open
@@ -335,10 +311,6 @@ async def chat_completions(request: Request):
                         "error": {"message": str(e), "type": "internal_server_error", "code": 500}
                     }
                     yield f"data: {json.dumps(err_chunk)}\n\n"
-                finally:
-                    state.active_requests -= 1
-                    state.last_interaction_time = time.time()
-                    
             return StreamingResponse(sse_wrapper(), media_type="text/event-stream")
 
         # [CRITICAL FIX] Apply Nexus trigger checking to NON-STREAMING requests too
@@ -364,7 +336,7 @@ async def chat_completions(request: Request):
                 }],
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
-        
+
         # [PHASE 60.5] GENERIC FAST LANE (Auto-Execute)
         # Check if Maître d' recommended an immediate execution
         # We need to peek at the intent classification result.
@@ -372,61 +344,59 @@ async def chat_completions(request: Request):
         # For now, we will trust the Nexus dispatch to handle this if we extended Nexus.
         # BUT, Nexus typically returns events.
         # Let's check ONLY if we aren't streaming, or if streaming is handled above.
-        
+
         # Wait, the Nexus Dispatch above ONLY ran for stream=True.
         # We need to run intent classification explicitly for non-streaming if we want Fast Lane there too.
         # Actually, let's keep it simple: reliable Fast Lane works best with Streaming.
         # But if the user didn't request streaming, we still want speed.
-        
+
         # Let's perform a lightweight Intent Check here if no trigger happened
         elif not trigger_result:
-             # Fast Lane Check
-             try:
-                 # Classification happens here
-                 intent_res = await engine._classify_search_intent(last_msg)
-                 auto_exec = intent_res.get("auto_execute")
-                 
-                 if auto_exec and isinstance(auto_exec, dict):
-                     tool_name = auto_exec.get("tool")
-                     tool_args = auto_exec.get("args", {})
-                     logger.info(f"🚀 FAST LANE ACTIVATED: Auto-Executing '{tool_name}'")
-                     
-                     # Execute Tool
-                     # We need to find the tool definition or just run it via executor
-                     # Executor 'execute_tool_call' expects a tool_call dict
-                     fake_tool_call = {
+            # Fast Lane Check
+            try:
+                # Classification happens here
+                intent_res = await engine._classify_search_intent(last_msg)
+                auto_exec = intent_res.get("auto_execute")
+
+                if auto_exec and isinstance(auto_exec, dict):
+                    tool_name = auto_exec.get("tool")
+                    tool_args = auto_exec.get("args", {})
+                    logger.info(f"🚀 FAST LANE ACTIVATED: Auto-Executing '{tool_name}'")
+
+                    # Execute Tool
+                    # We need to find the tool definition or just run it via executor
+                    # Executor 'execute_tool_call' expects a tool_call dict
+                    fake_tool_call = {
                         "function": {
                             "name": tool_name,
                             "arguments": json.dumps(tool_args)
                         },
                         "id": f"fast-{uuid.uuid4()}"
-                     }
-                     
-                     tool_result = await engine.execute_tool_call(fake_tool_call, request_id)
-                     
-                     # Format output naturally [FIXED output extraction]
-                     final_output = "Done."
-                     if "output" in tool_result:
-                         final_output = tool_result["output"]
-                     elif "result" in tool_result:
-                         res = tool_result["result"]
-                         if isinstance(res, dict):
+                    }
+
+                    tool_result = await engine.execute_tool_call(fake_tool_call, request_id)
+
+                    # Format output naturally [FIXED output extraction]
+                    final_output = "Done."
+                    if "output" in tool_result:
+                        final_output = tool_result["output"]
+                    elif "result" in tool_result:
+                        res = tool_result["result"]
+                        if isinstance(res, dict):
                             # Smart formatting for common tools
-                            if "time" in res: 
+                            if "time" in res:
                                 final_output = f"The current time is {res['time']}."
                             elif "weather" in res:
                                 final_output = json.dumps(res, indent=2)
                             else:
                                 final_output = json.dumps(res, indent=2)
-                         else:
-                             final_output = str(res)
-                     elif "error" in tool_result:
-                         final_output = f"Error: {tool_result['error']}"
-                     else:
-                         final_output = json.dumps(tool_result, indent=2)
-                     
-                     # Return Synthetic System Response
-                     completion = {
+                        else:
+                            final_output = str(res)
+                    elif "error" in tool_result:
+                        final_output = f"Error: {tool_result['error']}"
+
+                    # Return Synthetic System Response
+                    completion = {
                         "id": f"fast-{request_id}",
                         "object": "chat.completion",
                         "created": int(time.time()),
@@ -440,23 +410,30 @@ async def chat_completions(request: Request):
                             "finish_reason": "stop"
                         }],
                         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-                     }
-             except Exception as fast_err:
-                 logger.warning(f"Fast Lane Failed: {fast_err}. Falling back to Agent.")
-                 completion = {} # proceed to normal loop
+                    }
+            except Exception as fast_err:
+                logger.warning(f"Fast Lane Failed: {fast_err}. Falling back to Agent.")
+                completion = {} # proceed to normal loop
 
         if not completion:
             logger.warning(f"NON-STREAMING NO TRIGGER [{request_id}]: Proceeding to agent loop")
             completion = {}
             async with log_time(f"Agent Loop [{request_id}]", level=logging.INFO, logger_override=logger):
                 # Propagate skip_refinement to loop
-                completion = await engine.agent_loop(
-                    messages,
-                    model=requested_model,
-                    request_id=request_id,
-                    skip_refinement=skip_refinement,
-                    quality_tier=quality_tier
-                )
+                try:
+                    completion = await engine.agent_loop(
+                        messages,
+                        model=requested_model,
+                        request_id=request_id,
+                        skip_refinement=skip_refinement,
+                        quality_tier=quality_tier
+                    )
+                    logger.info(f"Agent loop completed successfully. Completion keys: {list(completion.keys()) if isinstance(completion, dict) else type(completion)}")
+                    if isinstance(completion, dict) and "metadata" in completion:
+                        logger.warning(f"AGENT: Response contains 'metadata' field with hallucination_detection: {completion.get('metadata', {}).get('hallucination_detection', {}).get('is_hallucination', 'unknown')}")
+                except Exception as loop_e:
+                    logger.error(f"Agent loop failed: {loop_e}", exc_info=True)
+                    raise
 
         # Phase 2: Structured Outputs - Response validation temporarily disabled
         # TODO: Re-enable after debugging response format issues
@@ -498,17 +475,10 @@ async def chat_completions(request: Request):
         if not body.get("stream", False): # Streaming handles its own cleanup
             state.active_requests -= 1
             state.last_interaction_time = time.time()
-    
-    # [DEBUG] Temporarily return a simple response to isolate the issue
-    # Phase 4: Response quality evaluation (lightweight, non-blocking)
-    try:
-        quality = evaluate_completion(completion)
-        completion["quality"] = quality
-    except Exception as eval_err:
-        logger.warning(f"Quality evaluation failed: {eval_err}")
 
-    # [OPTIMIZATION] Removed redundant Hallucination Detection (handled in engine.py)
-    # This saves ~2s of latency per request.
+    return completion
 
-    # Return plain OpenAI-style response (no wrapper)
-    return JSONResponse(completion)
+@router.get("/test")
+async def test_route():
+    print(f"DEBUG: Test route called")
+    return {"test": "ok"}

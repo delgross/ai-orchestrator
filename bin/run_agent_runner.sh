@@ -1,57 +1,42 @@
 #!/bin/zsh
 # Run or restart agent-runner with env sourced from agent_runner/agent_runner.env
 
-set -e
+set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ENV_FILE="$ROOT_DIR/agent_runner/agent_runner.env"
-VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Load shared startup library
+source "$SCRIPT_DIR/startup_lib.sh"
+
+VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
 UVICORN_ARGS=(agent_runner.main:app --host 127.0.0.1 --port 5460)
 
-load_env() {
-  if [ -f "$ENV_FILE" ]; then
-    # Source the env file, handling comments and empty lines properly
-    set -a
-    source "$ENV_FILE"
-    set +a
-  fi
-}
+start_app() {
+  cd "$PROJECT_ROOT"
 
-ensure_path() {
-  # launchd often provides a minimal PATH; make common tool locations available.
-  # Explicitly include the user's NVM and Homebrew paths discovered during investigation.
-  export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
-  
-  # Add known specific tool paths for this machine
-  export PATH="/Users/bee/.nvm/versions/node/v22.21.1/bin:$PATH"
-  export PATH="/opt/homebrew/bin:$PATH"
+  # Load environment with standardized approach
+  load_environment "$PROJECT_ROOT" "agent_runner"
 
-  # Fallback for dynamic NVM discovery
-  if ! command -v npx >/dev/null 2>&1; then
-    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
-    if [ -d "$nvm_dir/versions/node" ]; then
-      local newest_npx
-      newest_npx="$(ls -1d "$nvm_dir"/versions/node/*/bin/npx 2>/dev/null | sort -V | tail -n 1 || true)"
-      if [ -n "$newest_npx" ] && [ -x "$newest_npx" ]; then
-        export PATH="$(dirname "$newest_npx"):$PATH"
-      fi
+  # Ensure PATH includes required tools
+  ensure_path
+
+  # Check for database dependency in graceful degradation mode
+  if [ "${GRACEFUL_DEGRADATION:-0}" != "1" ]; then
+    if ! "$SCRIPT_DIR/service_discovery.sh" wait database 10; then
+      warn "Database not available, but proceeding (graceful degradation disabled)"
     fi
   fi
+
+  RELOAD_ARGS=""
+  if [ "${DEV_MODE:-0}" = "1" ]; then
+    RELOAD_ARGS="--reload --reload-exclude 'logs/*' --reload-exclude '.gemini/*'"
+    info "Starting in development mode with auto-reload"
+  fi
+
+  exec "$VENV_PYTHON" -m uvicorn $RELOAD_ARGS "${UVICORN_ARGS[@]}"
 }
 
-start_app() {
-  cd "$ROOT_DIR"
-  load_env
-  ensure_path
-  
-  RELOAD="--reload --reload-exclude 'logs/*' --reload-exclude '.gemini/*'" # in development (set DEV_MODE=1 to enable)
-  
-  if [ "${DEV_MODE:-0}" = "1" ]; then
-    exec "$VENV_PYTHON" -m uvicorn $RELOAD "${UVICORN_ARGS[@]}"
-  else
-    exec "$VENV_PYTHON" -m uvicorn "${UVICORN_ARGS[@]}"
-  fi
-}
 
 case "${1:-start}" in
   start)
@@ -59,26 +44,13 @@ case "${1:-start}" in
     ;;
   restart)
     # Clean up zombies and existing processes before restart
-    ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-    if [ -f "$ROOT_DIR/bin/kill_zombies.sh" ]; then
-      "$ROOT_DIR/bin/kill_zombies.sh"
-      sleep 1
-    else
-      # Fallback: just kill processes on port 5460
-      if lsof -i :5460 -sTCP:LISTEN >/dev/null 2>&1; then
-        kill -9 "$(lsof -t -i :5460 -sTCP:LISTEN)" >/dev/null 2>&1 || true
-      fi
-      # Also kill by process name
-      pkill -9 -f "python3 -m agent_runner.main" 2>/dev/null || true
-      pkill -9 -f "uvicorn agent_runner.main" 2>/dev/null || true
-      sleep 1
-    fi
+    cleanup_service "agent_runner" 5460
     start_app
     ;;
   *)
     # passthrough args to uvicorn
-    cd "$ROOT_DIR"
-    load_env
+    cd "$PROJECT_ROOT"
+    load_environment "$PROJECT_ROOT" "agent_runner"
     ensure_path
     exec "$VENV_PYTHON" -m uvicorn "$@"
     ;;

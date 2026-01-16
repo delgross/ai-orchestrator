@@ -242,6 +242,15 @@ async def load_mcp_servers(state: AgentState) -> None:
                         logger.warning(f"      INSERT INTO config_state (key, value) VALUES ('{var_name}', 'your_value_here')")
                         logger.warning(f"   Or use: tool_set_env_var('{var_name}', 'your_value_here')")
                 
+                # Auto-inject ROUTER_AUTH_TOKEN into all MCP server environments
+                # Get token from state (loaded from DB) or environment as fallback
+                router_token = getattr(state, 'router_auth_token', None) or os.getenv('ROUTER_AUTH_TOKEN')
+                if router_token:
+                    for server_name, server_config in loaded_servers.items():
+                        server_config.setdefault('env', {})
+                        server_config['env']['ROUTER_AUTH_TOKEN'] = router_token
+                        logger.debug(f"Auto-injected ROUTER_AUTH_TOKEN into MCP server '{server_name}'")
+
                 # [FIX] Only clear and assign AFTER successfully loading from DB
                 # This ensures we don't lose configs if DB load fails partway through
                 state.mcp_servers.clear()
@@ -329,6 +338,14 @@ async def load_mcp_servers(state: AgentState) -> None:
                             if "args" in cfg:
                                 cmd.extend(cfg["args"])
                             cfg["cmd"] = cmd
+
+                        # Auto-inject ROUTER_AUTH_TOKEN
+                        router_token = getattr(state, 'router_auth_token', None) or os.getenv('ROUTER_AUTH_TOKEN')
+                        if router_token:
+                            cfg.setdefault('env', {})
+                            cfg['env']['ROUTER_AUTH_TOKEN'] = router_token
+                            logger.debug(f"Auto-injected ROUTER_AUTH_TOKEN into MCP server '{name}' from manifest")
+
                         state.mcp_servers[name] = cfg
             except Exception as e:
                 logger.error(f"Failed to load manifest {manifest_file}: {e}")
@@ -342,7 +359,16 @@ async def load_mcp_servers(state: AgentState) -> None:
                     mcp_data = yaml.safe_load(f)
                     if mcp_data and "mcp_servers" in mcp_data:
                         for name, cfg in mcp_data["mcp_servers"].items():
-                             state.mcp_servers[name] = _normalize_cmd(cfg)
+                            cfg = _normalize_cmd(cfg)
+
+                            # Auto-inject ROUTER_AUTH_TOKEN
+                            router_token = getattr(state, 'router_auth_token', None) or os.getenv('ROUTER_AUTH_TOKEN')
+                            if router_token:
+                                cfg.setdefault('env', {})
+                                cfg['env']['ROUTER_AUTH_TOKEN'] = router_token
+                                logger.debug(f"Auto-injected ROUTER_AUTH_TOKEN into MCP server '{name}' from mcp.yaml")
+
+                            state.mcp_servers[name] = cfg
             except Exception as e:
                 logger.error(f"Failed to load mcp.yaml: {e}")
 
@@ -356,6 +382,15 @@ async def load_mcp_servers(state: AgentState) -> None:
                     if cfg_data and "mcp_servers" in cfg_data:
                         servers = cfg_data["mcp_servers"] or {}
                         for name, cfg in servers.items():
+                            cfg = _normalize_cmd(cfg)
+
+                            # Auto-inject ROUTER_AUTH_TOKEN
+                            router_token = getattr(state, 'router_auth_token', None) or os.getenv('ROUTER_AUTH_TOKEN')
+                            if router_token:
+                                cfg.setdefault('env', {})
+                                cfg['env']['ROUTER_AUTH_TOKEN'] = router_token
+                                logger.debug(f"Auto-injected ROUTER_AUTH_TOKEN into MCP server '{name}' from config.yaml")
+
                             state.mcp_servers[name] = _normalize_cmd(cfg)
             except Exception as e:
                 logger.error(f"Failed to load config.yaml: {e}")

@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from router.config import state, VERSION, OLLAMA_BASE
 from router.agent_manager import check_agent_runner_health
+from router.routes.chat import check_streaming_health
 from router.middleware import require_auth
 
 router = APIRouter()
@@ -262,6 +263,9 @@ async def health(request: Request):
 
     agent_ok = await check_agent_runner_health()
 
+    # Check streaming health
+    streaming_ok = await check_streaming_health()
+
     # Check cache freshness
     cache_ok = True
     cache_warnings = []
@@ -285,6 +289,7 @@ async def health(request: Request):
             "ollama": {"ok": ollama_ok},
             "agent_runner": {"ok": agent_ok},
         },
+        "streaming_health": streaming_ok,
         "cache": {
             "fresh": cache_ok,
             "warnings": cache_warnings

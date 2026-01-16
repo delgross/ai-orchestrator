@@ -22,24 +22,9 @@ import time
 
 # Configuration
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://127.0.0.1:11434").rstrip("/")
-HTTP_TIMEOUT = float(os.getenv("OLLAMA_HTTP_TIMEOUT", "300.0"))
+HTTP_TIMEOUT = float(os.getenv("OLLAMA_HTTP_TIMEOUT", "30.0"))  # Reduced from 300s for better responsiveness
 
-# Set up logging to stderr
-def log(msg: str, level: str = "INFO", exc_info: bool = False):
-    """
-    Log a message using the logger.
-    
-    Args:
-        msg: Message to log
-        level: Log level (INFO, WARNING, ERROR, etc.)
-        exc_info: Whether to include exception traceback
-    """
-    log_level = getattr(logging, level.upper(), logging.INFO)
-    if exc_info:
-        logger.log(log_level, msg, exc_info=True)
-    else:
-        logger.log(log_level, msg)
-
+# Set up logging
 logger = logging.getLogger("ollama_server")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stderr)
@@ -48,20 +33,38 @@ logger.addHandler(handler)
 
 
 class OllamaServer:
+    _shared_client = None
+
     def __init__(self):
-        self.client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
         self.base_url = OLLAMA_BASE
+
+    @classmethod
+    async def get_shared_client(cls):
+        """Get or create shared HTTP client for all OllamaServer instances."""
+        if cls._shared_client is None or cls._shared_client.is_closed:
+            cls._shared_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+        return cls._shared_client
+
+    async def get_client(self):
+        """Get HTTP client for this instance."""
+        return await self.get_shared_client()
+
+    async def close(self):
+        """Close the shared HTTP client."""
+        if self._shared_client and not self._shared_client.is_closed:
+            await self._shared_client.aclose()
 
     async def _call_ollama_api(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Make a call to Ollama API."""
         url = f"{self.base_url}{endpoint}"
+        client = await self.get_client()
         try:
             if method.upper() == "GET":
-                r = await self.client.get(url, **kwargs)
+                r = await client.get(url, **kwargs)
             elif method.upper() == "POST":
-                r = await self.client.post(url, **kwargs)
+                r = await client.post(url, **kwargs)
             elif method.upper() == "DELETE":
-                r = await self.client.delete(url, **kwargs)
+                r = await client.delete(url, **kwargs)
             else:
                 return {"ok": False, "error": f"Unsupported method: {method}"}
             
@@ -80,13 +83,13 @@ class OllamaServer:
                 logger.debug(f"Failed to parse response JSON, returning text: {e}")
                 return {"ok": True, "data": {"text": r.text}}
         except httpx.TimeoutException as e:
-            log(f"Ollama API timeout: {e}", "ERROR")
+            logger.error(f"Ollama API timeout: {e}")
             return {"ok": False, "error": f"Request to Ollama timed out: {str(e)}", "error_type": "timeout"}
         except httpx.ConnectError as e:
-            log(f"Ollama connection error: {e}", "ERROR")
+            logger.error(f"Ollama connection error: {e}")
             return {"ok": False, "error": f"Cannot connect to Ollama at {self.base_url}: {str(e)}", "error_type": "connection"}
         except Exception as e:
-            log(f"API call failed: {e}", "ERROR")
+            logger.error(f"API call failed: {e}")
             return {"ok": False, "error": str(e), "error_type": "unknown"}
 
     async def list_models(self) -> Dict[str, Any]:
@@ -369,13 +372,13 @@ async def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
         
         # Execute tool asynchronously
         try:
-            # [FIX] Do not use asyncio.run() inside an async function
+            # Execute tool asynchronously
             result = await execute_tool()
             # Log successful tool execution (debug level)
             if result.get("ok"):
-                log(f"Tool '{tool_name}' executed successfully", "DEBUG")
+                logger.debug(f"Tool '{tool_name}' executed successfully")
             else:
-                log(f"Tool '{tool_name}' returned error: {result.get('error', 'Unknown error')}", "WARNING")
+                logger.warning(f"Tool '{tool_name}' returned error: {result.get('error', 'Unknown error')}")
             
             return {
                 "jsonrpc": "2.0",
@@ -390,7 +393,7 @@ async def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
                 }
             }
         except Exception as e:
-            log(f"Tool execution error for '{tool_name}': {e}", "ERROR", exc_info=True)
+            logger.error(f"Tool execution error for '{tool_name}': {e}", exc_info=True)
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -414,7 +417,7 @@ async def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
 
 async def main():
     """Main MCP server loop (stdio)."""
-    log("Ollama MCP server starting...")
+    logger.info("Ollama MCP server starting...")
     
     # Read from stdin, write to stdout
     while True:
@@ -428,7 +431,7 @@ async def main():
                 continue
             
             request = json.loads(line)
-            # [FIX] Await the async handle_request
+            # Handle the MCP request asynchronously
             response = await handle_request(request)
             
             # Write response to stdout
@@ -436,7 +439,7 @@ async def main():
             sys.stdout.flush()
             
         except json.JSONDecodeError as e:
-            log(f"JSON decode error: {e}", "ERROR")
+            logger.error(f"JSON decode error: {e}")
             error_response = {
                 "jsonrpc": "2.0",
                 "id": None,
@@ -448,7 +451,7 @@ async def main():
             print(json.dumps(error_response))
             sys.stdout.flush()
         except Exception as e:
-            log(f"Unexpected error: {e}", "ERROR")
+            logger.error(f"Unexpected error: {e}")
             error_response = {
                 "jsonrpc": "2.0",
                 "id": None,
@@ -461,7 +464,7 @@ async def main():
             sys.stdout.flush()
     
     await server.close()
-    log("Ollama MCP server shutting down...")
+    logger.info("Ollama MCP server shutting down...")
 
 
 if __name__ == "__main__":

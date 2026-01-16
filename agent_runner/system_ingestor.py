@@ -178,7 +178,7 @@ class SystemIngestor:
                         await self._store_system_state("hardware" if "Hardware" in dt else "network", items[0], category=cat)
                     else:
                         cat = "Network" if "Network" in dt else "System"
-                        # [FIX] Schema Enforcement: 'details' must be an object, not a list.
+                        # Schema Enforcement: 'details' must be an object, not a list.
                         if isinstance(items, list):
                             items = {"items": items}
                         await self._store_system_state(dt, items, category=cat)

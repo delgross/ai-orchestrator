@@ -31,7 +31,6 @@ SLEEP_BRIEF_BACKOFF_BASE = 0.5  # Base delay in seconds for exponential backoff
 CORE_MCP_SERVERS = {
     "system-control",  # Critical: Provides get_server_status and config tools
     "time",            # Critical: Prevents hallucinations about date/time
-    "filesystem",      # Critical: Needed for basic operations
     "project-memory"   # Critical: Long-term memory and context
 }
 

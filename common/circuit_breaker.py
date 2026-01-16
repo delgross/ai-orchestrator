@@ -452,16 +452,20 @@ class CircuitBreaker:
         }
 
 class CircuitBreakerRegistry:
-    """Registry for managing multiple circuit breakers."""
+    """Registry for managing multiple circuit breakers with memory caching."""
     def __init__(self, default_threshold: int = 5, default_timeout: float = 60.0, core_services: set = None):
         self.breakers: Dict[str, CircuitBreaker] = {}
         self.default_threshold = default_threshold
         self.default_timeout = default_timeout
         self.core_services = core_services or set()
-        
+
         # Core service thresholds (higher tolerance for critical services)
         self.core_threshold = 10  # Core services need 10 failures (vs 5 for non-core)
         self.core_timeout = 30.0  # Core services recover faster (30s vs 60s)
+
+        # Optimization: Memory cache for fast lookups
+        self._allowed_cache: Dict[str, Tuple[bool, float]] = {}  # (is_allowed, timestamp)
+        self._cache_ttl = 1.0  # Cache for 1 second
 
     def _is_core_service(self, name: str) -> bool:
         """Check if a service is a core service."""
@@ -487,12 +491,31 @@ class CircuitBreakerRegistry:
 
     def record_success(self, name: str):
         self.get_breaker(name).record_success()
+        # Invalidate cache since state changed
+        self._allowed_cache.pop(name, None)
 
     def record_failure(self, name: str, weight: int = 1, error: Any = None):
         self.get_breaker(name).record_failure(weight, error)
+        # Invalidate cache since state changed
+        self._allowed_cache.pop(name, None)
 
     def is_allowed(self, name: str) -> bool:
-        return self.get_breaker(name).is_allowed()
+        """Check if service is allowed with memory caching for performance."""
+        now = time.time()
+
+        # Check cache first (fast path)
+        if name in self._allowed_cache:
+            cached_result, cached_time = self._allowed_cache[name]
+            if now - cached_time < self._cache_ttl:
+                return cached_result
+
+        # Cache miss - compute result (slower path)
+        result = self.get_breaker(name).is_allowed()
+
+        # Update cache
+        self._allowed_cache[name] = (result, now)
+
+        return result
 
     def reset(self, name: str):
         """Reset a specific circuit breaker."""
@@ -503,6 +526,12 @@ class CircuitBreakerRegistry:
         """Reset all managed circuit breakers."""
         for breaker in self.breakers.values():
             breaker.reset()
+        # Clear cache since all states changed
+        self._allowed_cache.clear()
+
+    def clear_cache(self):
+        """Clear the memory cache (useful for testing or manual invalidation)."""
+        self._allowed_cache.clear()
 
     def get_status(self) -> Dict[str, Dict[str, Any]]:
         return {name: breaker.to_dict() for name, breaker in self.breakers.items()}

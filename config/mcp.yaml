@@ -15,7 +15,8 @@ mcp_servers:
     - /Users/bee/Desktop
     - /Users/bee/Downloads
     env: {}
-    enabled: true
+    enabled: false
+    disabled_reason: user_request_redundant
     type: stdio
   sequential-thinking:
     cmd:

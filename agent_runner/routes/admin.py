@@ -28,6 +28,56 @@ async def health_check():
         "uptime_s": time.time() - state.started_at
     }
 
+@router.put("/logging/level")
+async def set_log_level(component: str = Body(...), level: str = Body(...)):
+    """
+    Set log level for a specific component at runtime.
+
+    Args:
+        component: Logger name (e.g., "agent_runner", "agent_runner.engine")
+        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    """
+    try:
+        # Validate level
+        valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if level.upper() not in valid_levels:
+            raise HTTPException(status_code=400, detail=f"Invalid log level. Must be one of: {', '.join(valid_levels)}")
+
+        # Get logger and set level
+        target_logger = logging.getLogger(component)
+        target_logger.setLevel(getattr(logging, level.upper()))
+
+        logger.info(f"Log level changed: {component} -> {level.upper()}")
+
+        return {
+            "ok": True,
+            "message": f"Log level for '{component}' set to {level.upper()}",
+            "component": component,
+            "level": level.upper()
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to set log level for {component}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to set log level: {str(e)}")
+
+@router.get("/logging/levels")
+async def get_log_levels():
+    """Get current log levels for all active loggers."""
+    levels = {}
+
+    # Get all loggers that have handlers
+    for name, logger_obj in logging.root.manager.loggerDict.items():
+        if isinstance(logger_obj, logging.Logger) and logger_obj.handlers:
+            levels[name] = logging.getLevelName(logger_obj.level)
+
+    # Also include root logger
+    levels["root"] = logging.getLevelName(logging.root.level)
+
+    return {
+        "ok": True,
+        "loggers": levels
+    }
+
 @router.get("/ingestion/status")
 async def get_ingestion_status():
     """Return status of the RAG ingestion pipeline."""

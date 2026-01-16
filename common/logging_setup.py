@@ -116,7 +116,7 @@ class DBLogHandler(logging.Handler):
             
             # SurrealDB INSERT expects variable JSON
             # "INSERT INTO diagnostic_log $data"
-            # [FIX] Explicitly use Namespace to avoid header issues
+            # Explicitly use Namespace to avoid header issues
             queries = f"USE NS {SURREAL_NS}; USE DB {SURREAL_DB}; INSERT INTO diagnostic_log {json.dumps(vals)};"
             
             resp = session.post(url, data=queries, timeout=5.0)

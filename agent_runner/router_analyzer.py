@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import math
+from common.message_utils import extract_text_content
 import os
 import re
 import threading
@@ -496,7 +497,7 @@ def _create_cache_key(
     # Extract core query intent (normalize for better cache hits)
     query_text = query.lower().strip()
     if messages:
-        user_msgs = [m.get("content", "").lower().strip() for m in messages if m.get("role") == "user"]
+        user_msgs = [extract_text_content(m.get("content", "")).lower().strip() for m in messages if m.get("role") == "user"]
         if user_msgs:
             query_text = user_msgs[0]
 

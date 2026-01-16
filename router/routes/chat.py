@@ -24,8 +24,69 @@ from common.logging_utils import log_time
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger("router.chat")
 
+
+def validate_chat_completion_request(body: Dict[str, Any]) -> Union[str, None]:
+    """
+    Validate chat completion request structure.
+    Returns error message string if invalid, None if valid.
+    """
+    # Check messages field
+    messages = body.get("messages")
+    if not messages:
+        return "messages field is required and cannot be empty"
+
+    if not isinstance(messages, list):
+        return "messages must be an array"
+
+    if len(messages) == 0:
+        return "messages array cannot be empty"
+
+    # Validate each message
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            return f"message at index {i} must be an object"
+
+        if "role" not in msg:
+            return f"message at index {i} missing required 'role' field"
+
+        if "content" not in msg:
+            return f"message at index {i} missing required 'content' field"
+
+        role = msg.get("role")
+        if role not in ["system", "user", "assistant", "tool"]:
+            return f"message at index {i} has invalid role '{role}'. Must be one of: system, user, assistant, tool"
+
+        content = msg.get("content")
+        if content is None:
+            return f"message at index {i} content cannot be null"
+
+    # Check model field (optional but should be reasonable if provided)
+    model = body.get("model")
+    if model is not None and not isinstance(model, str):
+        return "model must be a string if provided"
+
+    # Check stream field
+    stream = body.get("stream")
+    if stream is not None and not isinstance(stream, bool):
+        return "stream must be a boolean if provided"
+
+    # Check max_tokens
+    max_tokens = body.get("max_tokens")
+    if max_tokens is not None:
+        if not isinstance(max_tokens, int) or max_tokens <= 0:
+            return "max_tokens must be a positive integer if provided"
+
+    # Check temperature
+    temperature = body.get("temperature")
+    if temperature is not None:
+        if not isinstance(temperature, (int, float)) or not (0.0 <= temperature <= 2.0):
+            return "temperature must be a number between 0.0 and 2.0 if provided"
+
+    return None  # Valid request
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request):
+    print("DEBUG: Router chat_completions called!")
     try:
         # require_auth is handled at middleware level or called here
         from router.middleware import require_auth
@@ -37,19 +98,36 @@ async def chat_completions(request: Request):
             raise HTTPException(status_code=413, detail="Request body too large")
 
         body = await request.json()
+
+        # INPUT VALIDATION: Check chat completion request structure
+        validation_error = validate_chat_completion_request(body)
+        if validation_error:
+            logger.warning(f"REQ [{request_id}] Invalid request: {validation_error}")
+            return JSONResponse({
+                "error": {
+                    "message": validation_error,
+                    "type": "invalid_request_error",
+                    "code": 400
+                }
+            }, status_code=400)
+
         model = body.get("model", "")
         # Human-friendly alias support
         if model == "Questionable Insight":
             # Use agent:mcp for full agent processing
             model = "agent:mcp"
-        
+
+
         # Strip extra quotes if present (client-side artifact)
         if model:
             model = model.strip('"\'')
-            
+        else:
+            # Default model if none specified
+            model = "agent:mcp"
+
         request_id = getattr(request.state, "request_id", "unknown")
 
-        logger.info(f"REQ [{request_id}] Chat Completion: Model='{model}'")
+        logger.info(f"REQ [{request_id}] Chat Completion: Model='{model}' Stream={body.get('stream', False)}")
     except Exception as e:
         logger.error(f"Early failure in chat_completions: {e}")
         import traceback
@@ -153,25 +231,43 @@ async def _handle_chat_internal(request_id: str, body: Dict[str, Any], prefix: s
         url = join_url(AGENT_RUNNER_URL, AGENT_RUNNER_CHAT_PATH)
 
         # Check if streaming is requested
-        if body.get("stream"):
+        stream_flag = body.get("stream")
+        logger.info(f"REQ [{request_id}] Stream flag: {stream_flag} (type: {type(stream_flag)})")
+        if stream_flag:
             async def stream_wrapper():
                 try:
                     headers = {"X-Request-ID": request_id}
                     if quality_tier:
                         headers["X-Quality-Tier"] = quality_tier.value
-                    logger.info(f"REQ [{request_id}] Forwarding stream to Agent Runner...")
+                    logger.info(f"REQ [{request_id}] Forwarding SSE stream to Agent Runner...")
                     t_start = time.time()
                     first_byte = True
+
                     async with state.client.stream("POST", url, json=body, headers=headers, timeout=TIMEOUT_HTTP_LONG) as r:
+                        if r.status_code >= 400:
+                            # Handle non-200 responses in streaming
+                            error_content = await r.aread()
+                            try:
+                                error_data = json.loads(error_content.decode('utf-8'))
+                                error_obj = {"error": error_data.get("error", {"message": "Streaming request failed", "type": "internal_server_error"})}
+                            except:
+                                error_obj = {"error": {"message": f"HTTP {r.status_code}: Streaming failed", "type": "internal_server_error"}}
+                            yield f"data: {json.dumps(error_obj)}\n\n"
+                            return
+
+                        # Forward SSE data as-is
                         async for chunk in r.aiter_bytes():
                             if first_byte:
                                 duration = time.time() - t_start
                                 logger.info(f"REQ [{request_id}] 🚀 TTFT (Agent -> Router): {duration:.4f}s")
                                 first_byte = False
+
+                            # Yield raw bytes directly
                             yield chunk
+
                 except Exception as e:
-                    logger.error(f"Agent request failed: {e}")
-                    error_obj = {"error": {"message": str(e), "type": "internal_server_error"}}
+                    logger.error(f"REQ [{request_id}] SSE streaming failed: {e}")
+                    error_obj = {"error": {"message": f"Streaming failed: {str(e)}", "type": "internal_server_error"}}
                     yield f"data: {json.dumps(error_obj)}\n\n"
 
             return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
@@ -182,10 +278,42 @@ async def _handle_chat_internal(request_id: str, body: Dict[str, Any], prefix: s
             headers["X-Quality-Tier"] = quality_tier.value
         try:
             r = await state.client.post(url, json=body, headers=headers, timeout=TIMEOUT_HTTP_LONG)
+
+            # Handle different HTTP status codes appropriately
             if r.status_code >= 500:
-                logger.warning(f"Agent Runner returned {r.status_code}. Returning 503 to client.")
-                return JSONResponse({"error": {"message": "Agent Runner Unavailable (Warming Up / Building)", "type": "service_unavailable", "code": 503}}, status_code=503)
-            return JSONResponse(r.json(), status_code=r.status_code)
+                # 5xx = Server errors (service unavailable)
+                logger.warning(f"REQ [{request_id}] Agent Runner returned {r.status_code}. Returning 503 to client.")
+                return JSONResponse({
+                    "error": {
+                        "message": "Agent Runner Unavailable (Warming Up / Building)",
+                        "type": "service_unavailable",
+                        "code": 503
+                    }
+                }, status_code=503)
+
+            elif r.status_code >= 400:
+                # 4xx = Client errors (forward the actual error from agent runner)
+                logger.warning(f"REQ [{request_id}] Agent Runner returned {r.status_code} (client error)")
+                try:
+                    error_data = r.json()
+                    return JSONResponse(error_data, status_code=r.status_code)
+                except:
+                    # If we can't parse the error response, return a generic one
+                    return JSONResponse({
+                        "error": {
+                            "message": f"Request validation failed (HTTP {r.status_code})",
+                            "type": "invalid_request_error",
+                            "code": r.status_code
+                        }
+                    }, status_code=r.status_code)
+
+            else:
+                # 2xx = Success
+                response_data = r.json()
+                logger.info(f"ROUTER: Forwarding response with keys: {list(response_data.keys()) if isinstance(response_data, dict) else type(response_data)}")
+                if isinstance(response_data, dict) and "metadata" in response_data:
+                    logger.warning(f"ROUTER: Response contains non-standard 'metadata' field - this may cause client parsing issues")
+                return JSONResponse(response_data, status_code=r.status_code)
         except Exception as e:
             logger.error(f"Agent request failed: {e}")
             import traceback
@@ -364,14 +492,8 @@ async def _handle_chat_internal(request_id: str, body: Dict[str, Any], prefix: s
                                 choice["message"]["content"] += "\n\n⚠️ *Note: This response may contain inaccuracies. Please verify the information.*"
                                 choice["message"]["hallucination_warning"] = True
 
-                        # Add detection metadata to response
-                        choice["message"]["hallucination_check"] = {
-                            "detected": detection_result.is_hallucination,
-                            "severity": detection_result.severity.value,
-                            "confidence": detection_result.confidence,
-                            "issues_count": len(detection_result.detected_issues)
-                        }
-                        logger.warning(f"HALLUCINATION_CHECK: Added metadata to response")
+                        # Skip adding metadata to maintain OpenAI compatibility
+                        logger.warning(f"HALLUCINATION_CHECK: Detection completed (metadata skipped for compatibility)")
 
                         # Cleanup
                         await detector.cleanup()
@@ -388,3 +510,33 @@ async def _handle_chat_internal(request_id: str, body: Dict[str, Any], prefix: s
         # Don't fail the request if post-processing fails
 
     raise HTTPException(status_code=404, detail=f"Provider or model not found: {prefix}:{model_id}")
+
+
+async def check_streaming_health() -> Dict[str, Any]:
+    """Check streaming functionality health by testing a simple streaming request."""
+    try:
+        # Test streaming by making a simple request to agent runner
+        url = join_url(AGENT_RUNNER_URL, AGENT_RUNNER_CHAT_PATH)
+        test_body = {
+            "model": "qwen2.5:7b-instruct",
+            "messages": [{"role": "user", "content": "test"}],
+            "stream": True,
+            "max_tokens": 5
+        }
+
+        # Try to make a streaming request with a short timeout
+        async with state.client.stream("POST", url, json=test_body, timeout=5.0) as r:
+            if r.status_code >= 400:
+                return {"ok": False, "error": f"HTTP {r.status_code}"}
+
+            # Try to read first chunk to verify streaming works
+            try:
+                chunk = await r.aiter_bytes().__anext__()
+                return {"ok": True, "chunk_received": len(chunk) > 0}
+            except StopAsyncIteration:
+                return {"ok": False, "error": "No chunks received"}
+            except Exception as e:
+                return {"ok": False, "error": f"Chunk read failed: {str(e)}"}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
