@@ -58,7 +58,7 @@ class Nexus:
         logger.info(f"Nexus Dispatch: [{request_id}] '{normalized_message[:50]}...'")
 
         # EARLY CONVERSATIONAL OPTIMIZATION - Before any expensive operations
-        print(f"DEBUG NEXUS: Processing '{normalized_message}' with context={normalized_context}")
+        logger.debug(f"Processing '{normalized_message}' with context={normalized_context}")
 
         # Check for system events (not sent to LLM) - existing mechanism
         if hasattr(self.state, 'system_event_queue') and self.state.system_event_queue:
@@ -218,13 +218,31 @@ class Nexus:
                         if sys_event_data.get("request_id") is None or sys_event_data.get("request_id") == request_id:
                             sys_event = sys_event_data.get("event", {})
                             logger.info(f"🚨 NEXUS YIELDING SYSTEM EVENT: {sys_event}")
+                            # Always yield system_status for frontend notifications
                             yield {
                                 "type": "system_status", # Standardize
                                 "content": sys_event.get("content"),
                                 "severity": sys_event.get("severity", "info"),
                                 "timestamp": sys_event_data.get("timestamp")
                             }
-                        
+
+                            # If this is a user-facing health/status event, also yield as tool_end for chat
+                            # (Heuristic: if event has 'content' and 'show_in_chat' or is a health/status type)
+                            show_in_chat = sys_event.get("show_in_chat")
+                            event_type = sys_event.get("type", "")
+                            user_facing_types = {"system_health", "health_report", "status_report"}
+                            if (
+                                (show_in_chat is True)
+                                or (event_type in user_facing_types)
+                                or (event_type == "system_status" and sys_event.get("content"))
+                            ):
+                                formatted = self._format_tool_output(sys_event.get("content"))
+                                yield {
+                                    "type": "tool_end",
+                                    "tool": event_type or "system_status",
+                                    "output": formatted
+                                }
+
                         # Schedule next queue item
                         task_queue = asyncio.create_task(self.state.system_event_queue.get())
                     except Exception as e:
