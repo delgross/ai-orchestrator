@@ -14,59 +14,48 @@ logger = logging.getLogger("router.admin")
 
 async def _proxy_agent_runner(method: str, path: str, json_body: Any = None):
     from router.config import AGENT_RUNNER_URL
-    # Ensure path doesn't result in double /admin/admin
-    clean_path = path if not path.startswith("/admin") else path[6:]
-    if not clean_path.startswith("/"): clean_path = "/" + clean_path
-    url = f"{AGENT_RUNNER_URL}/admin{clean_path}"
-    try:
-        if method == "GET":
-            r = await state.client.get(url, timeout=10.0)
-        elif method == "POST":
-            r = await state.client.post(url, json=json_body, timeout=10.0)
-        else:
-            raise HTTPException(status_code=405, detail="Method not allowed")
-            
-        if r.status_code >= 400:
-            raise HTTPException(status_code=r.status_code, detail=r.text)
-        return r.json()
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to proxy to agent runner [{method} {url}]: {type(e).__name__}: {e}")
-        # Return 502 but with JSON details if possible
-        raise HTTPException(status_code=502, detail=f"Agent Runner unavailable: {str(e)}")
+@router.post("/dashboard/track/error")
+async def proxy_dash_error(request: Request):
+    body = await request.json()
+    return await _proxy_agent_runner("POST", "/dashboard/track/error", body)
 
-@router.get("/system-status")
-async def system_status():
-    """Aggregate status of all services (Router, Agent, Ollama)."""
-    # 1. Router Self-Check
-    router_status = {"ok": True, "version": VERSION}
+@router.post("/dashboard/track/interaction")
+async def proxy_dash_interaction(request: Request):
+    body = await request.json()
+    return await _proxy_agent_runner("POST", "/dashboard/track/interaction", body)
+
+@router.get("/dashboard/state")
+async def get_dashboard_state():
+    """Aggregated state for the V2 Dashboard to minimize polling."""
+    import asyncio
     
-    # 2. Agent Check (via Proxy)
-    agent_data = {}
+    # 1. Gather all data in parallel
     try:
-        # We use the raw client to avoid raising HTTP 502 logic in _proxy wrapper if down
-        # But _proxy_agent_runner handles generic logic. Let's try/except it.
-        agent_data = await _proxy_agent_runner("GET", "/system-status")
+        [status, summary, metrics, budget, llms, ingestion, memory_stats] = await asyncio.gather(
+            system_status(),
+            health_summary(),
+            get_observability_stats(),
+            get_budget(),
+            get_llm_status(),
+            proxy_ingestion_status(),
+            proxy_memory_status(),
+            return_exceptions=True
+        )
+        
+        return {
+            "ok": True,
+            "timestamp": time.time(),
+            "status": status if not isinstance(status, Exception) else {"error": str(status)},
+            "summary": summary if not isinstance(summary, Exception) else {"error": str(summary)},
+            "metrics": metrics if not isinstance(metrics, Exception) else {"error": str(metrics)},
+            "budget": budget if not isinstance(budget, Exception) else {"error": str(budget)},
+            "llms": llms if not isinstance(llms, Exception) else {"error": str(llms)},
+            "ingestion": ingestion if not isinstance(ingestion, Exception) else {"error": str(ingestion)},
+            "memory_stats": memory_stats if not isinstance(memory_stats, Exception) else {"error": str(memory_stats)}
+        }
     except Exception as e:
-        logger.warning(f"Status check: Agent unreachable: {e}")
-        agent_data = {"ok": False, "mode": "Offline", "internet": "Unknown", "ollama_ok": False}
-
-    # 3. Construct Unified Response (The 'Defined Channel' Contract)
-    return {
-        "ok": True,
-        "services": {
-            "router": router_status,
-            "agent_runner": {"ok": agent_data.get("ok", False)}
-        },
-        "ollama_ok": agent_data.get("ollama_ok", False),
-        "database_ok": agent_data.get("database_ok", False),
-        "internet": agent_data.get("internet", "Unknown"),
-        "mode": agent_data.get("mode", "Production"),
-        # Pass through Agent capabilities
-        "hardware_verified": agent_data.get("hardware_verified", False),
-        "limits": agent_data.get("limits", {})
-    }
+        logger.error(f"Dashboard state aggregation failed: {e}")
+        return {"ok": False, "error": str(e)}
 
 @router.get("/health/summary")
 async def health_summary():
@@ -77,7 +66,8 @@ async def health_summary():
     try:
         agent_cb_data = await _proxy_agent_runner("GET", "/circuit-breaker/status")
         agent_breakers = agent_cb_data.get("breakers", {})
-    except: pass
+    except Exception as e:
+        logger.warning(f"Failed to get agent circuit breaker status: {e}")
     
     all_breakers = {**router_breakers, **agent_breakers}
     
@@ -88,7 +78,8 @@ async def health_summary():
         obs = get_observability()
         anomalies_data = await obs.get_anomalies(limit=5)
         anomalies = anomalies_data.get("anomalies", [])
-    except: pass
+    except Exception as e:
+        logger.warning(f"Failed to get anomalies data: {e}")
     
     # 3. Check for any 'OPEN' breakers (Critical Degradation)
     open_breakers = [b for b in all_breakers.values() if b.get("state") == "open"]
@@ -132,6 +123,7 @@ async def proxy_mcp_toggle(request: Request):
 
 @router.post("/mcp/upload-config")
 async def proxy_mcp_upload_config(raw_text: str = Form(...)):
+    return await _proxy_agent_runner("POST", "/mcp/upload-config", raw_text)
 @router.get("/mcp/server/status")
 async def proxy_mcp_server_status():
     """Proxy MCP server status request to Agent Runner."""
@@ -168,7 +160,8 @@ async def proxy_cb_status():
         # Fetch from agent (which returns {"breakers": {...}, ...})
         data = await _proxy_agent_runner("GET", "/circuit-breaker/status")
         agent_breakers = data.get("breakers", {})
-    except: pass
+    except Exception as e:
+        logger.warning(f"Failed to get agent circuit breaker status: {e}")
     
     return {"ok": True, "breakers": {**router_breakers, **agent_breakers}}
 
@@ -434,7 +427,8 @@ async def get_llm_status():
         if r.status_code == 200:
             ollama_ok = True
             ollama_models = [m.get("name") for m in r.json().get("models", [])]
-    except: pass
+    except Exception as e:
+        logger.debug(f"Failed to check Ollama status: {e}")
     
     status.append({
         "id": "ollama",
