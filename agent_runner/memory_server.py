@@ -33,6 +33,24 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _normalize_embedding(vec: Optional[List[float]]) -> List[float]:
+    """Force embeddings to the configured dimension with safe numeric values."""
+    if not vec or not isinstance(vec, list):
+        return [0.0] * EMBEDDING_DIMENSION
+
+    normalized: List[float] = []
+    for value in vec[:EMBEDDING_DIMENSION]:
+        try:
+            normalized.append(float(value))
+        except Exception:
+            normalized.append(0.0)
+
+    if len(normalized) < EMBEDDING_DIMENSION:
+        normalized.extend([0.0] * (EMBEDDING_DIMENSION - len(normalized)))
+
+    return normalized[:EMBEDDING_DIMENSION]
+
+
 class MemoryServer:
     def __init__(self, state=None):
         self.state = state
@@ -296,6 +314,7 @@ class MemoryServer:
             "DEFINE FIELD name ON TABLE mcp_server TYPE string",
             "DEFINE FIELD command ON TABLE mcp_server TYPE string",
             "DEFINE FIELD args ON TABLE mcp_server TYPE array",
+            "DEFINE FIELD cmd ON TABLE mcp_server TYPE array",
             "DEFINE FIELD env ON TABLE mcp_server TYPE object",
             "DEFINE FIELD enabled ON TABLE mcp_server TYPE bool",
             "DEFINE FIELD disabled_reason ON TABLE mcp_server TYPE option<string>",
@@ -568,18 +587,11 @@ class MemoryServer:
         
         # Initialize DEFAULT_LOCATION if not exists
         try:
+            # Store DEFAULT_LOCATION as a JSON string to satisfy the string-typed schema
             init_query = """IF count(SELECT * FROM config_state WHERE key = 'DEFAULT_LOCATION') == 0 THEN
 CREATE config_state SET
     key = 'DEFAULT_LOCATION',
-    value = {
-        city: 'Unknown',
-        region: 'Unknown',
-        postal_code: '',
-        country: 'Unknown',
-        lat: 0.0,
-        lon: 0.0,
-        timezone: 'UTC'
-    };
+    value = '{"city":"Unknown","region":"Unknown","postal_code":"","country":"Unknown","lat":0.0,"lon":0.0,"timezone":"UTC"}';
 END;"""
             await self._execute_query(init_query)
             logger.debug("DEFAULT_LOCATION initialized in database")
@@ -666,6 +678,7 @@ END;"""
         return {"ok": True}
 
     async def get_embedding(self, text: str) -> List[float]:
+        embedding: Optional[List[float]] = None
         try:
             model = self.state.embedding_model if self.state else "ollama:mxbai-embed-large:latest"
             
@@ -674,17 +687,11 @@ END;"""
             if "ollama" in model or "mxbai" in model:
                  try:
                      async with httpx.AsyncClient() as client:
-                        # Strip "ollama:" prefix if present for some calls, though Ollama usually handles it if model name matches
-                        # specifically mxbai-embed-large:latest
                         clean_model = model.replace("ollama:", "")
-                        
-                        # [FIX] Defensive: Handle List inputs (e.g. from unexpected callers)
-                        # Ollama API expects 'prompt' as string, but 'input' as string/list.
-                        # We use 'prompt' for /api/embeddings.
+
                         prompt_text = text
                         if isinstance(text, list):
                             logger.warning(f"MemoryServer: get_embedding received LIST (len={len(text)}). Joining with newlines.")
-                            # Join with newlines (standard for batch embedding in single vector context)
                             prompt_text = "\n".join([str(t) for t in text])
                         
                         resp = await client.post(
@@ -693,9 +700,8 @@ END;"""
                             timeout=30.0
                         )
                         if resp.status_code == 200:
-                            return resp.json()["embedding"]
-                        else:
-                            logger.warning(f"Ollama Direct Embedding failed {resp.status_code}: {resp.text}")
+                            return _normalize_embedding(resp.json().get("embedding"))
+                        logger.warning(f"Ollama Direct Embedding failed {resp.status_code}: {resp.text}")
                  except Exception as eo:
                      logger.warning(f"Ollama Direct failed: {eo}")
                      # Fallthrough to Gateway
@@ -704,7 +710,7 @@ END;"""
             if self.state and hasattr(self.state, "mcp_circuit_breaker"):
                  if not self.state.mcp_circuit_breaker.is_allowed(model):
                      logger.warning(f"Embedding Short-Circuited: Model '{model}' is broken.")
-                     return [0.0] * EMBEDDING_DIMENSION
+                     return _normalize_embedding([0.0] * EMBEDDING_DIMENSION)
             
             headers = {}
             if ROUTER_AUTH_TOKEN:
@@ -719,20 +725,19 @@ END;"""
                 if resp.status_code == 200:
                     if self.state and hasattr(self.state, "mcp_circuit_breaker"):
                          self.state.mcp_circuit_breaker.record_success(model)
-                    return resp.json()["data"][0]["embedding"]
-                else:
-                    logger.warning(f"Embedding failed HTTP {resp.status_code}: {resp.text}")
-                    if self.state and hasattr(self.state, "mcp_circuit_breaker"):
-                         self.state.mcp_circuit_breaker.record_failure(model)
-                         
+                    embedding = resp.json()["data"][0]["embedding"]
+                    return _normalize_embedding(embedding)
+                logger.warning(f"Embedding failed HTTP {resp.status_code}: {resp.text}")
+                if self.state and hasattr(self.state, "mcp_circuit_breaker"):
+                     self.state.mcp_circuit_breaker.record_failure(model)
+                     
         except Exception as e:
             logger.warning(f"Failed to get embedding: {e}")
             if self.state and hasattr(self.state, "mcp_circuit_breaker"):
-                 # Determine model variable if possible
                  m = self.state.embedding_model if self.state else "unknown"
                  self.state.mcp_circuit_breaker.record_failure(m)
                  
-        return [0.0] * EMBEDDING_DIMENSION
+        return _normalize_embedding(embedding)
 
 
 

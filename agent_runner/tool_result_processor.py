@@ -236,14 +236,14 @@ class ToolResultProcessor:
             return await self._adaptive_content_truncation(result, policy, tool_name)
 
         elif policy.strategy == TruncationStrategy.STRUCTURED_PRESERVE:
-            return self._structured_preserve_truncation(result, policy)
+            return await self._structured_preserve_truncation(result, policy, tool_name)
 
         elif policy.strategy == TruncationStrategy.ERROR_PRIORITY:
-            return self._error_priority_truncation(result, policy)
+            return await self._error_priority_truncation(result, policy)
 
         else:
             # Default to adaptive
-            return self._adaptive_content_truncation(result, policy)
+            return await self._adaptive_content_truncation(result, policy, tool_name)
 
     def _hard_cutoff_truncation(self, result: str, max_chars: int) -> Tuple[str, Dict[str, Any]]:
         """Simple character limit truncation"""
@@ -271,7 +271,7 @@ class ToolResultProcessor:
 
         # Try structured preservation
         if policy.preserve_structure and self._is_structured_content(result):
-            return await self._structured_preserve_truncation(result, policy)
+            return await self._structured_preserve_truncation(result, policy, tool_name)
 
         # Prioritize error information
         if policy.preserve_errors and self._contains_errors(result):
@@ -290,7 +290,7 @@ class ToolResultProcessor:
         # Fall back to smart cutoff
         return await self._smart_cutoff_truncation(result, policy.max_chars)
 
-    async def _structured_preserve_truncation(self, result: str, policy: ToolPolicy) -> Tuple[str, Dict[str, Any]]:
+    async def _structured_preserve_truncation(self, result: str, policy: ToolPolicy, tool_name: str = "") -> Tuple[str, Dict[str, Any]]:
         """Preserve JSON/list structure while truncating"""
         try:
             # Try JSON parsing
@@ -318,8 +318,8 @@ class ToolResultProcessor:
         except:
             pass
 
-        # Fall back to adaptive
-        return await self._adaptive_content_truncation(result, policy, tool_name)
+        # Fall back to a simple cutoff to avoid recursive structured checks
+        return await self._smart_cutoff_truncation(result, policy.max_chars)
 
     async def _error_priority_truncation(self, result: str, policy: ToolPolicy) -> Tuple[str, Dict[str, Any]]:
         """Prioritize error and critical information"""

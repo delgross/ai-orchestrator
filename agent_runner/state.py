@@ -68,7 +68,8 @@ class AgentState:
         #Backing storage for properties
         # --- 1. THE BRAIN (Deep Intelligence: 70B) ---
         # CODIFIED: These are now hardcoded. Config/DB are ignored.
-        self._agent_model = "ollama:llama3.3:70b"
+        # Hybrid default: fast worker runs tools; 70B reserved for final synthesis.
+        self._agent_model = "ollama:qwen2.5:7b-instruct"  # worker/tool loop
         self._intent_model = "ollama:llama3.2:1b"
 
         # --- 2. THE NERVOUS SYSTEM (Fast Transactions: Qwen 7B) ---
@@ -76,7 +77,7 @@ class AgentState:
         self._task_model = "ollama:qwen2.5:7b-instruct"
         self._summarization_model = "ollama:qwen2.5:7b-instruct"
         self._mcp_model = "ollama:qwen2.5:7b-instruct"
-        self._finalizer_model = "ollama:qwen2.5:7b-instruct"
+        self._finalizer_model = "ollama:llama3.3:70b"
         self._critic_model = "ollama:qwen2.5:7b-instruct"
         self._healer_model = "ollama:qwen2.5:7b-instruct"
         self._fallback_model = "ollama:qwen2.5:7b-instruct"

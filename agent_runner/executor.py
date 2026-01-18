@@ -8,6 +8,7 @@ import httpx
 
 from agent_runner.state import AgentState
 from agent_runner.quality_tiers import QualityTier, get_tier_config
+from agent_runner.tool_categories import detect_query_capabilities, get_tools_for_capabilities, resolve_capability_conflicts
 from agent_runner.tools import fs as fs_tools
 from agent_runner.tools import mcp as mcp_tools
 from agent_runner.tools import system as system_tools
@@ -32,8 +33,6 @@ from agent_runner.tools import thinking as thinking_tools
 from agent_runner.tools import advice as advice_tools
 
 from common.unified_tracking import track_event, EventSeverity, EventCategory
-# [PHASE 3] Performance Optimization
-from common.caching import MultiLayerCache, MCPToolCache, CacheStrategy
 
 logger = logging.getLogger("agent_runner.executor")
 
@@ -44,64 +43,13 @@ class ToolExecutor:
         # NOTE: Cache invalidation framework available in agent_runner/cache_helpers.py
         # Future: Integrate with CacheInvalidator for automatic TTL and DB timestamp validation.
         self.mcp_tool_cache: Dict[str, List[Dict[str, Any]]] = {}
-
-        # PHASE 4: Vector search cache for tool suggestions
-        from agent_runner.vector_search_cache import VectorSearchCache
-        self.vector_search_cache = VectorSearchCache(
-            max_cache_size=200,  # Cache up to 200 different queries
-            ttl_seconds=300,     # 5 minute TTL
-            enable_metrics=True
-        )
-
         self.tool_menu_summary = ""
         self.tool_impls = self._init_tool_impls()
 
         # [CONTEXT-DIET] Store definitions by category for dynamic loading
-        # [CONTEXT-DIET] Store definitions by category for dynamic loading
         self.tool_categories = self._init_tool_categories()
-        
-        # [AUTODISCOVERY] Find and recover orphans (tools in Registry but not in Menu)
-        self._auto_discover_orphans()
-        
         # Flat list for legacy support / fallback
         self.tool_definitions = [t for cats in self.tool_categories.values() for t in cats]
-        
-        # [PHASE 3] Performance Optimization: Multi-layer caching
-        underlying_cache = MultiLayerCache(
-            max_size=10000,
-            default_ttl=300.0,  # 5 minutes for MCP tools
-            strategy=CacheStrategy.LRU
-        )
-        self.mcp_response_cache = MCPToolCache(underlying_cache)
-
-        # [VECTOR-SEARCH] Defer background indexing to async initialization
-        # (Cannot create async tasks during synchronous __init__)
-
-    async def async_initialize(self):
-        """Async initialization that requires running event loop."""
-        # [VECTOR-SEARCH] Trigger background indexing of tools
-        if hasattr(self.state, "vector_store"):
-            asyncio.create_task(self.state.vector_store.index_tools(self.tool_definitions))
-
-    def invalidate_mcp_cache(self, server_name: Optional[str] = None):
-        """
-        Invalidate MCP tool response cache.
-        
-        Args:
-            server_name: If provided, invalidate cache for specific server.
-                         If None, invalidate entire MCP cache.
-        """
-        if server_name:
-            # Invalidate specific server's cache
-            invalidated = self.mcp_response_cache.cache.invalidate(
-                namespace=self.mcp_response_cache.namespace,
-                key=None  # Will invalidate all keys in namespace
-            )
-            logger.info(f"Invalidated {invalidated} cache entries for MCP server: {server_name}")
-        else:
-            # Invalidate all MCP cache
-            self.mcp_response_cache.cache.clear()
-            logger.info("Cleared entire MCP response cache")
 
     def _init_tool_impls(self) -> Dict[str, Any]:
         return {
@@ -241,10 +189,6 @@ class ToolExecutor:
             "start_thinking_branch": thinking_tools.tool_start_thinking_branch,
             "get_thinking_progress": thinking_tools.tool_get_thinking_progress,
             "analyze_thinking_efficiency": thinking_tools.tool_analyze_thinking_efficiency,
-             "get_thinking_progress": thinking_tools.tool_get_thinking_progress,
-            "analyze_thinking_efficiency": thinking_tools.tool_analyze_thinking_efficiency,
-            # Graph Tools (Stub)
-            "get_graph_snapshot": self.tool_get_graph_snapshot,
         }
     
     def _init_tool_categories(self) -> Dict[str, List[Dict[str, Any]]]:
@@ -285,22 +229,6 @@ class ToolExecutor:
                                 "target_tz": {"type": "string"}
                             },
                              "required": ["time_str", "target_tz"]
-                        }
-                    }
-                }
-            ],
-            "graph": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_graph_snapshot",
-                        "description": "Get a snapshot of the knowledge graph (nodes/edges).",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "limit": {"type": "integer", "description": "Max nodes (default 100)"},
-                                "format": {"type": "string", "enum": ["json", "mermaid"], "default": "json"}
-                            }
                         }
                     }
                 }
@@ -771,42 +699,6 @@ class ToolExecutor:
                 summary_lines.append(f"- {name}: {desc}")
                 
         return "\n".join(summary_lines)
-        
-    def _auto_discover_orphans(self):
-        """
-        Identify tools present in `_init_tool_impls` but missing from `_init_tool_categories`.
-        Automatically register them in an 'auto_discovered' category to fail-safe against invisibility.
-        """
-        registered = set(self.tool_impls.keys())
-        categorized = set()
-        
-        for cat_tools in self.tool_categories.values():
-            for t in cat_tools:
-                categorized.add(t["function"]["name"])
-                
-        orphans = registered - categorized
-        
-        if not orphans:
-            return
-            
-        logger.warning(f"⚠️ [AUTODISCOVERY] Found {len(orphans)} orphaned tools! Auto-registering them to 'auto_discovered'.")
-        
-        auto_discovered = []
-        for name in orphans:
-            func = self.tool_impls[name]
-            doc = (func.__doc__ or "No description provided.").strip().split("\n")[0]
-            
-            auto_discovered.append({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": f"[AUTO] {doc}",
-                    "parameters": {"type": "object", "properties": {}} # Default to empty schema if unknown
-                }
-            })
-            logger.info(f"  + Adopted Orphan: {name}")
-            
-        self.tool_categories["auto_discovered"] = auto_discovered
 
     async def _disable_failed_server(self, server_name: str, reason: str):
         """Helper to disable a failing server and log the reason.
@@ -905,6 +797,9 @@ class ToolExecutor:
         if attempt == 1:
             # Check if command exists
             cmd = cfg.get("cmd", cfg.get("command"))
+            if isinstance(cmd, str) and " " in cmd:
+                import shlex
+                cmd = shlex.split(cmd)
             if cmd:
                 import shutil
                 first_cmd = cmd[0] if isinstance(cmd, list) else cmd
@@ -1149,19 +1044,77 @@ class ToolExecutor:
             logger.debug(f"Parallel router analysis failed: {e}")
             return None
 
+    async def get_capability_based_tools(self, query: str, quality_tier: Optional['QualityTier'] = None) -> Dict[str, Any]:
+        """
+        Get tools based on capability detection for a query.
+        Returns capability analysis and recommended tool categories/tools.
+        """
+        # Detect capabilities in the query
+        detected_capabilities = detect_query_capabilities(query)
+
+        if not detected_capabilities:
+            # Fallback to minimal tool set if no capabilities detected
+            return {
+                "capabilities": {},
+                "categories": ["core", "thinking"],
+                "priority_tools": [],
+                "confidence_breakdown": {},
+                "tool_selection": [],
+                "quality_tier": "fallback",
+                "conflicts_resolved": False
+            }
+
+        # Resolve capability conflicts to prevent resource competition
+        capabilities = resolve_capability_conflicts(detected_capabilities)
+
+        # Log conflict resolution if any changes were made
+        if capabilities != detected_capabilities:
+            resolved_count = len(capabilities)
+            original_count = len(detected_capabilities)
+            logger.info(f"⚖️ Resolved capability conflicts: {original_count} → {resolved_count} capabilities")
+
+        # Get quality tier configuration
+        max_tools = 50  # Default
+        quality_tier_name = "balanced"  # Default
+
+        if quality_tier:
+            from agent_runner.quality_tiers import get_tier_config
+            tier_config = get_tier_config(quality_tier)
+            max_tools = tier_config.get("max_tools", 50)
+            quality_tier_name = quality_tier.name.lower()
+
+        # Get tool recommendations with enhanced priority selection
+        tool_recommendations = get_tools_for_capabilities(
+            capabilities,
+            max_tools=max_tools,
+            quality_tier=quality_tier_name
+        )
+
+        # Add conflict resolution metadata
+        tool_recommendations["conflicts_resolved"] = capabilities != detected_capabilities
+        tool_recommendations["original_capabilities"] = detected_capabilities
+
+        return tool_recommendations
 
     async def get_all_tools(self, messages: Optional[List[Dict[str, Any]]] = None, precomputed_intent: Optional[Dict[str, Any]] = None, quality_tier: Optional['QualityTier'] = None, precomputed_router_analysis: Optional[Any] = None, capability_analysis: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Vector-driven tool selection: Use semantic search results to determine appropriate tool loading level.
-
-        CONVERSATIONAL (0 vector matches): Core tools only (time, location)
-        MINIMAL (1-3 vector matches): Core + exploration + matched tools
-        COMPLEX (4+ vector matches): Full toolset + matched tools
-
+        """Combine built-in tools with discovered MCP tools, filtering by Intent Menu via Context Diet.
+        
         Args:
             precomputed_intent: If provided, use this instead of classifying again (for parallelism)
         """
+        # [CONTEXT-DIET] Start with minimal core set
+        # Always include CORE (Time/Location), THINKING (Internal Monologue), and EXPLORATION (self-awareness tools)
         tools = []
+        tools.extend(self.tool_categories.get("core", []))
+        tools.extend(self.tool_categories.get("thinking", []))
+        tools.extend(self.tool_categories.get("memory", []))
+        # Always include exploration tools (get_component_map, get_active_configuration, get_llm_roles) so AI can answer questions about itself
+        tools.extend(self.tool_categories.get("exploration", []))
+        # Always include admin tools for system introspection and configuration
+        tools.extend(self.tool_categories.get("admin", []))
+                
         target_servers = set()
+        capability_analysis = None
 
         if precomputed_intent:
             # [OPTIMIZATION] Use precomputed intent result (from parallel execution)
@@ -1171,66 +1124,55 @@ class ToolExecutor:
             if last_user_msg:
                 query_text = str(last_user_msg.get("content", ""))
 
-                # [VECTOR-ONLY] Capability analysis removed - using vector-driven decisions only
+                # [CAPABILITY ENHANCEMENT] Use precomputed capability analysis if available
+                if not capability_analysis:
+                    capability_analysis = await self.get_capability_based_tools(query_text, quality_tier)
 
-                # [VECTOR-DRIVEN CLASSIFICATION] Use semantic search to determine query complexity and tool needs
-                # This replaces the slow LLM Maître d' with fast vector-based decisions
-                vector_tools = []
+                # Use capability-based categories as additional target servers
+                capability_categories = set(capability_analysis.get("categories", []))
+                target_servers.update(capability_categories)
+
+                # [VECTOR-SELECTION] Primary Discovery Mechanism
+                # Query the Vector Store (SurrealDB) for tools matching the user query.
+                # This bypasses the Maître d' (7B Model) entirely, preventing the Context Swap.
                 if hasattr(self.state, "vector_store"):
                     try:
-                        # Vector Search with caching (Semantic) - FAST: ~50ms
-                        async def perform_vector_search(query, limit=8):
-                            return await self.state.vector_store.search_tools(query, limit=limit)
-
-                        vector_tools = await self.vector_search_cache.get_or_search(
-                            query_text, perform_vector_search, limit=8
-                        )
-
+                        # Vector Search (Semantic)
+                        vector_tools = await self.state.vector_store.search_tools(query_text, limit=8)
+                        
+                        if vector_tools:
+                            # Verify if any tools were returned
+                            vector_tool_names = [t.get("name") for t in vector_tools]
+                            logger.info(f"⚡️ VECTOR MATCH: Found {len(vector_tools)} tools: {vector_tool_names}")
+                            
+                            # Add matched tools to the selection list
+                            # The vector store returns 'tool_definition' objects which match our internal format
+                            # We must fetch the FULL definition from our categories because the DB might only have metadata
+                            # Optimization: Use the names to filter from self.tool_definitions
+                            
+                            for vt in vector_tools:
+                                v_name = vt.get("name")
+                                # Find the full implementation
+                                full_tool = next((t for t in self.tool_definitions if t.get("function", {}).get("name") == v_name), None)
+                                if full_tool:
+                                    tools.append(full_tool)
+                                    target_servers.add(f"vector_match:{v_name}") # Tag for debugging
+                                    
                     except Exception as ve:
-                        logger.error(f"Vector classification failed: {ve}")
-                        vector_tools = []
+                        logger.error(f"Vector selection failed: {ve}")
 
-                # [VECTOR-BASED DECISIONS] Determine tool loading level based on semantic matches
-                num_vector_tools = len(vector_tools) if vector_tools else 0
+                # [LEGACY] Maître d' Intent Classification - DISABLED
+                # from agent_runner.intent import classify_search_intent
+                # intent_res = await classify_search_intent(query_text, self.state, self.tool_menu_summary)
+                # target_servers.update(set(intent_res.get("target_servers", [])))
 
-                if num_vector_tools == 0:
-                    # CONVERSATIONAL MODE: No relevant tools found - NO tools needed
-                    logger.info("🎯 CONVERSATIONAL MODE: No tools needed for this query")
-                    # Don't load any tools for pure conversational queries
-                    pass
+        
+        # [MOVED] Deduplication logic has been moved to the end of the pipeline
+        # to ensure it captures all tools added by legacy and MCP blocks.
+        pass
 
-                elif num_vector_tools <= 3:
-                    # MINIMAL MODE: Few tools needed - core + exploration + vector matches
-                    logger.info(f"🎯 MINIMAL MODE: Loading core + exploration + {num_vector_tools} specific tools")
-                    tools.extend(self.tool_categories.get("core", []))
-                    tools.extend(self.tool_categories.get("exploration", []))  # Self-awareness
-
-                    # Add vector-matched tools
-                    for vt in vector_tools:
-                        v_name = vt.get("name")
-                        full_tool = next((t for t in self.tool_definitions if t.get("function", {}).get("name") == v_name), None)
-                        if full_tool:
-                            tools.append(full_tool)
-
-                else:
-                    # COMPLEX MODE: Many tools needed - load full base set + vector matches
-                    logger.info(f"🎯 COMPLEX MODE: Loading full toolset ({num_vector_tools} matches found)")
-                    tools.extend(self.tool_categories.get("core", []))
-                    tools.extend(self.tool_categories.get("thinking", []))
-                    tools.extend(self.tool_categories.get("memory", []))
-                    tools.extend(self.tool_categories.get("exploration", []))
-                    tools.extend(self.tool_categories.get("admin", []))
-
-                    # Add vector-matched tools
-                    for vt in vector_tools:
-                        v_name = vt.get("name")
-                        full_tool = next((t for t in self.tool_definitions if t.get("function", {}).get("name") == v_name), None)
-                        if full_tool:
-                            tools.append(full_tool)
-
-        # [VECTOR-DRIVEN COMPLETE] All tool loading decisions now based on vector search results above
-
-        # [FEATURE: SYSTEM AWARENESS] Inject Context Tags for MCP tools
+        
+        # [FEATURE: SYSTEM AWARENESS] Inject Context Tags
         # We classify tools by origin (Local vs Remote) to help Agent reasoning.
         def _tag_tools(tool_list: List[Dict[str, Any]], tag: str) -> List[Dict[str, Any]]:
             tagged = []
@@ -1246,67 +1188,78 @@ class ToolExecutor:
                         new_t["function"]["description"] = f"{tag} {desc}"
                 tagged.append(new_t)
             return tagged
+
+        # Legacy Maître d' based loading (fallback/compatibility)
+        if "filesystem" in target_servers:
+            tools.extend(_tag_tools(self.tool_categories.get("filesystem", []), "[LOCAL SYSTEM]"))
+            tools.extend(_tag_tools(self.tool_categories.get("cleanup", []), "[LOCAL SYSTEM]"))
+
+        if "system" in target_servers or "admin" in target_servers:
+             tools.extend(_tag_tools(self.tool_categories.get("system", []), "[LOCAL SYSTEM]"))
+             tools.extend(_tag_tools(self.tool_categories.get("admin", []), "[LOCAL SYSTEM]"))
+             
+             # Also add Graph tools if system/admin is requested, or if "graph" is explicit
+             if "graph" in target_servers or "system" in target_servers:
+                 tools.extend(_tag_tools(self.tool_categories.get("graph", []), "[VISUALIZATION]"))
+
+        if "memory" in target_servers or "project-memory" in target_servers:
+             # Memory is internal but safe, maybe [MEMORY] tag? For now leave generic or [INTERNAL]
+             tools.extend(_tag_tools(self.tool_categories.get("memory", []), "[INTERNAL MEMORY]"))
                 
-        # [VECTOR-DRIVEN MCP LOADING] Only load MCP tools if not in conversational mode
-        if num_vector_tools == 0:
-            # CONVERSATIONAL MODE: Skip MCP tools entirely for minimal tool count
-            logger.info("🎯 CONVERSATIONAL MODE: Skipping MCP tool loading for faster response")
-        else:
-            # NON-CONVERSATIONAL: Load appropriate MCP tools
-            for server_name, server_tools in self.mcp_tool_cache.items():
-                server_cfg = self.state.mcp_servers.get(server_name, {})
+        for server_name, server_tools in self.mcp_tool_cache.items():
+            server_cfg = self.state.mcp_servers.get(server_name, {})
+            
+            # [FIX] Filter out disabled servers - don't expose their tools to LLM
+            if not server_cfg.get("enabled", True):
+                continue  # Skip disabled servers
+            
+            if server_cfg.get("requires_internet") and not self.state.internet_available:
+                continue
 
-                # [FIX] Filter out disabled servers - don't expose their tools to LLM
-                if not server_cfg.get("enabled", True):
-                    continue  # Skip disabled servers
-
-                if server_cfg.get("requires_internet") and not self.state.internet_available:
-                    continue
-
-                from agent_runner.constants import CORE_MCP_SERVERS
-                is_core = server_name in CORE_MCP_SERVERS
-
-                # [OPTIMIZATION] Avoid loading 'filesystem' MCP if we already have native tools
-                # This reduces prompt size by ~2k tokens
-                if server_name == "filesystem" or server_name == "filesystem-mcp":
-                    is_core = False # Manual override to prevent auto-loading
-
-                    if is_core or (server_name in target_servers):
-                        # MCP Tools are harder to classify. Core ones like 'fetch' are REMOTE.
-                        # Project-specific ones might be Local.
-                        # For now, we default to [MCP] to distinguish them.
-                        # If specific server is known, we could tag better.
-                        tag = "[MCP]"
-                        if server_name in ["fetch", "tavily-search", "github"]:
-                            tag = "[REMOTE]"
-                        elif server_name in ["postgres", "filesystem-mcp"]: # hypothetical
-                            tag = "[LOCAL SYSTEM]"
-
-                        # [OPTIMIZATION] Filter 'project-memory' tools to reduce context bloat (Latency Fix)
-                        # Only expose Core User tools. Hide admin/maintenance tools unless requested.
-                        if server_name == "project-memory":
-                            allowed_memory_tools = {
-                                "store_fact", "delete_fact", "query_facts", "semantic_search",
-                                "record_tool_result", "index_tools", "store_source", "list_sources",
-                                "store_advice", "consult_advice"
-                            }
-                            # Filter tools before wrapping
-                            server_tools = [t for t in server_tools if t.get("function", {}).get("name") in allowed_memory_tools]
-
-                        # Wrap and Tag
-                        tagged_mcp = _tag_tools(server_tools, tag)
-
-                        for t in tagged_mcp:
-                            orig_func = t.get("function", {})
-                            wrapped = {
-                                "type": "function",
-                                "function": {
-                                    "name": f"mcp__{server_name}__{orig_func.get('name')}",
-                                    "description": orig_func.get("description"), # Already tagged by helper
-                                    "parameters": orig_func.get("parameters")
-                                }
-                            }
-                            tools.append(wrapped)
+            from agent_runner.constants import CORE_MCP_SERVERS
+            is_core = server_name in CORE_MCP_SERVERS
+            
+            # [OPTIMIZATION] Avoid loading 'filesystem' MCP if we already have native tools
+            # This reduces prompt size by ~2k tokens
+            if server_name == "filesystem" or server_name == "filesystem-mcp":
+                is_core = False # Manual override to prevent auto-loading
+                
+            if is_core or (server_name in target_servers):
+                # MCP Tools are harder to classify. Core ones like 'fetch' are REMOTE.
+                # Project-specific ones might be Local.
+                # For now, we default to [MCP] to distinguish them.
+                # If specific server is known, we could tag better.
+                tag = "[MCP]"
+                if server_name in ["fetch", "tavily-search", "github"]:
+                    tag = "[REMOTE]"
+                elif server_name in ["postgres", "filesystem-mcp"]: # hypothetical
+                    tag = "[LOCAL SYSTEM]"
+                
+                # [OPTIMIZATION] Filter 'project-memory' tools to reduce context bloat (Latency Fix)
+                # Only expose Core User tools. Hide admin/maintenance tools unless requested.
+                if server_name == "project-memory":
+                    allowed_memory_tools = {
+                        "store_fact", "delete_fact", "query_facts", "semantic_search",
+                        "record_tool_result", "index_tools", "store_source", "list_sources",
+                        "store_advice", "consult_advice"
+                    }
+                    # Filter tools before wrapping
+                    server_tools = [t for t in server_tools if t.get("function", {}).get("name") in allowed_memory_tools]
+                
+                # Wrap and Tag
+                tagged_mcp = _tag_tools(server_tools, tag)
+                
+                for t in tagged_mcp:
+                    orig_func = t.get("function", {})
+                    wrapped = {
+                        "type": "function",
+                        "function": {
+                            "name": f"mcp__{server_name}__{orig_func.get('name')}",
+                            "description": orig_func.get("description"), # Already tagged by helper
+                            "parameters": orig_func.get("parameters")
+                        }
+                    }
+                    tools.append(wrapped)
 
         
         # [FIX] FINAL DEDUPLICATION (Massive Latency Fix)
@@ -1542,21 +1495,8 @@ class ToolExecutor:
                         metadata={"server": server, "tool": tool, "arguments": args},
                         request_id=request_id
                     )
-                    
-                    # [PHASE 3] Use cache for deterministic tools
-                    tool_full_name = f"{server}_{tool}"
-                    
-                    async def execute_mcp_tool():
-                        from agent_runner.tools.mcp import tool_mcp_proxy
-                        return await tool_mcp_proxy(self.state, server, tool, args)
-                    
-                    result = await self.mcp_response_cache.get_or_execute(
-                        tool_name=tool_full_name,
-                        arguments=args,
-                        executor_func=execute_mcp_tool,
-                        ttl=300.0  # 5 minutes
-                    )
-                    
+                    from agent_runner.tools.mcp import tool_mcp_proxy
+                    result = await tool_mcp_proxy(self.state, server, tool, args)
                     track_event(
                         event="mcp_proxy_ok",
                         message=f"MCP tool success: {server}::{tool}",
@@ -1581,7 +1521,6 @@ class ToolExecutor:
                         logger.debug(f"Failed to record maître d' learning: {e}")
 
                     return result
-
                 except Exception as e:
                     import traceback
                     logger.error(f"MCP PROXY CRASH: {traceback.format_exc()}")
@@ -1999,14 +1938,3 @@ class ToolExecutor:
 
         # Default: return top tools
         return tools[:15]
-
-    async def tool_get_graph_snapshot(self, limit: int = 100, format: str = "json") -> Dict[str, Any]:
-        """Tool wrapper for GraphService.get_graph_snapshot."""
-        if not hasattr(self.state, "graph"):
-            return {"error": "GraphService not initialized"}
-            
-        if format == "mermaid":
-            diagram = await self.state.graph.render_mermaid()
-            return {"diagram": diagram}
-            
-        return await self.state.graph.get_graph_snapshot(limit=limit)

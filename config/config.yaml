@@ -160,9 +160,9 @@ system:
   log_level: INFO
   persistence_dir: ~/ai/agent_data
   keep_alive: -1
-  agent_model: ollama:llama3.3:70b
+  agent_model: ollama:qwen2.5:7b-instruct
   router_model: ollama:qwen2.5:7b-instruct
-  vision_model: ollama:llama3.2-vision:latest
+  vision_model: Qwen/Qwen2.5-VL-72B-Instruct-AWQ
   task_model: ollama:qwen2.5:7b-instruct
   summarization_model: ollama:qwen2.5:7b-instruct
   mcp_model: ollama:qwen2.5:7b-instruct
@@ -170,7 +170,7 @@ system:
   critic_model: ollama:qwen2.5:7b-instruct
   healer_model: ollama:qwen2.5:7b-instruct
   fallback_model: ollama:qwen2.5:7b-instruct
-  intent_model: ollama:llama3.3:70b
+  intent_model: ollama:qwen2.5:7b-instruct
   pruner_model: ollama:qwen2.5:7b-instruct
   embedding_model: ollama:mxbai-embed-large:latest
   query_refinement_model: ollama:qwen2.5:7b-instruct

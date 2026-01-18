@@ -2,6 +2,7 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
 from fastapi import HTTPException
+from common.message_utils import extract_text_content
 
 def parse_default_headers(env_str: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
@@ -37,8 +38,13 @@ def sanitize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for m in messages:
         mm = dict(m)
-        if "content" in mm and mm["content"] is None:
-            mm["content"] = ""
+        if "content" in mm:
+            raw_content = mm.get("content")
+            if raw_content is None:
+                mm["content"] = ""
+            else:
+                # Normalize multimodal/list content to plain text to protect downstream `.strip()` calls
+                mm["content"] = extract_text_content(raw_content)
         out.append(mm)
     return out
 

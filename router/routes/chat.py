@@ -112,6 +112,9 @@ async def chat_completions(request: Request):
             }, status_code=400)
 
         model = body.get("model", "")
+        if isinstance(model, list):
+            # Some clients might send an array; take first non-empty string
+            model = next((str(m) for m in model if m), "")
         # Human-friendly alias support
         if model == "Questionable Insight":
             # Use agent:mcp for full agent processing

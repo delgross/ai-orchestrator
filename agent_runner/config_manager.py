@@ -3,6 +3,7 @@ import json
 import yaml
 import logging
 import asyncio
+import shlex
 from typing import Any, Optional, Dict
 from pathlib import Path
 
@@ -460,22 +461,42 @@ class ConfigManager:
         Update a single MCP server in Sovereign Memory and Disk.
         """
         # 1. Update DB (Sovereign)
-        # Prepare record
-        cmd = config.get("command") or config.get("cmd", [])
-        if isinstance(cmd, list) and len(cmd) > 0:
-             command = cmd[0]
-             args = cmd[1:]
-        elif isinstance(cmd, str):
-             command = cmd
-             args = config.get("args", [])
+        # Prepare record with robust normalization (handle space-delimited command strings)
+        cmd = config.get("cmd")
+        command_field = config.get("command")
+        args_field = config.get("args", [])
+
+        # If only command is provided and it contains spaces, split it into executable + args
+        if not cmd and isinstance(command_field, str) and " " in command_field:
+            cmd = shlex.split(command_field)
+
+        # If cmd is a string, split it for consistency
+        if isinstance(cmd, str):
+            cmd = shlex.split(cmd)
+
+        # If cmd is absent but we have command + args, assemble cmd
+        if not cmd and command_field:
+            cmd = [command_field]
+            if args_field:
+                cmd.extend(args_field)
+
+        # Derive command/args for persistence
+        if isinstance(cmd, list) and cmd:
+            # Preserve full command string in DB to survive args loss
+            command = " ".join(cmd)
+            args = cmd[1:]
+        elif command_field:
+            command = command_field
+            args = args_field if isinstance(args_field, list) else []
         else:
-             command = ""
-             args = []
+            command = ""
+            args = []
 
         record = {
             "name": name,
             "command": command,
             "args": args,
+            "cmd": cmd,
             "env": config.get("env", {}),
             "enabled": config.get("enabled", True),
             "type": config.get("type", "stdio")

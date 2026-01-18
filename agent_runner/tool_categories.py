@@ -523,36 +523,6 @@ def detect_query_capabilities(query: str) -> Dict[str, float]:
     query_lower = query.lower()
     detected_capabilities = {}
 
-    # [CRITICAL FIX] Conversational Query Detection - prevents loading 57 tools for "Hi"
-    conversational_patterns = [
-        # Greetings
-        r"^(hi|hello|hey|good\s+(morning|afternoon|evening))$",
-        r"^(what'?s\s+up|how\s+are\s+you|how\s+do\s+you\s+do)$",
-        r"^(nice\s+to\s+meet\s+you|pleased\s+to\s+meet\s+you)$",
-
-        # Acknowledgments
-        r"^(thanks?|thank\s+you|thanks\s+a\s+lot|thank\s+you\s+very\s+much)$",
-        r"^(ok|okay|got\s+it|understood|i\s+see|that\s+makes\s+sense)$",
-        r"^(yes|no|sure|of\s+course|absolutely|definitely)$",
-
-        # Simple social responses
-        r"^(good|great|fine|well|not\s+bad|pretty\s+good)$",
-        r"^(bye|goodbye|see\s+you|take\s+care|have\s+a\s+good\s+(day|night))$",
-
-        # Status inquiries (minimal info needed)
-        r"^(how\s+is\s+it\s+going|what\s+are\s+you\s+up\s+to)$",
-        r"^(what'?s\s+new|what'?s\s+happening)$",
-    ]
-
-    for pattern in conversational_patterns:
-        if re.search(pattern, query_lower, re.IGNORECASE):
-            return {"conversational": 1.0}  # High confidence for exact matches
-
-    # Fallback: Check for very short queries that are likely conversational
-    if len(query.strip()) < 20 and not any(char in query_lower for char in ['?', 'run', 'create', 'analyze', 'search', 'find']):
-        # Very short queries without action words are likely conversational
-        return {"conversational": 0.8}
-
     # Enhanced keyword matching with word boundaries and partial matches
     for capability_name, capability_data in CAPABILITY_TAXONOMY.items():
         confidence = 0.0

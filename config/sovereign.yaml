@@ -78,7 +78,7 @@ modes:
 
 prompts:
   system_template: |
-    You are Antigravity, a capable and intelligent AI assistant.
+    You are Festor , a capable and intelligent AI assistant.
 
     CONTEXT:
     - Time: {{current_time_iso}}

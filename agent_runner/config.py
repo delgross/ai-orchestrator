@@ -1,5 +1,6 @@
 import json
 import logging
+import shlex
 import yaml
 from pathlib import Path
 from typing import Any, Dict
@@ -20,10 +21,13 @@ def _normalize_cmd(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _is_memory_available(state: "AgentState") -> bool:
-    """Check if memory server is available and initialized."""
-    return (hasattr(state, "memory") and
-            state.memory is not None and
-            getattr(state.memory, 'initialized', False))
+    """Check if memory client exists; allow lazy init during queries.
+
+    Requiring `memory.initialized` blocked DB-backed MCP configs at boot. If the
+    memory client is present, treat it as available so the query path can
+    initialize the connection on demand.
+    """
+    return hasattr(state, "memory") and state.memory is not None
 
 
 async def _load_env_vars_from_db(state: "AgentState") -> Dict[str, str]:
@@ -145,7 +149,10 @@ async def load_mcp_servers(state: AgentState) -> None:
                 loaded_servers = {}
                 for srv in db_servers:
                     name = srv["name"]
-                    cmd = [srv.get("command", "")]
+                    cmd = srv.get("cmd") or [srv.get("command", "")]
+                    # If command was stored as a single space-delimited string with args, split it
+                    if len(cmd) == 1 and isinstance(cmd[0], str) and " " in cmd[0]:
+                        cmd = shlex.split(cmd[0])
                     if srv.get("args"):
                         # Expand environment variables in args
                         expanded_args = []
@@ -221,6 +228,8 @@ async def load_mcp_servers(state: AgentState) -> None:
                     
                     cfg = {
                         "cmd": cmd,
+                        "command": cmd[0] if cmd else "",
+                        "args": cmd[1:] if cmd else [],
                         "env": expanded_env,
                         "enabled": final_enabled,
                         "type": srv.get("type", "stdio")

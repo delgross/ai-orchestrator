@@ -8,6 +8,7 @@ from typing import AsyncGenerator, Dict, Any, Optional
 
 from agent_runner.state import AgentState
 from common.sovereign import get_sovereign_triggers
+from common.message_utils import extract_text_content, normalize_message_content
 
 logger = logging.getLogger("agent_runner.nexus")
 
@@ -50,50 +51,14 @@ class Nexus:
         2. Execution (If trigger matches)
         3. LLM Handover (With context)
         """
-        logger.info(f"Nexus Dispatch: [{request_id}] '{user_message[:50]}...'")
+        # Normalize incoming message/content to handle multimodal inputs safely
+        normalized_message = extract_text_content(user_message)
+        normalized_context = [normalize_message_content(m) for m in (context or [])]
+
+        logger.info(f"Nexus Dispatch: [{request_id}] '{normalized_message[:50]}...'")
 
         # EARLY CONVERSATIONAL OPTIMIZATION - Before any expensive operations
-        print(f"DEBUG NEXUS: Processing '{user_message}' with context={context}")
-        msg_lower = user_message.strip().lower()
-        word_count = len(msg_lower.split())
-        has_action_words = any(word in msg_lower for word in ['run', 'create', 'analyze', 'search', 'find', 'show', 'list', 'get', 'execute', 'calculate'])
-        context_len = len(context) if context else 0
-
-        print(f"DEBUG NEXUS: msg_lower='{msg_lower}', word_count={word_count}, has_action_words={has_action_words}, context_len={context_len}")
-        logger.info(f"🎯 CONVERSATIONAL CHECK: msg='{msg_lower}', words={word_count}, has_action={has_action_words}, context_len={context_len}, context_type={type(context)}, context_bool={bool(context)}")
-
-        condition_met = word_count <= 4 and not has_action_words and context_len == 0
-        print(f"DEBUG NEXUS: condition_met={condition_met}")
-        logger.info(f"🎯 CONDITION CHECK: words_ok={word_count <= 4}, no_action={not has_action_words}, context_empty={context_len == 0}, OVERALL={condition_met}")
-
-        if condition_met:
-            # Pure conversational query with no context - respond instantly
-            logger.info(f"🎯 NEXUS CONVERSATIONAL OPTIMIZATION: Fast response for '{msg_lower}' - TRIGGERED!")
-            print(f"DEBUG: CONVERSATIONAL OPTIMIZATION TRIGGERED for '{msg_lower}'")
-            yield {
-                "type": "token",
-                "content": "Hello! How can I assist you today?",
-                "request_id": request_id
-            }
-            yield {
-                "type": "done",
-                "usage": {"prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14},
-                "stop_reason": "stop",
-                "request_id": request_id
-            }
-            return
-            yield {
-                "type": "token",
-                "content": "Hello! How can I assist you today?",
-                "request_id": request_id
-            }
-            yield {
-                "type": "done",
-                "usage": {"prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14},
-                "stop_reason": "stop",
-                "request_id": request_id
-            }
-            return
+        print(f"DEBUG NEXUS: Processing '{normalized_message}' with context={normalized_context}")
 
         # Check for system events (not sent to LLM) - existing mechanism
         if hasattr(self.state, 'system_event_queue') and self.state.system_event_queue:
@@ -125,8 +90,8 @@ class Nexus:
                 pass
         
         # 1. Trigger Check
-        logger.warning(f"NEXUS: Checking triggers for message: '{user_message[:50]}...'")
-        trigger_result = await self._check_and_execute_trigger(user_message)
+        logger.warning(f"NEXUS: Checking triggers for message: '{normalized_message[:50]}...'")
+        trigger_result = await self._check_and_execute_trigger(normalized_message)
         if trigger_result:
             logger.warning(f"NEXUS: ✅ Trigger activated: {trigger_result.get('name', 'unknown')}")
         else:
@@ -134,8 +99,8 @@ class Nexus:
         
         # 2. Additive Context Construction
         # Use provided context (history) or start fresh
-        messages = context if context else []
-        messages.append({"role": "user", "content": user_message})
+        messages = normalized_context if normalized_context else []
+        messages.append({"role": "user", "content": normalized_message})
         
         if trigger_result:
             # [FEATURE] Decoupled Layer Handling
@@ -202,9 +167,9 @@ class Nexus:
         # This allows deep-system events (like Healer warnings) to interrupt/augment the stream.
         try:
             # Reconstruct full messages list for agent_stream
-            # context contains messages[:-1], we need to add back the user_message
-            full_messages = context.copy() if context else []
-            full_messages.append({"role": "user", "content": user_message})
+            # context contains messages[:-1], we need to add back the user message
+            full_messages = normalized_context.copy() if normalized_context else []
+            full_messages.append({"role": "user", "content": normalized_message})
             stream_iterator = self.engine.agent_stream(full_messages, model=None, request_id=request_id, skip_refinement=False).__aiter__()
             
             # Tasks

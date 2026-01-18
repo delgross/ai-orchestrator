@@ -1,449 +1,454 @@
 {
+  "341f19aa7d707f15202c3f28f4f79de8": {
+    "timestamp": 1768607768.1142662,
+    "result": {
+      "target_servers": [],
+      "complexity": "high",
+      "auto_execute": null
+    },
+    "query_hash": "341f19aa7d707f15202c3f28f4f79de8"
+  },
   "cb3ba0698999f09fc1436238d81ff1be": {
-    "timestamp": 1768516268.903282,
+    "timestamp": 1768614663.441665,
     "result": {
       "target_servers": [],
       "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
+      "auto Execute": null
     },
     "query_hash": "cb3ba0698999f09fc1436238d81ff1be"
   },
-  "f97bc5f3fc7d8b5122a146bff70b4059": {
-    "timestamp": 1768516268.9033291,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "f97bc5f3fc7d8b5122a146bff70b4059"
-  },
-  "578e777f7cb22b1e7d19f645077ef12d": {
-    "timestamp": 1768516268.9035058,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "578e777f7cb22b1e7d19f645077ef12d"
-  },
-  "6413dae2ff101c8db60510fd5d18b102": {
-    "timestamp": 1768516268.903573,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "6413dae2ff101c8db60510fd5d18b102"
-  },
-  "53cd03617fc42d06c735d50be0724854": {
-    "timestamp": 1768516268.9036381,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "53cd03617fc42d06c735d50be0724854"
-  },
-  "fa2070ef838441c1df1d04c92851d4ff": {
-    "timestamp": 1768516268.9036689,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "fa2070ef838441c1df1d04c92851d4ff"
-  },
-  "71750a2c8e00c742841d3e6399b8ba98": {
-    "timestamp": 1768516268.903699,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "71750a2c8e00c742841d3e6399b8ba98"
-  },
-  "2f78e82975212722e7b422043b15149e": {
-    "timestamp": 1768516268.903729,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "2f78e82975212722e7b422043b15149e"
-  },
-  "3cbaeccbb425d1610c33c1d5851528b9": {
-    "timestamp": 1768516268.903759,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "3cbaeccbb425d1610c33c1d5851528b9"
-  },
-  "a3757a5e0e40c9803d9068884b93fbb9": {
-    "timestamp": 1768516268.903789,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "a3757a5e0e40c9803d9068884b93fbb9"
-  },
   "b4b1c4a987f9bca1df00b97969cbe9ae": {
-    "timestamp": 1768516268.903819,
+    "timestamp": 1768614759.7025971,
     "result": {
       "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
+      "complexity": "high",
+      "auto_execute": null
     },
     "query_hash": "b4b1c4a987f9bca1df00b97969cbe9ae"
   },
-  "49de7b430588a601ac36e64fa8615c22": {
-    "timestamp": 1768516268.90385,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "49de7b430588a601ac36e64fa8615c22"
-  },
-  "fde8606860ae24a8284d0a34e879c3df": {
-    "timestamp": 1768516268.903881,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "fde8606860ae24a8284d0a34e879c3df"
-  },
-  "ae5e8a6ec9c2b5f9b8a6e3765770990d": {
-    "timestamp": 1768516268.9039109,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "ae5e8a6ec9c2b5f9b8a6e3765770990d"
-  },
-  "56432199ad0570c15fc04f935d9156e5": {
-    "timestamp": 1768516268.904428,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "56432199ad0570c15fc04f935d9156e5"
-  },
-  "815a0f8818e23d8dac308f5873c65333": {
-    "timestamp": 1768516268.904463,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "815a0f8818e23d8dac308f5873c65333"
-  },
-  "764a0895cce5bd1b9b65551966dd32da": {
-    "timestamp": 1768516268.9044962,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "764a0895cce5bd1b9b65551966dd32da"
-  },
-  "0ae03c10f2ae0d7588a8201ac19603b8": {
-    "timestamp": 1768516268.904526,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "0ae03c10f2ae0d7588a8201ac19603b8"
-  },
-  "7a069d2896419a195493840967d8b2d7": {
-    "timestamp": 1768516268.904557,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "7a069d2896419a195493840967d8b2d7"
-  },
-  "f7137e447432020d4077cc78a7359a69": {
-    "timestamp": 1768516268.904587,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "f7137e447432020d4077cc78a7359a69"
-  },
-  "78b082ececd8f59ce5742d564f9574d1": {
-    "timestamp": 1768516268.904617,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "78b082ececd8f59ce5742d564f9574d1"
-  },
-  "6eeda186d4219c7d305fae7d23d8f457": {
-    "timestamp": 1768516268.904646,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "6eeda186d4219c7d305fae7d23d8f457"
-  },
-  "0feed8e9fb5cb7c33cf553e264e04161": {
-    "timestamp": 1768516268.9046772,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "0feed8e9fb5cb7c33cf553e264e04161"
-  },
-  "be8e2aa14db09726d42a68e28fdd8147": {
-    "timestamp": 1768516268.904707,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "be8e2aa14db09726d42a68e28fdd8147"
-  },
-  "933d1dd9e61b1fb1be101eabe7214e7a": {
-    "timestamp": 1768516494.498233,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "933d1dd9e61b1fb1be101eabe7214e7a"
-  },
-  "8df7943aad40c87bbcbe3ca364745ef2": {
-    "timestamp": 1768516494.498252,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "8df7943aad40c87bbcbe3ca364745ef2"
-  },
-  "24434e8ccf6ec6fc954d59ce248e2677": {
-    "timestamp": 1768516494.49827,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "24434e8ccf6ec6fc954d59ce248e2677"
-  },
-  "8810ef5445607088953d0c84316bd4c3": {
-    "timestamp": 1768516494.4982872,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "8810ef5445607088953d0c84316bd4c3"
-  },
-  "bf43481e0f18e5542895b7e11c9c81ef": {
-    "timestamp": 1768516494.498305,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "bf43481e0f18e5542895b7e11c9c81ef"
-  },
-  "ca486303dc091553e1de078662325aeb": {
-    "timestamp": 1768516494.4983208,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "ca486303dc091553e1de078662325aeb"
-  },
-  "3d7215dab363610d7ffc2121a126cab7": {
-    "timestamp": 1768516494.498338,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "3d7215dab363610d7ffc2121a126cab7"
-  },
-  "009c5d95717b80151dd31d8f676e777c": {
-    "timestamp": 1768516494.498354,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "009c5d95717b80151dd31d8f676e777c"
-  },
-  "beff679705150a23bbd43bcb071b1595": {
-    "timestamp": 1768516494.4983711,
-    "result": {
-      "target_servers": [],
-      "complexity": "low",
-      "auto_execute": null,
-      "precomputed": true
-    },
-    "query_hash": "beff679705150a23bbd43bcb071b1595"
-  },
-  "cd401f329f7e2ece3d12de556b156666": {
-    "timestamp": 1768516548.4991732,
+  "11ad7a1e42fa3cdfd4b955d1937569cc": {
+    "timestamp": 1768614760.815422,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "cd401f329f7e2ece3d12de556b156666"
+    "query_hash": "11ad7a1e42fa3cdfd4b955d1937569cc"
   },
-  "f8e107e772f40bb1675231fa58848e53": {
-    "timestamp": 1768526899.402085,
+  "f97bc5f3fc7d8b5122a146bff70b4059": {
+    "timestamp": 1768614993.566483,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "f8e107e772f40bb1675231fa58848e53"
+    "query_hash": "f97bc5f3fc7d8b5122a146bff70b4059"
   },
-  "058b4a05a55afaec3643e4762adf1924": {
-    "timestamp": 1768531920.5898461,
+  "3387e8ac1d57256d631131392443db76": {
+    "timestamp": 1768614993.8446531,
     "result": {
       "target_servers": [],
       "complexity": "medium",
       "auto_execute": null
     },
+    "query_hash": "3387e8ac1d57256d631131392443db76"
+  },
+  "bb52fcd386954c2e6b30eb411ed666bc": {
+    "timestamp": 1768615037.01953,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "bb52fcd386954c2e6b30eb411ed666bc"
+  },
+  "058b4a05a55afaec3643e4762adf1924": {
+    "timestamp": 1768618505.564696,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
     "query_hash": "058b4a05a55afaec3643e4762adf1924"
   },
-  "b3465e143421a1cdab97da0b0cf7f0b2": {
-    "timestamp": 1768532777.1816041,
+  "94275cd111f048e9b8107910d4e49b1f": {
+    "timestamp": 1768618518.4797251,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "b3465e143421a1cdab97da0b0cf7f0b2"
+    "query_hash": "94275cd111f048e9b8107910d4e49b1f"
   },
-  "ebb856d4e755ddc50f0a8c9490e0c5e4": {
-    "timestamp": 1768534048.8561752,
-    "result": {
-      "name": "Conversation"
-    },
-    "query_hash": "ebb856d4e755ddc50f0a8c9490e0c5e4"
-  },
-  "737a716677a8f6d7e4229c4b4d7da2a9": {
-    "timestamp": 1768535108.3396978,
+  "fe27b601887264b6a260d8d64f8f0970": {
+    "timestamp": 1768619513.800364,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "737a716677a8f6d7e4229c4b4d7da2a9"
+    "query_hash": "fe27b601887264b6a260d8d64f8f0970"
   },
-  "19b62bfb92bb9d10e57717002614c2dc": {
-    "timestamp": 1768535590.359376,
+  "ae46d3f2a4bd71213ba022377b64920d": {
+    "timestamp": 1768619513.912384,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "ae46d3f2a4bd71213ba022377b64920d"
+  },
+  "01c732cba7f3c429ca33fbe71052f211": {
+    "timestamp": 1768625680.601761,
     "result": {
       "target_servers": [
-        "geonames-api"
+        "tavily-search"
       ],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "19b62bfb92bb9d10e57717002614c2dc"
+    "query_hash": "01c732cba7f3c429ca33fbe71052f211"
   },
-  "e44ee9601107485728873c3c1c86b523": {
-    "timestamp": 1768536144.676886,
+  "26f201c8cda43f9a1b6d280a37abbf27": {
+    "timestamp": 1768625680.701986,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "e44ee9601107485728873c3c1c86b523"
+    "query_hash": "26f201c8cda43f9a1b6d280a37abbf27"
   },
-  "9b5a71b4f2d6eacddfebc64ed4f9fcc3": {
-    "timestamp": 1768536324.2741818,
+  "880dd6da8f0b91edf037bef35e76c607": {
+    "timestamp": 1768625722.3437219,
+    "result": {
+      "target_servers": [],
+      "complexity": "medium",
+      "auto_execute": null
+    },
+    "query_hash": "880dd6da8f0b91edf037bef35e76c607"
+  },
+  "657c7b0f370033d123f060cabb8d6641": {
+    "timestamp": 1768625769.969564,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null,
+      "query_id": null
+    },
+    "query_hash": "657c7b0f370033d123f060cabb8d6641"
+  },
+  "e27feee30b412d9474f5069d2f8079cb": {
+    "timestamp": 1768625805.644135,
+    "result": {
+      "complexity": "low",
+      "output": {
+        "tool": [
+          "memory_search_semantic"
+        ],
+        "result": "informational_data"
+      }
+    },
+    "query_hash": "e27feee30b412d9474f5069d2f8079cb"
+  },
+  "d7098d67923ccd6631085ef665175ca5": {
+    "timestamp": 1768625833.731634,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "9b5a71b4f2d6eacddfebc64ed4f9fcc3"
+    "query_hash": "d7098d67923ccd6631085ef665175ca5"
   },
-  "9849910a447cfc96d19ddf78d1f74c3d": {
-    "timestamp": 1768537900.117695,
+  "ffc2dee94f86c81d311cc54787f49f24": {
+    "timestamp": 1768625871.967145,
+    "result": {
+      "target_trees": [
+        {
+          "type": "walnut_tree",
+          "action": "tap"
+        },
+        {
+          "type": "reflexive_taking",
+          "action": null
+        }
+      ],
+      "complexity": "high",
+      "auto_execute": null
+    },
+    "query_hash": "ffc2dee94f86c81d311cc54787f49f24"
+  },
+  "9693e2adfd1a0db8530ed5e1449bf7d5": {
+    "timestamp": 1768625945.559148,
+    "result": {
+      "output_json": {
+        "tools_to_use": [
+          "get_current_time",
+          "convert_time"
+        ],
+        "tool_usage": {
+          "convert_time": true
+        },
+        "complexity": "low",
+        "target_servers": [],
+        "auto_execute": null,
+        "description": "to determine the current flow (as in sap)",
+        "source": "user input"
+      }
+    },
+    "query_hash": "9693e2adfd1a0db8530ed5e1449bf7d5"
+  },
+  "e9fb615d67ebb4fae2dd414d31c30e48": {
+    "timestamp": 1768625982.263476,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "9849910a447cfc96d19ddf78d1f74c3d"
+    "query_hash": "e9fb615d67ebb4fae2dd414d31c30e48"
   },
-  "ee760b1580b3e64d2fab8dbca71f83b4": {
-    "timestamp": 1768538141.929211,
+  "6f7d9c516cbe7ea005af7e9c3e33df24": {
+    "timestamp": 1768626042.419771,
+    "result": {
+      "target_servers": [
+        "tavily-search"
+      ]
+    },
+    "query_hash": "6f7d9c516cbe7ea005af7e9c3e33df24"
+  },
+  "b83cd0bfc68936427d30a657278477c0": {
+    "timestamp": 1768626544.121535,
+    "result": {
+      "complexity": "low",
+      "targets": [],
+      "auto_execute": null
+    },
+    "query_hash": "b83cd0bfc68936427d30a657278477c0"
+  },
+  "bffad3d08576e9214aa31fec5bb0fb22": {
+    "timestamp": 1768626757.6426072,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "ee760b1580b3e64d2fab8dbca71f83b4"
+    "query_hash": "bffad3d08576e9214aa31fec5bb0fb22"
   },
-  "f00f125a7a10c37f5e0d23a45ad2d63b": {
-    "timestamp": 1768538159.984023,
+  "6bdc14ae2bbc9a07e5d9864df22193d3": {
+    "timestamp": 1768653058.637169,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": false
+    },
+    "query_hash": "6bdc14ae2bbc9a07e5d9864df22193d3"
+  },
+  "5c8090733d22459443c829695d129571": {
+    "timestamp": 1768654860.83617,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "f00f125a7a10c37f5e0d23a45ad2d63b"
+    "query_hash": "5c8090733d22459443c829695d129571"
   },
-  "599cebd06d51acbe9054952dbc12abc3": {
-    "timestamp": 1768538193.1446168,
+  "94e1fab1536c9ead597eceb973c0c3ff": {
+    "timestamp": 1768656019.050556,
     "result": {
       "target_servers": [],
       "complexity": "low",
       "auto_execute": null
     },
-    "query_hash": "599cebd06d51acbe9054952dbc12abc3"
+    "query_hash": "94e1fab1536c9ead597eceb973c0c3ff"
+  },
+  "9b638d6faef71ec174185d5a66c06b5f": {
+    "timestamp": 1768657705.905453,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "9b638d6faef71ec174185d5a66c06b5f"
+  },
+  "2cb08496c2ba7d6cb47af8285c09a051": {
+    "timestamp": 1768657725.061507,
+    "result": {
+      "target_servers": [
+        "tavily-search"
+      ],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "2cb08496c2ba7d6cb47af8285c09a051"
+  },
+  "9b4d33f3b3e3de99aa6e9cb43c1a1a55": {
+    "timestamp": 1768658170.498581,
+    "result": {
+      "complexity": "low",
+      "target_servers": [],
+      "auto_execute": null
+    },
+    "query_hash": "9b4d33f3b3e3de99aa6e9cb43c1a1a55"
+  },
+  "6a60b840685cd9d2923850b679d0175c": {
+    "timestamp": 1768658192.177815,
+    "result": {
+      "result": {
+        "output_types": [],
+        "target_servers": [],
+        "complexity": "low",
+        "auto_execute": null
+      },
+      "target_servers": [
+        "tavily-search"
+      ],
+      "complexity": "high",
+      "auto_execute": null
+    },
+    "query_hash": "6a60b840685cd9d2923850b679d0175c"
+  },
+  "7a65c16f32e5fb5d7320aec3bdad0f01": {
+    "timestamp": 1768658216.121793,
+    "result": {
+      "target_servers": [],
+      "complexity": "medium",
+      "auto_execute": null
+    },
+    "query_hash": "7a65c16f32e5fb5d7320aec3bdad0f01"
+  },
+  "869a59a649e6d44930ea8b173bc00b16": {
+    "timestamp": 1768659303.902457,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "869a59a649e6d44930ea8b173bc00b16"
+  },
+  "a490f411a74574f411c4c8b9c5ff68b0": {
+    "timestamp": 1768659330.9026382,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "a490f411a74574f411c4c8b9c5ff68b0"
+  },
+  "00d3cfa1a41207409fa9370e6cd90ca4": {
+    "timestamp": 1768659363.605212,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "00d3cfa1a41207409fa9370e6cd90ca4"
+  },
+  "c87871f3443fb0d77f1577baa68be1f3": {
+    "timestamp": 1768659898.763585,
+    "result": {
+      "target_servers": [],
+      "complexity": "medium",
+      "auto_execute": [
+        {
+          "tool": "get_system_health"
+        }
+      ]
+    },
+    "query_hash": "c87871f3443fb0d77f1577baa68be1f3"
+  },
+  "93792e67d13f2fdf8d8a93d40d15b5fa": {
+    "timestamp": 1768660014.1414452,
+    "result": {
+      "target_servers": [],
+      "complexity": "medium",
+      "auto_execute": false
+    },
+    "query_hash": "93792e67d13f2fdf8d8a93d40d15b5fa"
+  },
+  "e9170939e3ebbc2d9600a60ad318f596": {
+    "timestamp": 1768666047.422475,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "e9170939e3ebbc2d9600a60ad318f596"
+  },
+  "9bdafbf7bb143c1f6e4625b98863d5e4": {
+    "timestamp": 1768666138.6338408,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "9bdafbf7bb143c1f6e4625b98863d5e4"
+  },
+  "c3e826624381283f300c172bf37cb9fc": {
+    "timestamp": 1768666179.392682,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "c3e826624381283f300c172bf37cb9fc"
+  },
+  "24ae43c08d92428012aecabcd6d9dd2d": {
+    "timestamp": 1768666324.645671,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "24ae43c08d92428012aecabcd6d9dd2d"
+  },
+  "619d5dec5181efe360a063e519d0b8a5": {
+    "timestamp": 1768666351.5742888,
+    "result": {
+      "target_servers": [
+        "tavily-search"
+      ],
+      "complexity": "high",
+      "auto_execute": null
+    },
+    "query_hash": "619d5dec5181efe360a063e519d0b8a5"
+  },
+  "daf85cdb4a28a4090e3e1e82a62390b6": {
+    "timestamp": 1768666452.7155368,
+    "result": {
+      "target_servers": [
+        "tavily-search"
+      ],
+      "complexity": "high",
+      "auto_execute": null
+    },
+    "query_hash": "daf85cdb4a28a4090e3e1e82a62390b6"
+  },
+  "17ad04e9625d8f0f45fd06bf239ca809": {
+    "timestamp": 1768666507.822047,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "17ad04e9625d8f0f45fd06bf239ca809"
+  },
+  "0009a07b1f7562bba4e79f0109bf6903": {
+    "timestamp": 1768666564.692497,
+    "result": {
+      "target_servers": [
+        "tapsearch"
+      ],
+      "complexity": "high",
+      "auto_execute": null
+    },
+    "query_hash": "0009a07b1f7562bba4e79f0109bf6903"
+  },
+  "c3ea42dd8172df5b9dbec5a77b9b1123": {
+    "timestamp": 1768666630.3502028,
+    "result": {
+      "target_servers": [],
+      "complexity": "low",
+      "auto_execute": null
+    },
+    "query_hash": "c3ea42dd8172df5b9dbec5a77b9b1123"
   }
 }

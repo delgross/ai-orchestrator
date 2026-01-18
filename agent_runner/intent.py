@@ -151,6 +151,81 @@ async def precompute_common_intents(state: Any, tool_menu_summary: str):
 
     logger.info(f"✅ Pre-computed {precomputed} Maître d' intents. Cache now has {_intent_cache.get_stats()['total_entries']} entries.")
 
+
+def _detect_domain(query: str) -> Optional[str]:
+    """Lightweight domain detector for local/system commands."""
+    q = query.lower()
+    system_hits = ["mcp", "server", "router", "agent", "surreal", "health", "status", "restart", "logs", "cpu", "ram"]
+    fs_hits = ["file", "folder", "directory", "path", "list files", "ls", "read", "write", "append", "mv", "cp", "find"]
+    ingest_hits = ["ingest", "index", "knowledge", "rag", "upload"]
+
+    if any(k in q for k in system_hits):
+        return "system"
+    if any(k in q for k in fs_hits):
+        return "fs"
+    if any(k in q for k in ingest_hits):
+        return "ingestion"
+    return None
+
+
+def _build_micro_menu(domain: Optional[str], vector_results: List[Dict[str, Any]]) -> str:
+    """Build a tiny domain-scoped menu to avoid flooding the prompt."""
+    if not domain:
+        return ""
+
+    seen = set()
+    entries = []
+
+    # Use semantic hits first
+    for tool in vector_results or []:
+        name = tool.get("name")
+        desc = tool.get("description", "")
+        if not name or name in seen:
+            continue
+        entries.append(f"- {name}: {desc[:120]}")
+        seen.add(name)
+        if len(entries) >= 8:
+            break
+
+    defaults = {
+        "system": [
+            ("list_active_mcp_servers", "List MCP servers and status"),
+            ("get_system_health", "Check router/agent/MCP health"),
+            ("read_service_logs", "Tail router/agent/ollama logs"),
+            ("check_resource_usage", "CPU/RAM/disk usage"),
+            ("add_mcp_server", "Add/update an MCP server"),
+            ("install_mcp_package", "Install MCP via npm package"),
+        ],
+        "fs": [
+            ("list_dir", "List folder contents"),
+            ("path_info", "Inspect a path"),
+            ("read_text", "Read a text file"),
+            ("write_text", "Write a text file"),
+            ("append_text", "Append to a file"),
+            ("find_files", "Find files by pattern/extension"),
+            ("move_path", "Move/rename a path"),
+            ("copy_path", "Copy file or directory"),
+        ],
+        "ingestion": [
+            ("ingest_file", "Queue a file for ingestion"),
+            ("get_ingestion_status", "Check ingestion queue status"),
+            ("parse_mcp_config", "Parse and install MCP config text"),
+        ],
+    }
+
+    for name, desc in defaults.get(domain, []):
+        if len(entries) >= 8:
+            break
+        if name in seen:
+            continue
+        entries.append(f"- {name}: {desc}")
+        seen.add(name)
+
+    if not entries:
+        return ""
+
+    return "Micro Menu (local tools):\n" + "\n".join(entries)
+
 async def _compute_intent_classification(query: str, state: Any, tool_menu_summary: str) -> Dict[str, Any]:
     """Compute intent classification for a query (extracted from main function)"""
     # This is a simplified version - in practice we'd call the full LLM analysis
@@ -268,10 +343,11 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
     #         "Available Advice Topics:\n"
     #         f"- {', '.join(advice_menu_list)}\n\n"
     #     )
-    
-    # We prepend dynamic vector results to the static menu
-    # This allows the Maître d' to see relevant tools that might not be in the static summary
-    combined_menu = f"{vector_context_str}{tool_menu_summary}"
+
+    domain = _detect_domain(normalized_query)
+    micro_menu = _build_micro_menu(domain, vector_results)
+    menu_section = micro_menu if micro_menu else tool_menu_summary
+    combined_menu = f"{vector_context_str}{menu_section}"
 
     # [UNIVERSAL CONTEXT] Inject Time/Location so Maître d' makes context-aware decisions
     import datetime
@@ -288,7 +364,7 @@ async def classify_search_intent(query: str, state: Any, tool_menu_summary: str,
 
     prompt = (
         "Menu (Available Tools):\n"
-        f"{tool_menu_summary}\n\n"   # [OPTIMIZATION] Static Content FIRST (Prefix Cache)
+        f"{menu_section}\n\n"    # Prefer micro menu when available
         f"{vector_context_str}\n\n"  # Dynamic Content Second
         f"{env_context}\n\n"         # Dynamic Content Third
         "Task: Analyze the query and select tools from the Menu. Return valid JSON only.\n"

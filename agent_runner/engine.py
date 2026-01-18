@@ -28,6 +28,17 @@ from agent_runner.memory_client import DirectMemoryClient
 import math
 
 logger = logging.getLogger("agent_runner")
+STREAM_DEBUG_ENABLED = os.getenv("STREAM_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _redact_preview(text: Any) -> str:
+    """Redact long token-ish strings to avoid leaking secrets in stream logs."""
+    if text is None:
+        return ""
+    preview = str(text)
+    # Replace any long token-like spans (e.g., API keys) with placeholders
+    preview = re.sub(r"[A-Za-z0-9]{16,}", "***", preview)
+    return preview[:80]
 
 class AgentEngine:
     def __init__(self, state: AgentState, memory_client=None):
@@ -37,6 +48,11 @@ class AgentEngine:
         # Use injected memory client for context operations, fallback to direct memory server
         self.memory_client = memory_client or DirectMemoryClient(self.memory)
         self.nexus = Nexus(state, self)
+
+        # Ensure conversation cache exists before any async init runs
+        self._conversation_cache = {}
+        self._conversation_cache_size = 10  # Cache up to 10 conversations
+        self._initialized = False
 
         # Initialize hallucination detection system
         detector_config = DetectorConfig(
@@ -50,7 +66,12 @@ class AgentEngine:
 
     async def async_initialize(self):
         """Async initialization for components that require event loop."""
-        await self.executor.async_initialize()
+        if getattr(self, "_initialized", False):
+            return
+
+        # Executor may not provide async initialization in all builds
+        if hasattr(self.executor, "async_initialize"):
+            await self.executor.async_initialize()
 
         # Initialize hallucination detection system
         detector_config = DetectorConfig(
@@ -107,6 +128,8 @@ class AgentEngine:
             lru_cleanup_threshold=40  # Cleanup when cache reaches 40 entries
         )
         logger.info("Prefix cache manager initialized for Phase 3 optimization")
+
+        self._initialized = True
 
     def _resolve_model_endpoint(self, model: str) -> Tuple[str, str]:
         """
@@ -862,8 +885,8 @@ class AgentEngine:
         return "\n\n" + "\n".join(context_appendix)
 
     async def _process_tool_calls_with_state_tracking(self, tool_calls: List[Dict[str, Any]],
-                                                    conversation_state, tool_tracker, request_id: str):
-        """Process tool calls while tracking conversation state for compression - NOW WITH PARALLEL EXECUTION"""
+                                                    conversation_state, tool_tracker, request_id: str) -> List[Dict[str, Any]]:
+        """Process tool calls while tracking conversation state and return tool messages for the LLM."""
 
         # PHASE 5: Parallel Tool Execution - Execute independent tools concurrently
         # Filter out tools that should be avoided based on failure history
@@ -887,6 +910,8 @@ class AgentEngine:
                 continue
 
             valid_tool_calls.append(tool_call)
+
+        tool_messages: List[Dict[str, Any]] = []
 
         # Execute valid tool calls in parallel
         if valid_tool_calls:
@@ -920,44 +945,60 @@ class AgentEngine:
 
                     tool_tracker.record_tool_execution(tool_name, False, 0)
 
-                    conversation_state.add_essential_message({
+                    error_message_payload = {
                         "role": "tool",
                         "tool_call_id": tool_call.get("id", f"call_{tool_name}"),
                         "name": tool_name,
                         "content": f"Error: {error_msg}"
-                    })
+                    }
+                    conversation_state.add_essential_message(error_message_payload)
+                    tool_messages.append(error_message_payload)
                 else:
                     # Success - result already processed by the helper method
+                    processed_result, tool_message = result
+                    tool_messages.append(tool_message)
                     logger.info(f"✅ Tool '{tool_name}' completed successfully")
 
         # Handle skipped tools (add minimal messages to conversation)
         for tool_call, reason in skipped_tools:
             tool_name = tool_call["function"]["name"]
-            conversation_state.add_essential_message({
+            skipped_message = {
                 "role": "tool",
                 "tool_call_id": tool_call.get("id", f"call_{tool_name}"),
                 "name": tool_name,
                 "content": f"Skipped: {reason}"
-            })
+            }
+            conversation_state.add_essential_message(skipped_message)
+            tool_messages.append(skipped_message)
+
+        return tool_messages
 
     async def _execute_single_tool_with_processing(self, tool_call: Dict[str, Any],
                                                  conversation_state, tool_tracker, request_id: str):
-        """Execute a single tool with full processing and state tracking"""
+        """Execute a single tool with full processing and state tracking."""
         tool_name = tool_call["function"]["name"]
         tool_args = tool_call["function"].get("arguments", "{}")
 
         tool_start_time = time.time()
         try:
-            # Execute the tool
-            result = await self.executor.execute_tool(tool_name, tool_args, request_id)
+            # Execute the tool via unified executor API
+            result = await self.execute_tool_call(tool_call, request_id=request_id)
 
             execution_time = time.time() - tool_start_time
-            success = not isinstance(result, dict) or not result.get("error")
+            success = True
+            if isinstance(result, dict):
+                if "ok" in result:
+                    success = bool(result.get("ok"))
+                elif "error" in result:
+                    success = False
 
             # QUALITY MITIGATION: Process tool result with intelligent truncation
             raw_result_str = ""
-            if success and isinstance(result, dict) and "result" in result:
-                raw_result_str = str(result["result"])
+            if success and isinstance(result, dict):
+                if "result" in result:
+                    raw_result_str = str(result["result"])
+                elif "message" in result:
+                    raw_result_str = str(result["message"])
             elif not success:
                 raw_result_str = result.get("error", "Unknown error") if isinstance(result, dict) else str(result)
 
@@ -1023,7 +1064,7 @@ class AgentEngine:
 
             logger.info(f"✅ Tool '{tool_name}' executed successfully in {execution_time:.2f}s (quality processed in {processing_time:.2f}s)")
 
-            return processed_result
+            return processed_result, tool_message
 
         except Exception as e:
             execution_time = time.time() - tool_start_time
@@ -1039,7 +1080,15 @@ class AgentEngine:
 
             logger.error(f"❌ Tool '{tool_name}' failed after {execution_time:.2f}s: {error_msg}")
 
-            return f"Error: {error_msg}"
+            error_message_payload = {
+                "role": "tool",
+                "tool_call_id": tool_call.get("id", f"call_{tool_name}"),
+                "name": tool_name,
+                "content": f"Error: {error_msg}"
+            }
+            conversation_state.add_essential_message(error_message_payload)
+
+            return f"Error: {error_msg}", error_message_payload
 
     def _get_quality_tier_for_tool(self, tool_name: str, conversation_id: str) -> 'QualityTier':
         """Determine quality tier for tool result processing"""
@@ -1268,6 +1317,10 @@ class AgentEngine:
     async def agent_loop(self, user_messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, request_id: Optional[str] = None, skip_refinement: bool = False, quality_tier: Optional[Any] = None) -> Dict[str, Any]:
         logger.info(f"🔍 Agent loop started: {len(user_messages)} messages, model={model}, request_id={request_id}")
 
+        # Lazy-initialize heavy subsystems on first use to ensure caches exist
+        if not getattr(self, "_initialized", False):
+            await self.async_initialize()
+
         # Apply quality tier override
         original_tier = self._apply_quality_tier_override(quality_tier)
 
@@ -1336,6 +1389,11 @@ class AgentEngine:
         # PHASE 3: Intelligent conversation caching for performance gains
         cache_key = f"conv_{conversation_id}_prompt_{len(user_messages)}"
 
+        # Defensive init in case async_initialize hasn't run yet
+        if not hasattr(self, "_conversation_cache"):
+            self._conversation_cache = {}
+            self._conversation_cache_size = 10
+
         if cache_key in self._conversation_cache:
             # PHASE 3 CACHE HIT: Reuse cached prompt construction
             messages, cached_static_prompt, hit_count = self._conversation_cache[cache_key]
@@ -1366,6 +1424,7 @@ class AgentEngine:
             logger.info(f"PHASE 3: 📝 Cache miss - constructed and cached prompt (~{token_estimate} tokens) for {conversation_id}")
 
         steps = 0
+        force_exit_after_tools = False  # Hybrid: break after first tool round to hand off to finalizer
         active_tools = await self._prepare_tools_for_model(tools, user_messages)
 
         # Track loop intelligence for smart exits
@@ -1439,13 +1498,20 @@ class AgentEngine:
             # PHASE 2: Track conversation state instead of growing message history
             conversation_state.add_essential_message(message)  # Keep essential AI responses
 
-            # Process tool calls if present
+            # Process tool calls if present and capture messages to feed back to the model
             if message.get("tool_calls"):
-                await self._process_tool_calls_with_state_tracking(
+                tool_messages = await self._process_tool_calls_with_state_tracking(
                     message["tool_calls"], conversation_state, tool_tracker, request_id
                 )
+                # Preserve the assistant's tool_call message and the tool results for the next round
+                messages.append(message)
+                messages.extend(tool_messages)
+                if tool_messages:
+                    force_exit_after_tools = True  # Avoid multiple full-model passes; finalizer will handle synthesis
                 consecutive_no_tools = 0  # Reset counter when tools are used
             else:
+                # Keep the assistant reply in the running context even when no tools are used
+                messages.append(message)
                 consecutive_no_tools += 1  # Increment when no tools used
 
             # Track recent responses for stability detection
@@ -1456,17 +1522,12 @@ class AgentEngine:
             # 🎯 PHASE 1: INTELLIGENT LOOP EXIT CONDITIONS
             logger.info(f"🎯 Checking exit conditions: step={steps}, no_tools={consecutive_no_tools}, responses={len(recent_responses)}")
 
-            # 1. Conversational Query Exit (immediate for clear conversational)
-            if steps == 1 and self._is_conversational_query(messages):
-                logger.info("🎯 SMART EXIT: Detected conversational query, exiting after first iteration")
-                break
-
-            # 2. No-Tool Usage Exit (exit after 2+ iterations with no tools)
+            # 1. No-Tool Usage Exit (exit after 2+ iterations with no tools)
             if consecutive_no_tools >= 2 and steps >= 2:
                 logger.info(f"🎯 SMART EXIT: No tools used in {consecutive_no_tools} consecutive iterations")
                 break
 
-            # 3. Response Stability Exit (exit when responses become similar)
+            # 2. Response Stability Exit (exit when responses become similar)
             if len(recent_responses) >= 3 and steps >= 3:
                 similarity = self._calculate_response_similarity(recent_responses)
                 logger.info(f"🎯 Similarity check: {similarity:.2f} for {len(recent_responses)} responses")
@@ -1474,12 +1535,12 @@ class AgentEngine:
                     logger.info(f"🎯 SMART EXIT: Response stabilized (similarity: {similarity:.2f})")
                     break
 
-            # 4. Completion Signal Exit (exit when LLM indicates completion)
+            # 3. Completion Signal Exit (exit when LLM indicates completion)
             if self._response_indicates_completion(message):
                 logger.info("🎯 SMART EXIT: Response indicates query completion")
                 break
 
-            # 5. Performance Timeout Exit (emergency exit for very slow queries)
+            # 4. Performance Timeout Exit (emergency exit for very slow queries)
             total_loop_time = time.time() - loop_start_time
             if total_loop_time > 30 and steps >= 3:  # 30 seconds total, minimum 3 steps
                 logger.warning(f"🎯 TIMEOUT EXIT: Loop running too long ({total_loop_time:.1f}s), forcing exit")
@@ -1494,6 +1555,10 @@ class AgentEngine:
             should_continue = await self._process_response_hallucinations(message, active_model)
             if should_continue:
                 continue
+
+            # Hybrid exit: once tools have run, break to hand off to finalizer (or return) without extra model passes
+            if force_exit_after_tools:
+                break
 
                 
                 # Store episode before returning final answer
@@ -1520,6 +1585,21 @@ class AgentEngine:
         try:
             logger.info("HALLUCINATION_CHECK: Starting detection on final response")
             final_message = response["choices"][0]["message"]
+
+            # If the model returned an empty message, fall back to the last non-empty assistant/tool reply
+            if not final_message.get("content"):
+                fallback_content = None
+                for prior_msg in reversed(messages):
+                    if prior_msg.get("role") == "assistant" and prior_msg.get("content"):
+                        fallback_content = prior_msg.get("content")
+                        break
+                    if not fallback_content and prior_msg.get("role") == "tool" and prior_msg.get("content"):
+                        fallback_content = prior_msg.get("content")
+                if fallback_content:
+                    final_message["content"] = fallback_content
+                    response["choices"][0]["message"] = final_message
+                    logger.warning("Final response was empty; reused prior message content to avoid blank reply")
+
             response_text = final_message.get("content", "")
 
             if response_text:  # Only check non-empty responses
@@ -1533,12 +1613,7 @@ class AgentEngine:
                 detection_result = await self.hallucination_detector.detect_hallucinations(**detection_context)
                 logger.info(f"HALLUCINATION_CHECK: Detection completed - is_hallucination: {detection_result.is_hallucination}, confidence: {detection_result.confidence:.2f}")
 
-                # Add metadata to response (this is what's causing client parsing issues)
-                response["metadata"] = {
-                    "hallucination_detection": detection_result.to_dict()
-                }
-
-                # Log detection results (but don't modify response format for compatibility)
+                # Log detection results (warn-only to avoid response format changes)
                 if detection_result.is_hallucination:
                     logger.warning(f"HALLUCINATION DETECTED in response: severity={detection_result.severity.value}, confidence={detection_result.confidence:.2f}")
 
@@ -1791,21 +1866,6 @@ class AgentEngine:
             while user_messages and user_messages[0].get("role") == "tool":
                 user_messages.pop(0)
 
-        # Conversational Optimization: Check BEFORE expensive operations
-        if len(user_messages) == 1:
-            user_msg = get_message_text(user_messages[0]).lower()
-            word_count = len(user_msg.split())
-            has_action_words = any(word in user_msg for word in ['run', 'create', 'analyze', 'search', 'find', 'show', 'list', 'get'])
-
-            if word_count <= 4 and not has_action_words:
-                # Simple conversational response - NO expensive operations
-                logger.info("🎯 CONVERSATIONAL OPTIMIZATION: Fast response triggered")
-                response_text = "Hello! How can I assist you today?"
-                for word in response_text.split():
-                    yield {"type": "token", "content": word + " ", "request_id": request_id}
-                yield {"type": "done", "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18}, "stop_reason": "stop", "request_id": request_id}
-                return
-
         # Context Injection (only for non-conversational queries)
         system_prompt = await self.get_system_prompt(user_messages, skip_refinement=skip_refinement)
         messages = [{"role": "system", "content": system_prompt}] + user_messages
@@ -1818,6 +1878,7 @@ class AgentEngine:
             # --- Stream Consumption State ---
             current_tool_calls = [] # List of {index, id, function: {name, arguments}}
             current_content = ""
+            content_emitted = False
 
             # 1. Call Gateway (Streaming)
             has_started_thinking = False
@@ -1828,37 +1889,44 @@ class AgentEngine:
 
                     delta = chunk["choices"][0].get("delta", {})
 
-                # A. Content Token
-                if "content" in delta and delta["content"]:
-                    token = delta["content"]
-                    current_content += token
-                    yield {"type": "token", "content": token}
+                    if STREAM_DEBUG_ENABLED:
+                        logger.info(
+                            f"[STREAM_DEBUG] delta_keys={list(delta.keys())} "
+                            f"content_preview={_redact_preview(delta.get('content'))}"
+                        )
 
-                # B. Tool Calls (Accumulation)
-                if "tool_calls" in delta and delta["tool_calls"]:
-                    # Emit one-time thinking start signal
-                    if not has_started_thinking:
-                        yield {"type": "thinking_start", "count": 1}
-                        has_started_thinking = True
+                    # A. Content Token
+                    if "content" in delta and delta["content"]:
+                        token = delta["content"]
+                        current_content += token
+                        content_emitted = True
+                        yield {"type": "token", "content": token}
 
-                    for tc_chunk in delta["tool_calls"]:
-                        idx = tc_chunk.get("index") # usually 0 or int
-                        if idx is None:
-                            idx = 0 # Safety for some providers
+                    # B. Tool Calls (Accumulation)
+                    if "tool_calls" in delta and delta["tool_calls"]:
+                        # Emit one-time thinking start signal
+                        if not has_started_thinking:
+                            yield {"type": "thinking_start", "count": 1}
+                            has_started_thinking = True
 
-                        # Expand list if needed
-                        while len(current_tool_calls) <= idx:
-                            current_tool_calls.append({"index": len(current_tool_calls), "id": "", "function": {"name": "", "arguments": ""}})
+                        for tc_chunk in delta["tool_calls"]:
+                            idx = tc_chunk.get("index") # usually 0 or int
+                            if idx is None:
+                                idx = 0 # Safety for some providers
 
-                        target = current_tool_calls[idx]
-                        if tc_chunk.get("id"):
-                            target["id"] += tc_chunk["id"]
+                            # Expand list if needed
+                            while len(current_tool_calls) <= idx:
+                                current_tool_calls.append({"index": len(current_tool_calls), "id": "", "function": {"name": "", "arguments": ""}})
 
-                        fn = tc_chunk.get("function", {})
-                        if fn.get("name"):
-                            target["function"]["name"] += fn["name"]
-                        if fn.get("arguments"):
-                            target["function"]["arguments"] += fn["arguments"]
+                            target = current_tool_calls[idx]
+                            if tc_chunk.get("id"):
+                                target["id"] += tc_chunk["id"]
+
+                            fn = tc_chunk.get("function", {})
+                            if fn.get("name"):
+                                target["function"]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                target["function"]["arguments"] += fn["arguments"]
 
                 # 2. Process Accumulation
                 # If we had tool calls, we need to handle them.
@@ -1981,8 +2049,15 @@ class AgentEngine:
 
                 else:
                     # No tool calls -> This was the final answer.
-                    # We already yielded tokens.
+                    # If the model produced no content, emit a minimal fallback so the stream is not blank.
+                    if not content_emitted and not current_content.strip():
+                        fallback_content = "How can I help?"
+                        current_content = fallback_content
+                        content_emitted = True
+                        yield {"type": "token", "content": fallback_content}
+
                     # Append to history and break.
+                    assistant_msg["content"] = current_content
                     messages.append(assistant_msg)
 
                     # [PHASE 42] Async Memory Storage (Fire and Forget)
@@ -2002,84 +2077,6 @@ class AgentEngine:
                 logger.error(f"Streaming error in agent_stream: {e}")
                 yield {"type": "error", "error": f"Streaming failed: {e}", "request_id": request_id}
                 break
-
-    # ===== PHASE 1-5: SMART LOOP EXIT HELPERS =====
-
-    def _is_conversational_query(self, messages: List[Dict[str, Any]]) -> bool:
-        """PHASE 2: Enhanced conversational query detection"""
-        logger.debug(f"_is_conversational_query: processing {len(messages) if messages else 0} messages")
-        if not messages:
-            return False
-
-        last_user_msg = None
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                last_user_msg = msg
-                break
-
-        if not last_user_msg:
-            return False
-
-        content_raw = last_user_msg.get("content", "")
-
-        # Handle content that might be a list (multimodal) or other format
-        if isinstance(content_raw, list):
-            # Extract text content from multimodal content blocks
-            content_parts = []
-            for block in content_raw:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    content_parts.append(block.get("text", ""))
-                elif isinstance(block, str):
-                    content_parts.append(block)
-            content = " ".join(content_parts).strip()
-        elif isinstance(content_raw, str):
-            content = content_raw.strip()
-        else:
-            content = str(content_raw).strip()
-
-        content_lower = content.lower()
-
-        # Very short queries are likely conversational (PHASE 2 enhancement)
-        word_count = len(content.split())
-        if word_count <= 4 and not any(word in content_lower for word in ['run', 'create', 'analyze', 'search', 'find', 'show', 'list', 'get']):
-            return True
-
-        # Enhanced conversational patterns (PHASE 2)
-        conversational_patterns = [
-            # Greetings and introductions
-            r"^(hi|hello|hey|good\s+(morning|afternoon|evening|day))$",
-            r"^(what'?s\s+up|how\s+are\s+you|how\s+do\s+you\s+do|nice\s+to\s+meet\s+you)$",
-
-            # Acknowledgments and agreements
-            r"^(thanks?|thank\s+you|thanks\s+a\s+lot|thank\s+you\s+very\s+much)$",
-            r"^(ok|okay|got\s+it|understood|i\s+see|that\s+makes\s+sense|makes\s+sense)$",
-            r"^(yes|no|sure|of\s+course|absolutely|definitely|exactly|right)$",
-
-            # Simple responses and closings
-            r"^(good|great|fine|well|not\s+bad|pretty\s+good|excellent|awesome)$",
-            r"^(bye|goodbye|see\s+you|take\s+care|have\s+a\s+good\s+(day|night|weekend))$",
-            r"^(cool|nice|interesting|awesome|sweet|neat)$",
-
-            # Status and casual check-ins
-            r"^(how\s+is\s+it\s+going|what\s+are\s+you\s+up\s+to|what'?s\s+new|what'?s\s+happening)$",
-            r"^(sup|yo|wassup|what'?s\s+good|howdy)$",
-
-            # Emotional responses
-            r"^(wow|oh|ah|hmm|interesting|really|seriously)$",
-            r"^(that'?s\s+(cool|awesome|great|amazing|interesting))$",
-        ]
-
-        for pattern in conversational_patterns:
-            if re.search(pattern, content, re.IGNORECASE):
-                return True
-
-        # Additional heuristic: Questions without action verbs (PHASE 2)
-        if '?' in content and not any(verb in content_lower for verb in
-                                    ['run', 'execute', 'create', 'build', 'analyze', 'search', 'find',
-                                     'show', 'display', 'list', 'get', 'fetch', 'retrieve', 'calculate']):
-            return True
-
-        return False
 
     def _calculate_response_similarity(self, responses: List[str]) -> float:
         """PHASE 3: Advanced response stability detection"""

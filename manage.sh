@@ -7,6 +7,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+# Prefer project venv for python utilities (e.g., get_config needs PyYAML)
+if [ -x "$ROOT_DIR/.venv/bin/python3" ]; then
+  export PATH="$ROOT_DIR/.venv/bin:$PATH"
+fi
+
 # [SOVEREIGN] Retrieve Ports from Registry
 ROUTER_PORT=$(python3 bin/get_config.py network.router_port 5455)
 AGENT_PORT=$(python3 bin/get_config.py network.agent_port 5460)
@@ -465,7 +470,7 @@ start_agent() {
     mkdir -p logs
 
     # Start agent-runner in background
-    PYTHONPATH=. nohup python agent_runner/main.py > logs/agent_runner.log 2>&1 &
+    PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" nohup python -m agent_runner.main > logs/agent_runner.log 2>&1 &
     local agent_pid=$!
     echo $agent_pid > /tmp/ai_agent.pid 2>/dev/null || true
 
@@ -520,7 +525,7 @@ start_agent_direct() {
     fi
   fi
 
-  PYTHONPATH=. nohup python agent_runner/main.py > logs/agent_runner.log 2>&1 &
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" nohup python -m agent_runner.main > logs/agent_runner.log 2>&1 &
   local agent_pid=$!
   echo $agent_pid > /tmp/ai_agent.pid 2>/dev/null || true
 
@@ -625,6 +630,18 @@ stop_ollama() {
 
 # Start SurrealDB
 start_surreal() {
+  # Resolve Surreal binary location
+  if [ ! -x "$SURREAL_BIN" ]; then
+    if command -v surreal >/dev/null 2>&1; then
+      SURREAL_BIN="$(command -v surreal)"
+    elif [ -x "$HOME/.surrealdb/surreal" ]; then
+      SURREAL_BIN="$HOME/.surrealdb/surreal"
+    else
+      echo "SurrealDB binary not found. Install it or set SURREAL_BIN to the executable path."
+      return 1
+    fi
+  fi
+
   if [ -f "$SURREAL_PLIST" ]; then
     echo "Starting SurrealDB via launchd..."
     if ! job_loaded "$SURREAL_LABEL"; then
@@ -775,11 +792,62 @@ restore_keepalive() {
   fi
 }
 
+# Warm key models so Ollama keeps them hot (honors ~/.ollama/config keep_alive)
+warm_models() {
+  # Skip if Ollama unavailable
+  if ! command -v ollama >/dev/null 2>&1; then
+    echo "Skipping warm: ollama not installed"
+    return 0
+  fi
+
+  # Wait (short) for Ollama API readiness so we don't silently skip warming
+  local ready=false
+  for _ in {1..30}; do
+    if service_responding "http://127.0.0.1:11434/api/tags" 2; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+
+  if [ "$ready" != "true" ]; then
+    echo "Skipping warm: ollama API not responding"
+    return 0
+  fi
+
+  # Keep warm logs inside repo so we can inspect from tooling
+  local warm_log_dir="$ROOT_DIR/logs/warm"
+  mkdir -p "$warm_log_dir"
+
+  echo "Warming models (qwen2.5:32b, qwen2.5-coder:32b, llama3.3:70b)..."
+
+  local keepalive="${OLLAMA_KEEP_ALIVE:-2h}"
+
+  # Background warm for the 32B models (fast enough, non-blocking)
+  local bg_models=("qwen2.5:32b" "qwen2.5-coder:32b")
+  for m in "${bg_models[@]}"; do
+    local log_path="$warm_log_dir/ollama_warm_${m//[:]/_}.log"
+    echo "[$(date)] pull+warm $m (keepalive=$keepalive)" > "$log_path"
+    (
+      OLLAMA_KEEP_ALIVE="$keepalive" ollama pull "$m" >> "$log_path" 2>&1 &&
+      printf 'hi\n' | OLLAMA_KEEP_ALIVE="$keepalive" ollama run "$m" >> "$log_path" 2>&1
+    ) &
+  done
+
+  # Block on the 70B warm so we know it actually loads
+  local big_model="llama3.3:70b"
+  local big_log="$warm_log_dir/ollama_warm_${big_model//[:]/_}.log"
+  echo "[$(date)] pull+warm $big_model (blocking, keepalive=$keepalive)" > "$big_log"
+  OLLAMA_KEEP_ALIVE="$keepalive" ollama pull "$big_model" >> "$big_log" 2>&1
+  # Use stdin pipe to avoid TTY spinner quirks
+  printf 'hi\n' | OLLAMA_KEEP_ALIVE="$keepalive" ollama run "$big_model" >> "$big_log" 2>&1
+  echo "[$(date)] completed warm for $big_model" >> "$big_log"
+  echo "[$(date)] ollama ps after warm:" >> "$big_log"
+  OLLAMA_KEEP_ALIVE="$keepalive" ollama ps >> "$big_log" 2>&1
+}
+
 # Start all services
 start_all() {
-# Pre-load all models at startup
-./scripts/preload_models.sh
-
   echo -e "${BLUE}Starting AI Orchestrator services...${NC}\n"
 
   # CONFIG VALIDATION: Check critical configuration (non-blocking for development)
@@ -851,6 +919,8 @@ start_all() {
   else
     start_agent
   fi
+
+  warm_models
 
   # [UNIFIED LIFECYCLE] RAG Server is now spawned by Agent Runner
   # local rag_status=$(check_rag)
@@ -1120,6 +1190,7 @@ case "${1:-status}" in
       echo "Agent-runner not loaded in launchd, starting..."
       start_agent
     fi
+    warm_models
     show_status
     ;;
   start-surreal) start_surreal; show_status ;;

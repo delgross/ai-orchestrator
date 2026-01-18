@@ -2,8 +2,6 @@
 Constants used across the agent_runner module.
 """
 
-import os
-
 # Single source of truth for all LLM roles in the system
 MODEL_ROLES = [
     "agent_model", "router_model", "task_model", "summarization_model",
@@ -11,10 +9,6 @@ MODEL_ROLES = [
     "intent_model", "pruner_model", "healer_model", "critic_model",
     "embedding_model"
 ]
-
-# Default Models (if not in config/db)
-TASK_MODEL = os.getenv("TASK_MODEL", "ollama:llama3.3:70b")
-AGENT_MODEL = os.getenv("AGENT_MODEL", "ollama:llama3.3:70b")
 
 # Log sorter service sleep interval (seconds)
 SLEEP_LOG_SORTER = 5.0

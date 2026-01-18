@@ -1,0 +1,6 @@
+#V2
+INFO FOR ROOT;
+USE NS orchestrator DB orchestrator; SELECT key,value FROM config_state WHERE key CONTAINS 'mcp';
+USE NS antigravity DB agent_data; SELECT key,value FROM config_state WHERE key CONTAINS 'mcp';
+USE NS orchestrator DB memory; SELECT key,value FROM config_state WHERE key CONTAINS 'mcp';
+USE NS orchestrator DB memory; SELECT key,value FROM config_state LIMIT 50;

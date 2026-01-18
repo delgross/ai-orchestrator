@@ -33,8 +33,7 @@ class SlashCommandProcessor:
         if last_msg.get("role") != "user":
             return messages, None
             
-        from common.message_utils import get_message_text
-        content = get_message_text(last_msg)
+        content = last_msg.get("content", "").strip()
         if not content.startswith("/"):
             return messages, None
             
@@ -327,8 +326,6 @@ class SlashCommandProcessor:
             with open(target_path, "w") as f:
                 f.write(last_assist.get("content", ""))
             return f"💾 Last reply saved to: `saved_chats/{filename}`"
-        except Exception as e:
-            return f"❌ Failed to save reply: {str(e)}"
 
     async def _cmd_shell_passthrough(self, command: str) -> str:
         """Execute a shell command immediately via the Agent's toolset."""
