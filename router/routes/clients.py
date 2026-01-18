@@ -23,7 +23,7 @@ class HeartbeatRequest(BaseModel):
 
 @router.post("/clients/register")
 async def register_client(req: RegisterClientRequest):
-    """Register a new dashboard/client session."""
+    """Register a new client session."""
     state = get_shared_state()
     
     # Generate ID

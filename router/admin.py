@@ -132,27 +132,6 @@ async def proxy_mcp_toggle(request: Request):
 
 @router.post("/mcp/upload-config")
 async def proxy_mcp_upload_config(raw_text: str = Form(...)):
-    """Proxy MCP config upload to Agent Runner."""
-    from router.config import AGENT_RUNNER_URL
-    try:
-        # We must forward as form data
-        # Using state.client.post with 'data' argument sends form-urlencoded
-        r = await state.client.post(
-            f"{AGENT_RUNNER_URL}/admin/mcp/upload-config", 
-            data={"raw_text": raw_text},
-            timeout=30.0
-        )
-        return JSONResponse(r.json(), status_code=r.status_code)
-    except Exception as e:
-        logger.error(f"Failed to proxy MCP upload: {e}")
-        return {"ok": False, "error": str(e)} 
-
-@router.post("/mcp/upload-config-json")
-async def proxy_mcp_upload_json(request: Request):
-    """Proxy JSON payload to Agent Runner's new JSON-compatible endpoint."""
-    body = await request.json()
-    return await _proxy_agent_runner("POST", "/mcp/upload-config-json", body)
-
 @router.get("/mcp/server/status")
 async def proxy_mcp_server_status():
     """Proxy MCP server status request to Agent Runner."""

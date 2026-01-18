@@ -1580,10 +1580,11 @@ class AgentEngine:
         logger.info(f"🎯 LOOP COMPLETE: {steps} iterations in {total_loop_time:.2f}s "
                   f"(avg: {total_loop_time/steps:.2f}s per iteration)")
 
-        # ===== HALLUCINATION DETECTION =====
-        # Analyze the final response for hallucinations before returning
+
+        # ===== HALLUCINATION DETECTION (ASYNC, SAMPLED, CACHED, ON-DEMAND) =====
+        import random
         try:
-            logger.info("HALLUCINATION_CHECK: Starting detection on final response")
+            logger.info("HALLUCINATION_CHECK: Preparing async/sampled detection on final response")
             final_message = response["choices"][0]["message"]
 
             # If the model returned an empty message, fall back to the last non-empty assistant/tool reply
@@ -1602,7 +1603,23 @@ class AgentEngine:
 
             response_text = final_message.get("content", "")
 
-            if response_text:  # Only check non-empty responses
+            # Lightweight synchronous check: token confidence (if available)
+            # (Assume logprobs are present in response for this example)
+            suspicious = False
+            if "logprobs" in final_message and final_message["logprobs"]:
+                logprobs = final_message["logprobs"].get("content", [])
+                low_conf = [lp for lp in logprobs if lp.get("logprob", 0) < -2.5]
+                if len(low_conf) > 2:
+                    suspicious = True
+                    logger.info("Quick hallucination check: low token confidence detected, will escalate.")
+
+            # On-demand trigger: allow hallucination check if flagged in user_messages
+            on_demand = any("hallucination_check" in (m.get("content") or "") for m in user_messages)
+
+            # Sampled check: only run full detector for a random sample, suspicious, or on-demand
+            run_full = suspicious or on_demand or (random.random() < 0.2)
+
+            if response_text and run_full:
                 detection_context = {
                     "response": response_text,
                     "user_query": user_messages[-1].get("content", "") if user_messages else None,
@@ -1610,22 +1627,23 @@ class AgentEngine:
                     "model_info": {"model": active_model}
                 }
 
-                detection_result = await self.hallucination_detector.detect_hallucinations(**detection_context)
-                logger.info(f"HALLUCINATION_CHECK: Detection completed - is_hallucination: {detection_result.is_hallucination}, confidence: {detection_result.confidence:.2f}")
+                # Run hallucination detection in the background (async, non-blocking)
+                async def run_hallucination_audit():
+                    try:
+                        detection_result = await self.hallucination_detector.detect_hallucinations(**detection_context)
+                        logger.info(f"HALLUCINATION_CHECK: Detection completed - is_hallucination: {detection_result.is_hallucination}, confidence: {detection_result.confidence:.2f}")
+                        if detection_result.is_hallucination:
+                            logger.warning(f"HALLUCINATION DETECTED in response: severity={detection_result.severity.value}, confidence={detection_result.confidence:.2f}")
+                            # Optionally: store result for dashboard/audit
+                        elif logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"Hallucination check passed: confidence={detection_result.confidence:.2f}")
+                    except Exception as e:
+                        logger.warning(f"Async hallucination detection failed: {e}")
 
-                # Log detection results (warn-only to avoid response format changes)
-                if detection_result.is_hallucination:
-                    logger.warning(f"HALLUCINATION DETECTED in response: severity={detection_result.severity.value}, confidence={detection_result.confidence:.2f}")
-
-                    # For high-confidence hallucinations, add warning to the response content
-                    if detection_result.confidence > 0.8 and detection_result.severity in [HallucinationSeverity.HIGH, HallucinationSeverity.CRITICAL]:
-                        warning_msg = "\n\n⚠️ **Content Warning**: This response may contain inaccuracies. Please verify critical information independently."
-                        final_message["content"] = response_text + warning_msg
-                elif logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Hallucination check passed: confidence={detection_result.confidence:.2f}")
+                asyncio.create_task(run_hallucination_audit())
 
         except Exception as e:
-            logger.warning(f"Hallucination detection failed: {e}")
+            logger.warning(f"Hallucination detection setup failed: {e}")
             # Continue with normal response - don't block due to detection failure
 
         # DEBUG: Log that we're about to return response

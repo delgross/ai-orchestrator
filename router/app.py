@@ -34,10 +34,6 @@ def create_app(lifespan=None) -> FastAPI:
         component_id="router-main"
     )
 
-    # Static Files: Dashboard removed as per user request (Jan 2026)
-    # dashboard_v2_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard", "v2")
-    # if os.path.exists(dashboard_v2_path):
-    #     app.mount("/v2", StaticFiles(directory=dashboard_v2_path), name="dashboard_v2")
 
     # Routers
     app.include_router(admin_router)

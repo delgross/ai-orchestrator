@@ -119,7 +119,6 @@ mcp_servers:
 curl -X POST http://127.0.0.1:5460/admin/reload-mcp -H 'Content-Type: application/json' -d '{}'
 ```
 
-Or use the dashboard: **Overview tab → Reload MCP Servers**
 
 ### Method 2: Environment Variable (Legacy)
 
@@ -130,7 +129,6 @@ export MCP_SERVERS="server1=https://mcp1.com,server2=ws://127.0.0.1:7000"
 
 **Note:** YAML config takes precedence over environment variables.
 
----
 
 ## Server Types & Configuration
 
